@@ -83,12 +83,18 @@
     });
 
     function sendLink() {
-      const link = document.getElementById('room-input').value.trim();
-      if (!link) {
-        alert("Please paste a valid Smash Karts room link!");
+      const rawInput = document.getElementById('room-input').value.trim();
+      
+      // Automatically extracts only the https:// web address
+      const match = rawInput.match(/https?:\/\/[^\s]+/);
+      
+      if (!match) {
+        alert("Please paste a valid Smash Karts link (must include https://)");
         return;
       }
-      socket.emit('send_room_link', { matchId: currentMatchId, link: link });
+
+      const cleanLink = match[0];
+      socket.emit('send_room_link', { matchId: currentMatchId, link: cleanLink });
     }
 
     socket.on('receive_room_link', (data) => {
@@ -100,7 +106,6 @@
 
     function joinGame() {
       if (targetRoomLink) {
-        // Opens the link in a new browser tab
         window.open(targetRoomLink, '_blank');
       } else {
         alert("Room link not found!");
