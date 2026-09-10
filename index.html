@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Smash Karts 1v1</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+</head>
+<body class="bg-[#121212] text-white flex items-center justify-center min-h-screen">
+
+  <div class="bg-[#1e1e1e] border border-gray-800 rounded-2xl p-8 max-w-md w-full text-center shadow-2xl">
+    <h1 class="text-3xl font-extrabold text-[#ff4757] tracking-wider mb-2">SMASH KARTS 1V1</h1>
+    <p class="text-gray-400 text-sm mb-6">Instant Matchmaking</p>
+
+    <!-- State 1: Start Button -->
+    <div id="start-box">
+      <button onclick="startMatchmaking()" 
+              class="w-full bg-[#ff4757] hover:bg-[#e03e4e] text-white font-extrabold py-4 text-xl rounded-xl transition duration-200 shadow-lg tracking-wide">
+        PLAY 1V1
+      </button>
+    </div>
+
+    <!-- State 2: Searching / Loading Animation -->
+    <div id="loading-box" class="hidden py-6">
+      <div class="inline-block animate-spin rounded-full h-12 w-12 border-4 border-[#ff4757] border-t-transparent mb-4"></div>
+      <p class="text-lg font-bold text-gray-200">Finding Opponent...</p>
+      <p class="text-xs text-gray-500 mt-1">Please wait while we match you up</p>
+    </div>
+
+    <!-- State 3: Link Code Generation & Input -->
+    <div id="match-box" class="hidden">
+      <h2 class="text-2xl font-bold mb-4 text-green-400">Match Found!</h2>
+
+      <!-- Host View: Generates or inputs the link code -->
+      <div id="host-view" class="hidden">
+        <div class="bg-[#2a2a2a] p-4 rounded-xl mb-4 text-left border border-gray-700">
+          <p class="text-xs font-bold text-[#ff4757] mb-1">INSTRUCTIONS (HOST):</p>
+          <p class="text-xs text-gray-300 mb-1">1. Open Smash Karts in a new tab.</p>
+          <p class="text-xs text-gray-300">2. Create a private room and copy the link/code.</p>
+        </div>
+
+        <input type="text" id="room-link" placeholder="Paste Room Link or Code here..." 
+               class="w-full bg-[#2a2a2a] text-white px-4 py-3 rounded-xl border border-gray-700 focus:outline-none focus:border-[#ff4757] mb-4">
+        
+        <button onclick="sendLink()" class="w-full bg-[#ff4757] hover:bg-[#e03e4e] font-bold py-3 rounded-xl">
+          SEND LINK TO OPPONENT
+        </button>
+      </div>
+
+      <!-- Guest View: Waiting for code -->
+      <div id="guest-view" class="hidden py-4">
+        <div class="inline-block animate-pulse mb-3">
+          <span class="text-4xl">🎮</span>
+        </div>
+        <p class="text-yellow-400 font-semibold mb-1">Waiting for Host to generate link...</p>
+        <p class="text-xs text-gray-400">The game link will appear here automatically.</p>
+      </div>
+
+      <!-- Final Join State: Displayed to both once link is ready -->
+      <div id="link-ready" class="hidden">
+        <p class="text-sm text-gray-300 mb-3">Room is ready! Click below to enter the match:</p>
+        <a id="join-btn" href="#" target="_blank" 
+           class="inline-block w-full bg-green-500 hover:bg-green-600 text-white font-extrabold py-4 rounded-xl text-lg transition shadow-lg">
+          JOIN GAME
+        </a>
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    const socket = io();
+    let currentMatchId = null;
+
+    function startMatchmaking() {
+      // Hide start button, show loading spinner
+      document.getElementById('start-box').classList.add('hidden');
+      document.getElementById('loading-box').classList.remove('hidden');
+      
+      // Request queue join on backend
+      socket.emit('join_queue');
+    }
+
+    socket.on('match_found', (data) => {
+      currentMatchId = data.matchId;
+      
+      // Hide loading spinner, show match area
+      document.getElementById('loading-box').classList.add('hidden');
+      document.getElementById('match-box').classList.remove('hidden');
+
+      if (data.role === 'host') {
+        document.getElementById('host-view').classList.remove('hidden');
+      } else {
+        document.getElementById('guest-view').classList.remove('hidden');
+      }
+    });
+
+    function sendLink() {
+      const link = document.getElementById('room-link').value;
+      if (!link) return alert('Please enter or paste a valid room link code!');
+      
+      socket.emit('send_room_link', { matchId: currentMatchId, link });
+    }
+
+    socket.on('receive_room_link', (data) => {
+      document.getElementById('host-view').classList.add('hidden');
+      document.getElementById('guest-view').classList.add('hidden');
+      document.getElementById('link-ready').classList.remove('hidden');
+      
+      // Handle both full URLs and raw room codes
+      let formattedLink = data.link.trim();
+      if (!formattedLink.startsWith('http://') && !formattedLink.startsWith('https://')) {
+        formattedLink = 'https://' + formattedLink;
+      }
+      
+      document.getElementById('join-btn').href = formattedLink;
+    });
+  </script>
+</body>
+</html>
