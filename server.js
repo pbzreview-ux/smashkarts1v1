@@ -1,52 +1,66 @@
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
+const path = require('path');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: "*" } });
+const io = new Server(server);
 
-app.use(express.static(__dirname));
+app.use(express.static(path.join(__dirname, '/')));
 
-let queue = [];
+// Active sockets map: socket.id -> { username, id }
+const connectedPlayers = {};
 
 io.on('connection', (socket) => {
-  console.log('Player connected:', socket.id);
+    // Default dynamic user info upon joining
+    connectedPlayers[socket.id] = {
+        id: socket.id,
+        username: "Untitled"
+    };
 
-  // Player clicks PLAY 1V1
-  socket.on('join_queue', () => {
-    // Avoid double joins
-    if (!queue.includes(socket)) {
-      queue.push(socket);
-      console.log(`Player ${socket.id} added to queue. Queue length: ${queue.length}`);
-    }
+    // Send full update of online users to everyone
+    broadcastOnlineUsers();
 
-    // Match 2 players when queue reaches 2
-    if (queue.length >= 2) {
-      const p1 = queue.shift();
-      const p2 = queue.shift();
-      const matchId = `match_${Date.now()}`;
+    // Handle username updates from client
+    socket.on('set_username', (name) => {
+        const cleanName = name ? name.trim() : "";
+        connectedPlayers[socket.id].username = cleanName.length > 0 ? cleanName : "Untitled";
+        broadcastOnlineUsers();
+    });
 
-      p1.join(matchId);
-      p2.join(matchId);
+    // Handle 1v1 room creation
+    socket.on('create_room', (data) => {
+        const roomId = Math.random().toString(36).substring(2, 8).toUpperCase();
+        socket.emit('room_created', { roomId, lobby: data });
+    });
 
-      // Assign host and guest roles
-      p1.emit('match_found', { role: 'host', matchId });
-      p2.emit('match_found', { role: 'guest', matchId });
-    }
-  });
+    // Handle Direct Messaging between players
+    socket.on('send_private_msg', ({ targetSocketId, message }) => {
+        const sender = connectedPlayers[socket.id];
+        if (connectedPlayers[targetSocketId] && message.trim().length > 0) {
+            io.to(targetSocketId).emit('receive_private_msg', {
+                senderId: socket.id,
+                senderName: sender ? sender.username : "Untitled",
+                message: message.trim()
+            });
+        }
+    });
 
-  // Host submits room link code
-  socket.on('send_room_link', ({ matchId, link }) => {
-    io.to(matchId).emit('receive_room_link', { link });
-  });
-
-  socket.on('disconnect', () => {
-    queue = queue.filter(s => s.id !== socket.id);
-  });
+    // Handle disconnection
+    socket.on('disconnect', () => {
+        delete connectedPlayers[socket.id];
+        broadcastOnlineUsers();
+    });
 });
 
-const PORT = 3000;
-server.listen(PORT, () => {
-  console.log(`Server running at http://localhost:${PORT}`);
-});
+function broadcastOnlineUsers() {
+    const playerList = Object.values(connectedPlayers);
+    io.emit('online_users_update', {
+        count: playerList.length,
+        users: playerList
+    });
+}
+
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => console.log(`Server running on port ${PORT}`));

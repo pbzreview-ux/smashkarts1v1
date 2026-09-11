@@ -19,19 +19,16 @@
             </div>
             <div>
                 <span class="block text-[10px] font-bold uppercase tracking-wider text-blue-200">Account Username</span>
-                <input type="text" id="accountUsername" placeholder="Enter Tag..." onchange="saveAccount()" class="bg-transparent text-sm font-bold text-white focus:outline-none placeholder-blue-300/60 w-32 sm:w-40">
+                <input type="text" id="accountUsername" placeholder="Enter Tag..." oninput="updateAccountName()" class="bg-transparent text-sm font-bold text-white focus:outline-none placeholder-blue-300/60 w-32 sm:w-40">
             </div>
         </div>
 
-        <!-- Top Right: Player Search & Online Counter -->
+        <!-- Top Right: Interactive Online Button -->
         <div class="flex items-center gap-4">
-            <div class="hidden sm:flex items-center gap-2 bg-blue-900/40 border border-white/20 px-3 py-1.5 rounded-full text-xs font-bold text-emerald-400">
+            <button onclick="toggleOnlineModal()" class="flex items-center gap-2 bg-blue-900/60 hover:bg-blue-800/80 border border-white/20 px-4 py-2 rounded-full text-xs font-bold text-emerald-400 transition-all cursor-pointer shadow-md active:scale-95">
                 <span class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
-                Online: <span id="onlineCount">1</span>
-            </div>
-            <div class="relative">
-                <input type="text" placeholder="Search player..." class="smash-input px-4 py-2 rounded-full text-xs w-36 sm:w-48 placeholder-white/50">
-            </div>
+                Online: <span id="onlineCount">0</span>
+            </button>
         </div>
     </header>
 
@@ -91,7 +88,7 @@
                     </div>
 
                     <div id="leaderboardList" class="space-y-2.5">
-                        <!-- Dynamic Player Rows Rendered Here -->
+                        <!-- Dynamic Player Rows -->
                     </div>
                 </div>
 
@@ -113,7 +110,6 @@
                         </div>
                     </div>
 
-                    <!-- WIN CONDITION SELECTOR (FIRST TO 3, 6, 10 ONLY) -->
                     <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div>
                             <label class="block text-xs font-bold uppercase text-blue-200 mb-2">Win Condition</label>
@@ -146,29 +142,137 @@
         </main>
     </div>
 
+    <!-- ONLINE PLAYERS MODAL -->
+    <div id="onlineModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
+        <div class="w-full max-w-md bg-blue-900 border-2 border-white/30 rounded-3xl p-6 shadow-2xl relative">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="font-bungee text-lg text-yellow-300">🟢 ONLINE PLAYERS</h3>
+                <button onclick="toggleOnlineModal()" class="text-white hover:text-red-400 font-bold text-lg">✕</button>
+            </div>
+            <div id="onlinePlayersList" class="max-h-80 overflow-y-auto space-y-2 pr-1">
+                <!-- Online Players Dynamic Content -->
+            </div>
+        </div>
+    </div>
+
+    <!-- DIRECT MESSAGING CHAT BOX -->
+    <div id="chatBox" class="hidden fixed bottom-4 right-4 z-50 w-80 bg-blue-950 border-2 border-yellow-400 rounded-2xl shadow-2xl overflow-hidden flex flex-col">
+        <div class="bg-blue-900 px-4 py-3 flex justify-between items-center border-b border-white/10">
+            <span class="font-bold text-xs text-yellow-300">💬 Chat with: <span id="chatTargetName">Untitled</span></span>
+            <button onclick="closeChat()" class="text-white hover:text-red-400 font-bold text-sm">✕</button>
+        </div>
+        <div id="chatMessages" class="h-56 p-3 overflow-y-auto text-xs space-y-2 bg-blue-950/90">
+            <!-- Messages render here -->
+        </div>
+        <div class="p-2 bg-blue-900/60 border-t border-white/10 flex gap-2">
+            <input type="text" id="chatInput" placeholder="Type a message..." onkeydown="if(event.key==='Enter') sendChatMessage()" class="smash-input flex-1 px-3 py-1.5 rounded-xl text-xs">
+            <button onclick="sendChatMessage()" class="bg-yellow-400 text-blue-950 font-black px-3 py-1.5 rounded-xl text-xs">Send</button>
+        </div>
+    </div>
+
     <!-- FOOTER -->
     <footer class="py-4 text-center text-xs font-bold text-blue-200/60">
         Smash Karts 1v1 Arena • Custom Room Manager
     </footer>
 
-    <!-- LOGIC & SOCKETS -->
+    <!-- SCRIPT LOGIC -->
     <script>
         const socket = io();
 
-        // Local Storage Account System
+        let onlineUsers = [];
+        let activeChatTargetId = null;
+
+        // Account Username Tracking
         let currentAccount = localStorage.getItem('smashUser') || '';
         if (currentAccount) {
             document.getElementById('accountUsername').value = currentAccount;
             document.getElementById('hostNameInput').value = currentAccount;
+            socket.emit('set_username', currentAccount);
         }
 
-        function saveAccount() {
-            const val = document.getElementById('accountUsername').value.trim();
-            if (val) {
-                localStorage.setItem('smashUser', val);
-                document.getElementById('hostNameInput').value = val;
-                registerOrUpdatePlayer(val, 0);
+        function updateAccountName() {
+            const name = document.getElementById('accountUsername').value.trim();
+            const displayName = name.length > 0 ? name : "Untitled";
+            localStorage.setItem('smashUser', name);
+            document.getElementById('hostNameInput').value = displayName;
+            socket.emit('set_username', name);
+        }
+
+        // Handle Socket Events for Online Users
+        socket.on('online_users_update', (data) => {
+            document.getElementById('onlineCount').innerText = data.count;
+            onlineUsers = data.users;
+            renderOnlineModalList();
+        });
+
+        function toggleOnlineModal() {
+            const modal = document.getElementById('onlineModal');
+            modal.classList.toggle('hidden');
+        }
+
+        function renderOnlineModalList() {
+            const container = document.getElementById('onlinePlayersList');
+            container.innerHTML = '';
+
+            onlineUsers.forEach(user => {
+                const isMe = user.id === socket.id;
+                const row = document.createElement('div');
+                row.className = 'flex justify-between items-center bg-blue-950/70 border border-white/10 p-3 rounded-xl';
+                
+                row.innerHTML = `
+                    <div class="flex items-center gap-2">
+                        <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+                        <span class="font-bold text-xs text-white">${user.username}${isMe ? ' (You)' : ''}</span>
+                    </div>
+                    ${!isMe ? `<button onclick="openChat('${user.id}', '${user.username}')" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 font-black px-3 py-1 rounded-lg text-[10px] uppercase">Message</button>` : ''}
+                `;
+                container.appendChild(row);
+            });
+        }
+
+        // Direct Messaging Logic
+        function openChat(targetId, targetName) {
+            activeChatTargetId = targetId;
+            document.getElementById('chatTargetName').innerText = targetName;
+            document.getElementById('chatBox').classList.remove('hidden');
+            document.getElementById('onlineModal').classList.add('hidden');
+        }
+
+        function closeChat() {
+            document.getElementById('chatBox').classList.add('hidden');
+            activeChatTargetId = null;
+        }
+
+        function sendChatMessage() {
+            const input = document.getElementById('chatInput');
+            const message = input.value.trim();
+            if (message && activeChatTargetId) {
+                socket.emit('send_private_msg', {
+                    targetSocketId: activeChatTargetId,
+                    message: message
+                });
+
+                // Render locally
+                appendChatMessage("You", message, true);
+                input.value = '';
             }
+        }
+
+        socket.on('receive_private_msg', (data) => {
+            // Automatically open chat box when receiving a message
+            activeChatTargetId = data.senderId;
+            document.getElementById('chatTargetName').innerText = data.senderName;
+            document.getElementById('chatBox').classList.remove('hidden');
+            appendChatMessage(data.senderName, data.message, false);
+        });
+
+        function appendChatMessage(sender, text, isMe) {
+            const box = document.getElementById('chatMessages');
+            const msgDiv = document.createElement('div');
+            msgDiv.className = `p-2 rounded-xl text-[11px] ${isMe ? 'bg-yellow-400/20 text-yellow-200 text-right ml-6 border border-yellow-400/30' : 'bg-blue-900/80 text-white mr-6 border border-white/10'}`;
+            msgDiv.innerHTML = `<strong>${sender}:</strong> ${text}`;
+            box.appendChild(msgDiv);
+            box.scrollTop = box.scrollHeight;
         }
 
         // Leaderboard Local Memory
@@ -182,8 +286,6 @@
         function renderLeaderboard() {
             const list = document.getElementById('leaderboardList');
             list.innerHTML = '';
-            
-            // Sort by most games played
             playerStats.sort((a, b) => b.games - a.games);
 
             playerStats.forEach((player, index) => {
@@ -206,11 +308,12 @@
         }
 
         function registerOrUpdatePlayer(username, addGames = 1) {
-            let found = playerStats.find(p => p.name.toLowerCase() === username.toLowerCase());
+            let cleanName = username.trim().length > 0 ? username.trim() : "Untitled";
+            let found = playerStats.find(p => p.name.toLowerCase() === cleanName.toLowerCase());
             if (found) {
                 found.games += addGames;
             } else {
-                playerStats.push({ name: username, games: addGames });
+                playerStats.push({ name: cleanName, games: addGames });
             }
             localStorage.setItem('smashLeaderboard', JSON.stringify(playerStats));
             renderLeaderboard();
@@ -222,11 +325,11 @@
         }
 
         function createLobby() {
-            const player = document.getElementById('accountUsername').value || document.getElementById('hostNameInput').value || "GuestPlayer";
+            const playerInput = document.getElementById('accountUsername').value.trim();
+            const player = playerInput.length > 0 ? playerInput : "Untitled";
             const smashUrl = document.getElementById('smashUrl').value || "https://smashkarts.io";
             const winCondition = document.getElementById('winCondition').value;
 
-            // Increment player count for leaderboard
             registerOrUpdatePlayer(player, 1);
 
             socket.emit('create_room', {
@@ -235,10 +338,6 @@
                 winCondition: winCondition
             });
         }
-
-        socket.on('online_count', (count) => {
-            document.getElementById('onlineCount').innerText = count;
-        });
 
         socket.on('room_created', (data) => {
             document.getElementById('roomDetails').classList.remove('hidden');
