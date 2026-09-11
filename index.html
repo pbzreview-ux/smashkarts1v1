@@ -40,7 +40,7 @@
             <button onclick="showTab('leaderboardTab')" title="Most Played Leaderboard" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg">
                 🏆
             </button>
-            <button onclick="showTab('setupTab')" title="Create 1v1 Room" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg">
+            <button onclick="showTab('setupTab')" title="1v1 Hub" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg">
                 🎮
             </button>
         </aside>
@@ -49,29 +49,9 @@
         <main class="flex-1 flex flex-col items-center">
             
             <!-- LOGO BADGE -->
-            <div class="mb-6">
+            <div class="mb-8">
                 <div class="bg-gradient-to-b from-yellow-300 to-yellow-500 border-4 border-white rounded-3xl px-10 py-3 shadow-2xl transform -rotate-1">
                     <span class="font-bungee text-5xl sm:text-6xl text-blue-950 drop-shadow-md tracking-wider">1v1</span>
-                </div>
-            </div>
-
-            <!-- MAP PREVIEWS BANNER -->
-            <div class="w-full max-w-4xl overflow-x-auto pb-4 mb-6 flex gap-3 justify-start sm:justify-center no-scrollbar">
-                <div class="flex-shrink-0 bg-blue-900/60 border border-white/30 rounded-2xl p-2 text-center w-24">
-                    <div class="w-full h-12 bg-purple-900/80 rounded-xl mb-1 flex items-center justify-center text-xs font-bold">👻</div>
-                    <span class="text-[10px] font-bold block truncate">Graveyard</span>
-                </div>
-                <div class="flex-shrink-0 bg-blue-900/60 border border-white/30 rounded-2xl p-2 text-center w-24">
-                    <div class="w-full h-12 bg-red-900/80 rounded-xl mb-1 flex items-center justify-center text-xs font-bold">🌋</div>
-                    <span class="text-[10px] font-bold block truncate">Lava Pit</span>
-                </div>
-                <div class="flex-shrink-0 bg-blue-900/60 border border-white/30 rounded-2xl p-2 text-center w-24">
-                    <div class="w-full h-12 bg-indigo-900/80 rounded-xl mb-1 flex items-center justify-center text-xs font-bold">🚀</div>
-                    <span class="text-[10px] font-bold block truncate">Space Station</span>
-                </div>
-                <div class="flex-shrink-0 bg-blue-900/60 border border-white/30 rounded-2xl p-2 text-center w-24">
-                    <div class="w-full h-12 bg-emerald-900/80 rounded-xl mb-1 flex items-center justify-center text-xs font-bold">☁️</div>
-                    <span class="text-[10px] font-bold block truncate">Sky Arena</span>
                 </div>
             </div>
 
@@ -83,7 +63,7 @@
                     <div class="flex justify-between items-center mb-4 px-2">
                         <h2 class="font-bungee text-xl text-yellow-300">MOST PLAYED PLAYERS</h2>
                         <button onclick="showTab('setupTab')" class="text-xs bg-yellow-400 hover:bg-yellow-300 text-blue-950 font-black px-4 py-2 rounded-xl">
-                            + Create Match
+                            Go to 1v1 Arena
                         </button>
                     </div>
 
@@ -92,11 +72,18 @@
                     </div>
                 </div>
 
-                <!-- TAB 2: CREATE 1v1 MATCH SETUP -->
+                <!-- TAB 2: 1v1 MATCH HUB (CREATE & JOIN) -->
                 <div id="setupTab" class="tab-content hidden space-y-6">
-                    <div class="text-center mb-4">
-                        <h2 class="font-bungee text-2xl text-white">CUSTOM 1v1 MATCH SETUP</h2>
-                        <p class="text-xs text-blue-200">Configure your match options below</p>
+                    <div class="flex flex-col sm:flex-row justify-between items-center gap-3 border-b border-white/10 pb-4">
+                        <div>
+                            <h2 class="font-bungee text-2xl text-white">1v1 MATCH ARENA</h2>
+                            <p class="text-xs text-blue-200">Create a new match or join a player's room</p>
+                        </div>
+                        <div class="flex gap-2 w-full sm:w-auto">
+                            <button onclick="openJoinModal()" class="flex-1 sm:flex-none text-xs bg-emerald-500 hover:bg-emerald-400 text-white font-black px-4 py-2.5 rounded-xl shadow-md uppercase">
+                                🔗 Join Match
+                            </button>
+                        </div>
                     </div>
 
                     <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -130,16 +117,30 @@
                     </div>
 
                     <button onclick="createLobby()" class="btn-smash w-full py-4 rounded-2xl font-bungee text-xl text-white tracking-wider">
-                        START 1v1 MATCH
+                        + CREATE MATCH ROOM
                     </button>
 
                     <div id="roomDetails" class="hidden p-4 rounded-2xl bg-emerald-500/20 border border-emerald-400 text-emerald-200 text-center font-bold text-xs">
-                        Match registered! Room Code: <span id="displayRoomId" class="underline"></span>
+                        Match created! Share Code: <span id="displayRoomId" class="underline text-yellow-300 font-black text-sm"></span>
                     </div>
                 </div>
 
             </div>
         </main>
+    </div>
+
+    <!-- JOIN MATCH MODAL -->
+    <div id="joinModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
+        <div class="w-full max-w-sm bg-blue-900 border-2 border-white/30 rounded-3xl p-6 shadow-2xl relative text-center space-y-4">
+            <h3 class="font-bungee text-xl text-yellow-300">JOIN EXISTING 1v1</h3>
+            <p class="text-xs text-blue-200">Enter the 6-character Match Code given by the host:</p>
+            <input type="text" id="joinCodeInput" placeholder="e.g. A1B2C3" class="smash-input uppercase text-center w-full px-4 py-3 rounded-2xl text-base font-black tracking-widest">
+            <div class="flex gap-2">
+                <button onclick="closeJoinModal()" class="w-1/2 py-2.5 rounded-xl bg-blue-950 font-bold text-xs">Cancel</button>
+                <button onclick="submitJoinMatch()" class="w-1/2 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-white font-black text-xs">Join Now</button>
+            </div>
+            <p id="joinErrorMsg" class="hidden text-xs text-red-400 font-bold"></p>
+        </div>
     </div>
 
     <!-- ONLINE PLAYERS MODAL -->
@@ -155,17 +156,32 @@
         </div>
     </div>
 
-    <!-- DIRECT MESSAGING CHAT BOX -->
+    <!-- INCOMING 1v1 CHALLENGE NOTIFICATION POPUP -->
+    <div id="challengeNotification" class="hidden fixed top-6 right-6 z-50 max-w-sm bg-blue-950 border-2 border-yellow-400 rounded-2xl p-4 shadow-2xl space-y-3 notification-badge">
+        <div class="flex items-center gap-2">
+            <span class="text-xl">⚔️</span>
+            <div>
+                <h4 class="font-bungee text-sm text-yellow-300">1v1 CHALLENGE RECEIVED!</h4>
+                <p class="text-xs text-white"><span id="challengerName" class="font-bold underline"></span> wants to play 1v1!</p>
+            </div>
+        </div>
+        <div class="flex gap-2 pt-1">
+            <button onclick="respondChallenge(false)" class="w-1/2 bg-red-600 hover:bg-red-500 py-1.5 rounded-xl text-xs font-bold text-white">Decline</button>
+            <button onclick="respondChallenge(true)" class="w-1/2 bg-emerald-500 hover:bg-emerald-400 py-1.5 rounded-xl text-xs font-black text-white">Accept & Join</button>
+        </div>
+    </div>
+
+    <!-- DIRECT MESSAGING CHAT BOX (3 MESSAGES MAX CAP) -->
     <div id="chatBox" class="hidden fixed bottom-4 right-4 z-50 w-80 bg-blue-950 border-2 border-yellow-400 rounded-2xl shadow-2xl overflow-hidden flex flex-col">
         <div class="bg-blue-900 px-4 py-3 flex justify-between items-center border-b border-white/10">
             <span class="font-bold text-xs text-yellow-300">💬 Chat with: <span id="chatTargetName">Untitled</span></span>
             <button onclick="closeChat()" class="text-white hover:text-red-400 font-bold text-sm">✕</button>
         </div>
-        <div id="chatMessages" class="h-56 p-3 overflow-y-auto text-xs space-y-2 bg-blue-950/90">
-            <!-- Messages render here -->
+        <div id="chatMessages" class="h-48 p-3 overflow-y-auto text-xs space-y-2 bg-blue-950/90">
+            <!-- Max 3 messages displayed here to save storage -->
         </div>
         <div class="p-2 bg-blue-900/60 border-t border-white/10 flex gap-2">
-            <input type="text" id="chatInput" placeholder="Type a message..." onkeydown="if(event.key==='Enter') sendChatMessage()" class="smash-input flex-1 px-3 py-1.5 rounded-xl text-xs">
+            <input type="text" id="chatInput" placeholder="Type message..." onkeydown="if(event.key==='Enter') sendChatMessage()" class="smash-input flex-1 px-3 py-1.5 rounded-xl text-xs">
             <button onclick="sendChatMessage()" class="bg-yellow-400 text-blue-950 font-black px-3 py-1.5 rounded-xl text-xs">Send</button>
         </div>
     </div>
@@ -181,6 +197,8 @@
 
         let onlineUsers = [];
         let activeChatTargetId = null;
+        let incomingChallengeData = null;
+        let activeChatMessages = []; // Storage array strictly capped at 3 messages
 
         // Account Username Tracking
         let currentAccount = localStorage.getItem('smashUser') || '';
@@ -198,7 +216,6 @@
             socket.emit('set_username', name);
         }
 
-        // Handle Socket Events for Online Users
         socket.on('online_users_update', (data) => {
             document.getElementById('onlineCount').innerText = data.count;
             onlineUsers = data.users;
@@ -206,8 +223,7 @@
         });
 
         function toggleOnlineModal() {
-            const modal = document.getElementById('onlineModal');
-            modal.classList.toggle('hidden');
+            document.getElementById('onlineModal').classList.toggle('hidden');
         }
 
         function renderOnlineModalList() {
@@ -217,20 +233,67 @@
             onlineUsers.forEach(user => {
                 const isMe = user.id === socket.id;
                 const row = document.createElement('div');
-                row.className = 'flex justify-between items-center bg-blue-950/70 border border-white/10 p-3 rounded-xl';
+                row.className = 'flex justify-between items-center bg-blue-950/70 border border-white/10 p-3 rounded-xl gap-2';
                 
                 row.innerHTML = `
-                    <div class="flex items-center gap-2">
-                        <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
-                        <span class="font-bold text-xs text-white">${user.username}${isMe ? ' (You)' : ''}</span>
+                    <div class="flex items-center gap-2 truncate">
+                        <span class="w-2 h-2 rounded-full bg-emerald-400 flex-shrink-0"></span>
+                        <span class="font-bold text-xs text-white truncate">${user.username}${isMe ? ' (You)' : ''}</span>
                     </div>
-                    ${!isMe ? `<button onclick="openChat('${user.id}', '${user.username}')" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 font-black px-3 py-1 rounded-lg text-[10px] uppercase">Message</button>` : ''}
+                    ${!isMe ? `
+                        <div class="flex gap-1.5 flex-shrink-0">
+                            <button onclick="send1v1Challenge('${user.id}')" class="bg-red-500 hover:bg-red-400 text-white font-black px-2.5 py-1 rounded-lg text-[10px] uppercase">1v1 Request</button>
+                            <button onclick="openChat('${user.id}', '${user.username}')" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 font-black px-2.5 py-1 rounded-lg text-[10px] uppercase">Message</button>
+                        </div>
+                    ` : ''}
                 `;
                 container.appendChild(row);
             });
         }
 
-        // Direct Messaging Logic
+        // 1v1 Challenge Request Logic
+        function send1v1Challenge(targetId) {
+            const smashUrl = document.getElementById('smashUrl').value || "https://smashkarts.io";
+            const winCondition = document.getElementById('winCondition').value;
+
+            socket.emit('send_1v1_request', {
+                targetSocketId: targetId,
+                smashUrl: smashUrl,
+                winCondition: winCondition
+            });
+
+            alert("1v1 Request Sent!");
+        }
+
+        socket.on('receive_1v1_request', (data) => {
+            incomingChallengeData = data;
+            document.getElementById('challengerName').innerText = data.senderName;
+            document.getElementById('challengeNotification').classList.remove('hidden');
+        });
+
+        function respondChallenge(accepted) {
+            document.getElementById('challengeNotification').classList.add('hidden');
+            if (incomingChallengeData) {
+                socket.emit('respond_1v1_request', {
+                    targetSocketId: incomingChallengeData.senderId,
+                    accepted: accepted
+                });
+
+                if (accepted && incomingChallengeData.smashUrl) {
+                    window.open(incomingChallengeData.smashUrl, '_blank');
+                }
+            }
+        }
+
+        socket.on('1v1_response_received', (data) => {
+            if (data.accepted) {
+                alert(`⚔️ ${data.responderName} ACCEPTED your 1v1 request! Starting match...`);
+            } else {
+                alert(`❌ ${data.responderName} declined your 1v1 request.`);
+            }
+        });
+
+        // Chat Logic with 3-Message Auto-Purge to Save Storage
         function openChat(targetId, targetName) {
             activeChatTargetId = targetId;
             document.getElementById('chatTargetName').innerText = targetName;
@@ -251,15 +314,15 @@
                     targetSocketId: activeChatTargetId,
                     message: message
                 });
-
-                // Render locally
-                appendChatMessage("You", message, true);
                 input.value = '';
             }
         }
 
+        socket.on('private_msg_sent_confirm', (data) => {
+            appendChatMessage("You", data.message, true);
+        });
+
         socket.on('receive_private_msg', (data) => {
-            // Automatically open chat box when receiving a message
             activeChatTargetId = data.senderId;
             document.getElementById('chatTargetName').innerText = data.senderName;
             document.getElementById('chatBox').classList.remove('hidden');
@@ -267,20 +330,66 @@
         });
 
         function appendChatMessage(sender, text, isMe) {
+            activeChatMessages.push({ sender, text, isMe });
+
+            // ENFORCE STORAGE SAVING: Keep only the 3 most recent messages
+            if (activeChatMessages.length > 3) {
+                activeChatMessages.shift();
+            }
+
+            renderChatMessages();
+        }
+
+        function renderChatMessages() {
             const box = document.getElementById('chatMessages');
-            const msgDiv = document.createElement('div');
-            msgDiv.className = `p-2 rounded-xl text-[11px] ${isMe ? 'bg-yellow-400/20 text-yellow-200 text-right ml-6 border border-yellow-400/30' : 'bg-blue-900/80 text-white mr-6 border border-white/10'}`;
-            msgDiv.innerHTML = `<strong>${sender}:</strong> ${text}`;
-            box.appendChild(msgDiv);
+            box.innerHTML = '';
+
+            activeChatMessages.forEach(msg => {
+                const msgDiv = document.createElement('div');
+                msgDiv.className = `p-2 rounded-xl text-[11px] ${msg.isMe ? 'bg-yellow-400/20 text-yellow-200 text-right ml-6 border border-yellow-400/30' : 'bg-blue-900/80 text-white mr-6 border border-white/10'}`;
+                msgDiv.innerHTML = `<strong>${msg.sender}:</strong> ${msg.text}`;
+                box.appendChild(msgDiv);
+            });
+
             box.scrollTop = box.scrollHeight;
         }
 
-        // Leaderboard Local Memory
+        // Join Room Functions
+        function openJoinModal() {
+            document.getElementById('joinModal').classList.remove('hidden');
+            document.getElementById('joinErrorMsg').classList.add('hidden');
+        }
+
+        function closeJoinModal() {
+            document.getElementById('joinModal').classList.add('hidden');
+        }
+
+        function submitJoinMatch() {
+            const code = document.getElementById('joinCodeInput').value.trim();
+            if (code) {
+                socket.emit('join_room_request', code);
+            }
+        }
+
+        socket.on('join_room_success', (room) => {
+            closeJoinModal();
+            alert(`Joining Match hosted by ${room.hostName}!`);
+            if (room.smashUrl) {
+                window.open(room.smashUrl, '_blank');
+            }
+        });
+
+        socket.on('join_room_error', (msg) => {
+            const err = document.getElementById('joinErrorMsg');
+            err.innerText = msg;
+            err.classList.remove('hidden');
+        });
+
+        // Leaderboard System
         let playerStats = JSON.parse(localStorage.getItem('smashLeaderboard')) || [
             { name: "KartKing", games: 48 },
             { name: "TurboTerror", games: 36 },
-            { name: "NitroNinja", games: 29 },
-            { name: "BlastBandit", games: 18 }
+            { name: "NitroNinja", games: 29 }
         ];
 
         function renderLeaderboard() {
@@ -347,7 +456,6 @@
             }
         });
 
-        // Initial Render
         renderLeaderboard();
     </script>
 </body>

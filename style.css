@@ -50,7 +50,7 @@ body {
   color: white;
 }
 
-/* Arcade Launch Button */
+/* Buttons */
 .btn-smash {
   background: linear-gradient(180deg, #ff9d00 0%, #ff6c00 100%);
   border: 2px solid #ffffff;
@@ -69,7 +69,6 @@ body {
   box-shadow: 0 2px 0 0 #b34a00;
 }
 
-/* Left Sidebar Icon Buttons */
 .sidebar-btn {
   background: rgba(255, 255, 255, 0.15);
   border: 1px solid rgba(255, 255, 255, 0.2);
@@ -81,8 +80,17 @@ body {
   transform: scale(1.05);
 }
 
-/* Chat & Overlay Popups */
+/* Overlay & Notifications */
 .modal-overlay {
   background: rgba(4, 15, 38, 0.85);
   backdrop-filter: blur(8px);
+}
+
+.notification-badge {
+  animation: bounce 1s infinite;
+}
+
+@keyframes bounce {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-5px); }
 }
