@@ -10,6 +10,63 @@
 </head>
 <body class="min-h-screen flex flex-col justify-between overflow-x-hidden">
 
+    <!-- FLOATING TOAST NOTIFICATION CONTAINER -->
+    <div id="toastContainer"></div>
+
+    <!-- FLOATING SETTINGS BUTTON (BOTTOM RIGHT CORNER) -->
+    <button id="settingsFloatingBtn" onclick="openSettingsModal()" title="Settings">⚙️</button>
+
+    <!-- SETTINGS MODAL -->
+    <div id="settingsModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
+        <div class="w-full max-w-sm bg-blue-900 border-2 border-yellow-400 rounded-3xl p-6 shadow-2xl">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="font-bungee text-lg text-yellow-300">⚙️ SETTINGS</h3>
+                <button onclick="closeSettingsModal()" class="text-white hover:text-red-400 font-bold text-lg">✕</button>
+            </div>
+            
+            <div class="space-y-4">
+                <div class="flex justify-between items-center bg-blue-950/80 p-3.5 rounded-2xl border border-white/10">
+                    <div>
+                        <span class="block text-xs font-bold text-white">Online Status</span>
+                        <span class="text-[10px] text-blue-200">Show visible in player list</span>
+                    </div>
+                    <label class="relative inline-flex items-center cursor-pointer">
+                        <input type="checkbox" id="onlineStatusToggle" onchange="toggleOnlineStatus(this.checked)" checked class="sr-only peer">
+                        <div class="w-11 h-6 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500"></div>
+                    </label>
+                </div>
+
+                <button onclick="promptEditUsername(); closeSettingsModal();" class="w-full bg-blue-800 hover:bg-blue-700 text-white font-bold py-3 rounded-2xl text-xs flex items-center justify-center gap-2">
+                    ✏️ Edit Username
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- EDIT USERNAME MODAL -->
+    <div id="editUsernameModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
+        <div class="w-full max-w-sm bg-blue-900 border-2 border-yellow-400 rounded-3xl p-6 shadow-2xl">
+            <h3 class="font-bungee text-lg text-yellow-300 mb-3">✏️ CHANGE USERNAME</h3>
+            <input type="text" id="newUsernameInput" placeholder="Enter new username..." class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold mb-4">
+            <div class="flex gap-2">
+                <button onclick="closeEditUsernameModal()" class="w-1/2 bg-gray-600 text-white font-bold py-2.5 rounded-xl text-xs">Cancel</button>
+                <button onclick="saveNewUsername()" class="w-1/2 btn-smash text-white font-bungee py-2.5 rounded-xl text-xs">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- CHALLENGE RECEIVED MODAL -->
+    <div id="challengeModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
+        <div class="w-full max-w-sm bg-blue-900 border-2 border-yellow-400 rounded-3xl p-6 text-center shadow-2xl">
+            <span class="text-4xl block mb-2">⚔️</span>
+            <h3 id="challengeText" class="font-bungee text-base text-yellow-300 mb-4">Match Challenge Received!</h3>
+            <div class="flex gap-2">
+                <button onclick="declineChallenge()" class="w-1/2 bg-red-600 hover:bg-red-500 text-white font-bold py-3 rounded-xl text-xs">DECLINE</button>
+                <button onclick="acceptChallenge()" class="w-1/2 btn-smash text-white font-bungee py-3 rounded-xl text-xs">ACCEPT & PLAY</button>
+            </div>
+        </div>
+    </div>
+
     <!-- LOGIN / CREATE ACCOUNT MODAL -->
     <div id="authModal" class="fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
         <div class="w-full max-w-md bg-blue-900 border-2 border-yellow-400 rounded-3xl p-6 shadow-2xl">
@@ -74,21 +131,6 @@
         </div>
     </div>
 
-    <!-- DIRECT MESSAGE MODAL -->
-    <div id="dmModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
-        <div class="w-full max-w-md bg-blue-900 border-2 border-yellow-400 rounded-3xl p-6 shadow-2xl">
-            <div class="flex justify-between items-center mb-3">
-                <h3 id="dmTargetTitle" class="font-bungee text-sm text-yellow-300">💬 DM USER</h3>
-                <button onclick="closeDMModal()" class="text-white hover:text-red-400 font-bold text-lg">✕</button>
-            </div>
-            <div id="dmMessages" class="bg-blue-950/80 p-3 rounded-2xl h-48 overflow-y-auto space-y-2 text-xs mb-3 border border-white/10"></div>
-            <div class="flex gap-2">
-                <input type="text" id="dmInput" placeholder="Type message..." onkeydown="if(event.key==='Enter') sendDM()" class="smash-input flex-1 px-3 py-2 rounded-xl text-xs">
-                <button onclick="sendDM()" class="bg-yellow-400 text-blue-950 font-black px-4 py-2 rounded-xl text-xs">Send</button>
-            </div>
-        </div>
-    </div>
-
     <!-- EMBEDDED GAME SCREEN WITH OVERLAY CHAT -->
     <div id="gameScreen" class="hidden fixed inset-0 z-40 bg-black flex flex-col">
         <div class="bg-blue-900 border-b border-white/20 px-4 py-2 flex justify-between items-center z-10">
@@ -109,7 +151,7 @@
         <div class="relative flex-1 w-full h-full">
             <iframe id="smashFrame" src="" class="w-full h-full border-0" allow="autoplay; keyboard; fullscreen"></iframe>
 
-            <!-- FLOATING OVERLAY CHAT (Auto-Hides after 5s) -->
+            <!-- FLOATING OVERLAY CHAT (Auto-Hides after 5s, Max 10 messages) -->
             <div id="chatOverlay" class="hidden-overlay bg-blue-900/90 border-2 border-yellow-400 rounded-2xl p-3 shadow-2xl flex flex-col">
                 <div class="flex justify-between items-center mb-2 border-b border-white/10 pb-1">
                     <span class="font-bungee text-xs text-yellow-300">💬 IN-GAME CHAT</span>
@@ -139,10 +181,10 @@
                     </div>
                 </div>
 
-                <!-- Online Counter Button -->
-                <button onclick="openOnlineModal()" class="bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/50 px-3 py-2 rounded-2xl flex items-center gap-2 transition-all">
+                <!-- Online Counter Button (Only visible if logged in) -->
+                <button id="onlineCounterBtn" onclick="openOnlineModal()" class="bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/50 px-3 py-2 rounded-2xl flex items-center gap-2 transition-all">
                     <span class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
-                    <span id="onlineCountBadge" class="text-xs font-bold text-emerald-300">1 Online</span>
+                    <span id="onlineCountBadge" class="text-xs font-bold text-emerald-300">0 Online</span>
                 </button>
             </div>
 
@@ -155,6 +197,12 @@
                 <button id="btnNavLeaderboard" onclick="showTab('leaderboardTab')" title="Leaderboard" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg">🏆</button>
                 <button id="btnNav1v1" onclick="switchMatchMode('1v1')" title="1v1 Matchmaking" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg active">🎮</button>
                 <button id="btnNav2v2" onclick="switchMatchMode('2v2')" title="2v2 Matchmaking" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg">⚔️</button>
+                
+                <!-- MESSAGES / FRIENDS TAB (WITH ORANGE BADGE) -->
+                <button id="btnNavMessages" onclick="showMessagesTab()" title="Friends & Messages" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg">
+                    💬
+                    <span id="messagesBadge" class="unread-badge hidden">0</span>
+                </button>
             </aside>
 
             <main class="flex-1 flex flex-col items-center">
@@ -165,10 +213,33 @@
                 </div>
 
                 <div class="w-full max-w-4xl bg-blue-950/40 border-2 border-white/20 backdrop-blur-xl rounded-3xl p-6 shadow-2xl mb-8">
-                    <!-- LEADERBOARD TAB (Top 5 Players by Matches Played) -->
+                    <!-- LEADERBOARD TAB -->
                     <div id="leaderboardTab" class="tab-content hidden space-y-4">
                         <h2 class="font-bungee text-xl text-yellow-300 mb-2">🏆 TOP 5 PLAYERS (MOST GAMES PLAYED)</h2>
                         <div id="leaderboardList" class="space-y-2"></div>
+                    </div>
+
+                    <!-- MESSAGES & FRIENDS TAB -->
+                    <div id="messagesTab" class="tab-content hidden space-y-4">
+                        <h2 class="font-bungee text-xl text-yellow-300 mb-2">💬 FRIENDS & DIRECT MESSAGES</h2>
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 h-80">
+                            <!-- Friends List -->
+                            <div class="bg-blue-900/60 p-3 rounded-2xl border border-white/10 flex flex-col">
+                                <span class="font-bungee text-xs text-yellow-300 mb-2">YOUR FRIENDS</span>
+                                <div id="friendsTabList" class="flex-1 overflow-y-auto space-y-1.5 pr-1">
+                                    <p class="text-xs text-blue-200">No friends added yet. Open "Online Players" to add friends!</p>
+                                </div>
+                            </div>
+                            <!-- Direct Message Window -->
+                            <div class="md:col-span-2 bg-blue-900/60 p-3 rounded-2xl border border-white/10 flex flex-col">
+                                <span id="activeDMChatHeader" class="font-bungee text-xs text-yellow-300 mb-2">SELECT A FRIEND TO MESSAGE</span>
+                                <div id="tabDMMessages" class="flex-1 overflow-y-auto space-y-1.5 pr-1 text-xs mb-3 bg-blue-950/80 p-2.5 rounded-xl border border-white/10"></div>
+                                <div class="flex gap-2">
+                                    <input type="text" id="tabDMInput" placeholder="Type message..." onkeydown="if(event.key==='Enter') sendTabDM()" class="smash-input flex-1 px-3 py-2 rounded-xl text-xs">
+                                    <button onclick="sendTabDM()" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 font-black px-4 py-2 rounded-xl text-xs uppercase">Send</button>
+                                </div>
+                            </div>
+                        </div>
                     </div>
 
                     <!-- MATCHMAKING TAB -->
@@ -267,7 +338,52 @@
         let currentMode = '1v1';
         let activeRoomData = null;
         let chatInactivityTimer = null;
-        let activeDMTargetSocketId = null;
+        let activeDMTargetUser = null;
+        let unreadMessageCount = 0;
+        let pendingChallengeData = null;
+
+        /* IN-APP TOAST NOTIFICATION SYSTEM */
+        function showToast(message, icon = '🔔') {
+            const container = document.getElementById('toastContainer');
+            const toast = document.createElement('div');
+            toast.className = 'toast-msg';
+            toast.innerHTML = `<span>${icon}</span> <span>${message}</span>`;
+            container.appendChild(toast);
+
+            setTimeout(() => {
+                toast.style.opacity = '0';
+                toast.style.transform = 'translateY(-20px)';
+                setTimeout(() => toast.remove(), 300);
+            }, 3500);
+        }
+
+        function incrementUnreadBadge() {
+            unreadMessageCount++;
+            const badge = document.getElementById('messagesBadge');
+            badge.innerText = unreadMessageCount;
+            badge.classList.remove('hidden');
+        }
+
+        function clearUnreadBadge() {
+            unreadMessageCount = 0;
+            const badge = document.getElementById('messagesBadge');
+            badge.innerText = '0';
+            badge.classList.add('hidden');
+        }
+
+        /* SETTINGS & ONLINE VISIBILITY */
+        function openSettingsModal() {
+            document.getElementById('settingsModal').classList.remove('hidden');
+        }
+
+        function closeSettingsModal() {
+            document.getElementById('settingsModal').classList.add('hidden');
+        }
+
+        function toggleOnlineStatus(isOnline) {
+            socket.emit('toggle_online_status', isOnline);
+            showToast(isOnline ? "You are now VISIBLE online." : "You are now HIDDEN (Invisible).", isOnline ? "🟢" : "👻");
+        }
 
         /* AUTH & SESSION MANAGEMENT */
         const AuthSession = {
@@ -284,6 +400,7 @@
                 document.getElementById("authModal").classList.add("hidden");
                 this.startTracker();
                 updateUserUI();
+                showToast(`Welcome, ${cleanUser}!`, "🎮");
             },
 
             getUser() {
@@ -391,10 +508,20 @@
 
         function promptEditUsername() {
             const user = AuthSession.getUser();
-            const currentUname = user ? user.username : "Player";
-            const newUname = prompt("Enter your new display username:", currentUname);
-            if (newUname && newUname.trim() !== '' && newUname !== 'undefined') {
+            document.getElementById("newUsernameInput").value = user ? user.username : "";
+            document.getElementById("editUsernameModal").classList.remove("hidden");
+        }
+
+        function closeEditUsernameModal() {
+            document.getElementById("editUsernameModal").classList.add("hidden");
+        }
+
+        function saveNewUsername() {
+            const newUname = document.getElementById("newUsernameInput").value;
+            const user = AuthSession.getUser();
+            if (newUname && newUname.trim() !== '') {
                 AuthSession.login(user ? user.email : 'player@example.com', newUname.trim());
+                closeEditUsernameModal();
             }
         }
 
@@ -406,8 +533,12 @@
             }
         }
 
-        /* ONLINE PLAYERS & MATCH REQUESTS */
+        /* ONLINE PLAYERS & FRIENDS MATCH REQUESTS */
         function openOnlineModal() {
+            if (!AuthSession.isLoggedIn()) {
+                showToast("Please log in to view online players!", "⚠️");
+                return;
+            }
             document.getElementById('onlineUsersModal').classList.remove('hidden');
         }
 
@@ -420,22 +551,52 @@
             const container = document.getElementById('onlineUsersList');
             container.innerHTML = '';
 
+            const currentUser = AuthSession.getUser();
+            const myUsername = currentUser ? currentUser.username : '';
+
             users.forEach(u => {
-                if (u.id === socket.id) return; // Skip self
+                if (u.id === socket.id || u.username === myUsername) return; // Skip self
+
+                const isFriend = u.friends && u.friends.includes(myUsername);
                 const row = document.createElement('div');
                 row.className = 'flex justify-between items-center bg-blue-950/80 p-3 rounded-2xl border border-white/10';
+                
                 row.innerHTML = `
                     <span class="font-bold text-xs text-white">👤 ${u.username}</span>
                     <div class="flex gap-2">
-                        <button onclick="openDMModal('${u.id}', '${u.username}')" class="bg-blue-600 hover:bg-blue-500 text-white text-[10px] font-bold px-2.5 py-1 rounded-lg">💬 Message</button>
-                        <button onclick="requestMatch('${u.id}')" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 text-[10px] font-black px-2.5 py-1 rounded-lg uppercase">⚔️ Request Match</button>
+                        ${isFriend 
+                            ? `<button onclick="openTabDMWith('${u.username}')" class="bg-blue-600 hover:bg-blue-500 text-white text-[10px] font-bold px-2.5 py-1.5 rounded-lg">💬 Message</button>`
+                            : `<button onclick="sendFriendRequest('${u.id}', '${u.username}')" class="bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold px-2.5 py-1.5 rounded-lg">➕ Add Friend</button>`
+                        }
+                        <button onclick="requestMatch('${u.id}', '${u.username}')" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 text-[10px] font-black px-2.5 py-1.5 rounded-lg uppercase">⚔️ 1v1 Match</button>
                     </div>
                 `;
                 container.appendChild(row);
             });
         });
 
-        function requestMatch(targetSocketId) {
+        /* FRIEND REQUEST HANDLERS */
+        function sendFriendRequest(targetSocketId, username) {
+            socket.emit('send_friend_request', { targetSocketId });
+            showToast(`Friend request sent to ${username}!`, "➕");
+        }
+
+        socket.on('receive_friend_request', (data) => {
+            incrementUnreadBadge();
+            showToast(`New Friend Request from ${data.fromUsername}!`, "👋");
+            
+            if (confirm(`Accept Friend Request from ${data.fromUsername}?`)) {
+                socket.emit('accept_friend_request', { challengerSocketId: data.fromSocketId, challengerUsername: data.fromUsername });
+            }
+        });
+
+        socket.on('friend_request_accepted', (data) => {
+            showToast(`You and ${data.username} are now friends!`, "🤝");
+            updateFriendsTabList();
+        });
+
+        /* MATCH CHALLENGE MODAL (REPLACES ALERT) */
+        function requestMatch(targetSocketId, username) {
             const user = AuthSession.getUser();
             const smashUrl = document.getElementById('smashUrl').value || 'https://smashkarts.io';
             socket.emit('send_match_challenge', {
@@ -444,55 +605,106 @@
                 mode: currentMode,
                 smashUrl
             });
-            alert('Match request sent!');
+            showToast(`Match request sent to ${username}!`, "⚔️");
         }
 
         socket.on('receive_match_challenge', (data) => {
-            if (confirm(`${data.fromUsername} challenged you to a ${data.mode} match! Accept?`)) {
+            pendingChallengeData = data;
+            document.getElementById('challengeText').innerText = `${data.fromUsername} challenged you to a ${data.mode} match!`;
+            document.getElementById('challengeModal').classList.remove('hidden');
+        });
+
+        function acceptChallenge() {
+            if (pendingChallengeData) {
                 const user = AuthSession.getUser();
                 socket.emit('accept_match_challenge', {
-                    challengerSocketId: data.challengerSocketId,
+                    challengerSocketId: pendingChallengeData.challengerSocketId,
                     targetUsername: user ? user.username : 'Player'
                 });
             }
-        });
+            document.getElementById('challengeModal').classList.add('hidden');
+        }
+
+        function declineChallenge() {
+            pendingChallengeData = null;
+            document.getElementById('challengeModal').classList.add('hidden');
+            showToast("Challenge declined.", "✕");
+        }
 
         socket.on('challenge_game_start', (room) => {
             activeRoomData = room;
             enterGameFromLobby();
         });
 
-        /* DIRECT MESSAGING */
-        function openDMModal(targetSocketId, targetUsername) {
-            activeDMTargetSocketId = targetSocketId;
-            document.getElementById('dmTargetTitle').innerText = `💬 MESSAGE WITH ${targetUsername}`;
-            document.getElementById('dmMessages').innerHTML = '';
-            document.getElementById('dmModal').classList.remove('hidden');
+        /* DIRECT MESSAGING & MESSAGES TAB */
+        function showMessagesTab() {
+            showTab('messagesTab');
+            clearUnreadBadge();
+            updateFriendsTabList();
         }
 
-        function closeDMModal() {
-            document.getElementById('dmModal').classList.add('hidden');
-            activeDMTargetSocketId = null;
-        }
-
-        function sendDM() {
-            const input = document.getElementById('dmInput');
+        function updateFriendsTabList() {
+            const container = document.getElementById('friendsTabList');
+            container.innerHTML = '';
+            
+            // Query connected users to find friends
             const user = AuthSession.getUser();
-            if (input.value.trim() && activeDMTargetSocketId) {
+            socket.emit('get_public_rooms'); // trigger refresh
+        }
+
+        function openTabDMWith(username) {
+            activeDMTargetUser = username;
+            showMessagesTab();
+            document.getElementById('activeDMChatHeader').innerText = `💬 MESSAGE WITH ${username}`;
+            socket.emit('get_dm_history', { targetUsername: username });
+        }
+
+        function sendTabDM() {
+            const input = document.getElementById('tabDMInput');
+            const user = AuthSession.getUser();
+            if (input.value.trim() && activeDMTargetUser) {
                 socket.emit('send_direct_message', {
-                    targetSocketId: activeDMTargetSocketId,
+                    targetUsername: activeDMTargetUser,
                     message: input.value.trim(),
                     senderUsername: user ? user.username : 'Player'
                 });
-                document.getElementById('dmMessages').innerHTML += `<div class="text-right"><span class="bg-yellow-400 text-blue-950 font-bold px-2 py-1 rounded-lg text-[10px]">Me: ${input.value.trim()}</span></div>`;
                 input.value = '';
             }
         }
 
         socket.on('receive_direct_message', (data) => {
-            openDMModal(data.senderSocketId, data.senderUsername);
-            document.getElementById('dmMessages').innerHTML += `<div class="text-left"><span class="bg-blue-800 text-white font-bold px-2 py-1 rounded-lg text-[10px]">${data.senderUsername}: ${data.message}</span></div>`;
+            incrementUnreadBadge();
+            showToast(`New message from ${data.senderUsername}`, "💬");
+            if (activeDMTargetUser === data.senderUsername) {
+                renderDMMessages(data.history);
+            }
         });
+
+        socket.on('dm_sent_success', (data) => {
+            renderDMMessages(data.history);
+        });
+
+        socket.on('load_dm_history', (data) => {
+            renderDMMessages(data.history);
+        });
+
+        function renderDMMessages(history) {
+            const container = document.getElementById('tabDMMessages');
+            container.innerHTML = '';
+            const user = AuthSession.getUser();
+            const myUname = user ? user.username : 'Player';
+
+            // MAX 10 MESSAGES
+            const capped = history.slice(-10);
+            capped.forEach(msg => {
+                const isMe = msg.senderUsername === myUname;
+                const div = document.createElement('div');
+                div.className = isMe ? 'text-right' : 'text-left';
+                div.innerHTML = `<span class="${isMe ? 'bg-yellow-400 text-blue-950' : 'bg-blue-800 text-white'} font-bold px-2.5 py-1 rounded-xl inline-block text-[11px] mb-1">${isMe ? 'Me' : msg.senderUsername}: ${msg.message}</span>`;
+                container.appendChild(div);
+            });
+            container.scrollTop = container.scrollHeight;
+        }
 
         /* LEADERBOARD UPDATE */
         socket.on('leaderboard_update', (topPlayers) => {
@@ -553,7 +765,7 @@
         function copyAndPlay() {
             const codeInput = document.getElementById('copyCodeInput').value;
             if (!codeInput.trim()) {
-                alert("Please paste the generated Smash Karts code or link into the box!");
+                showToast("Please paste the generated Smash Karts code or link!", "⚠️");
                 return;
             }
             document.getElementById('smashUrl').value = codeInput;
@@ -574,6 +786,10 @@
         function showTab(tabId) {
             document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
             document.querySelectorAll('.sidebar-btn').forEach(btn => btn.classList.remove('active'));
+            
+            if (tabId === 'leaderboardTab') document.getElementById('btnNavLeaderboard').classList.add('active');
+            if (tabId === 'messagesTab') document.getElementById('btnNavMessages').classList.add('active');
+            
             document.getElementById(tabId).classList.remove('hidden');
         }
 
@@ -636,7 +852,7 @@
                 document.getElementById('smashFrame').src = '';
                 gameScreen.classList.add('hidden');
                 document.getElementById('mainDashboard').classList.remove('hidden');
-            }, 350); // Matches CSS transition duration
+            }, 350);
         }
 
         function sendPreGameChatMessage() {
@@ -660,8 +876,19 @@
 
         socket.on('receive_match_chat', (data) => {
             const msg = `<div class="bg-blue-950/80 p-1.5 rounded-xl border border-white/10"><strong class="text-yellow-300">${data.senderName}:</strong> ${data.message}</div>`;
-            document.getElementById('matchChatMessages').innerHTML += msg;
-            document.getElementById('preGameChatMessages').innerHTML += msg;
+            
+            const matchChat = document.getElementById('matchChatMessages');
+            const preGameChat = document.getElementById('preGameChatMessages');
+
+            matchChat.innerHTML += msg;
+            preGameChat.innerHTML += msg;
+
+            // Keep max 10 messages visible
+            while (matchChat.children.length > 10) matchChat.removeChild(matchChat.firstChild);
+            while (preGameChat.children.length > 10) preGameChat.removeChild(preGameChat.firstChild);
+
+            matchChat.scrollTop = matchChat.scrollHeight;
+            preGameChat.scrollTop = preGameChat.scrollHeight;
         });
 
         function openFindGameModal() {
