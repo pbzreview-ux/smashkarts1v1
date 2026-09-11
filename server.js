@@ -11,8 +11,13 @@ app.use(express.static(path.join(__dirname, '/')));
 
 const connectedPlayers = {}; // socketId -> { id, username }
 const activeRooms = [];
-// In-memory global stats tracking: username -> matchesPlayed
+// In-memory stats tracking: username -> matchesPlayed
 const playerStats = {}; 
+
+function sanitizeUsername(name) {
+    if (!name || name === 'undefined' || name.trim() === '') return 'Player';
+    return name.trim();
+}
 
 function extractSmashUrl(rawInput) {
     if (!rawInput) return "https://smashkarts.io";
@@ -31,12 +36,12 @@ function moderateText(text) {
 }
 
 io.on('connection', (socket) => {
-    connectedPlayers[socket.id] = { id: socket.id, username: "Guest" };
+    connectedPlayers[socket.id] = { id: socket.id, username: "Player" };
     broadcastOnlineUsers();
 
     // Register user session with custom Username
     socket.on('set_user_session', (userData) => {
-        const uname = userData.username || (userData.email ? userData.email.split('@')[0] : "Player");
+        const uname = sanitizeUsername(userData?.username);
         connectedPlayers[socket.id].username = uname;
         
         if (!playerStats[uname]) {
@@ -47,35 +52,40 @@ io.on('connection', (socket) => {
     });
 
     // Record completed match to update leaderboard
-    socket.on('record_match_played', (username) => {
-        if (username) {
-            playerStats[username] = (playerStats[username] || 0) + 1;
+    socket.on('record_match_played', (rawUsername) => {
+        const uname = sanitizeUsername(rawUsername);
+        if (uname && uname !== 'Player') {
+            playerStats[uname] = (playerStats[uname] || 0) + 1;
             broadcastLeaderboard();
         }
     });
 
     // Match Requests (Challenge another online player)
     socket.on('send_match_challenge', ({ targetSocketId, fromUsername, mode, smashUrl }) => {
+        const senderName = sanitizeUsername(fromUsername);
         io.to(targetSocketId).emit('receive_match_challenge', {
             challengerSocketId: socket.id,
-            fromUsername,
+            fromUsername: senderName,
             mode: mode || '1v1',
             smashUrl: smashUrl || 'https://smashkarts.io'
         });
     });
 
     socket.on('accept_match_challenge', ({ challengerSocketId, targetUsername }) => {
+        const acceptName = sanitizeUsername(targetUsername);
+        const challengerName = sanitizeUsername(connectedPlayers[challengerSocketId]?.username);
         const roomId = Math.random().toString(36).substring(2, 8).toUpperCase();
+        
         const room = {
             roomId,
-            hostName: targetUsername,
+            hostName: acceptName,
             smashUrl: 'https://smashkarts.io',
             winCondition: 'First to 3',
             mode: '1v1',
             maxPlayers: 2,
             players: [
-                { id: socket.id, name: targetUsername },
-                { id: challengerSocketId, name: connectedPlayers[challengerSocketId]?.username || 'Challenger' }
+                { id: socket.id, name: acceptName },
+                { id: challengerSocketId, name: challengerName }
             ],
             messages: []
         };
@@ -92,9 +102,10 @@ io.on('connection', (socket) => {
     socket.on('send_direct_message', ({ targetSocketId, message, senderUsername }) => {
         if (message && message.trim()) {
             const cleanMsg = moderateText(message.trim());
+            const senderName = sanitizeUsername(senderUsername);
             io.to(targetSocketId).emit('receive_direct_message', {
                 senderSocketId: socket.id,
-                senderUsername,
+                senderUsername: senderName,
                 message: cleanMsg
             });
         }
@@ -105,15 +116,16 @@ io.on('connection', (socket) => {
         const cleanUrl = extractSmashUrl(data.smashUrl);
         const roomId = Math.random().toString(36).substring(2, 8).toUpperCase();
         const mode = data.mode || '1v1';
+        const hostName = sanitizeUsername(data.playerName);
         
         const newRoom = {
             roomId,
-            hostName: data.playerName,
+            hostName,
             smashUrl: cleanUrl,
             winCondition: data.winCondition,
             mode,
             maxPlayers: mode === '2v2' ? 4 : 2,
-            players: [{ id: socket.id, name: data.playerName }],
+            players: [{ id: socket.id, name: hostName }],
             messages: []
         };
 
@@ -133,7 +145,8 @@ io.on('connection', (socket) => {
         const room = activeRooms.find(r => r.roomId === roomId);
         if (message && message.trim()) {
             const cleanMsg = moderateText(message.trim());
-            const msgObj = { senderName: senderName || "Player", message: cleanMsg };
+            const cleanSender = sanitizeUsername(senderName);
+            const msgObj = { senderName: cleanSender, message: cleanMsg };
             if (room) room.messages.push(msgObj);
             io.to(roomId).emit('receive_match_chat', msgObj);
         }
@@ -146,14 +159,17 @@ io.on('connection', (socket) => {
 });
 
 function broadcastOnlineUsers() {
-    const playerList = Object.values(connectedPlayers);
+    const playerList = Object.values(connectedPlayers).map(p => ({
+        id: p.id,
+        username: sanitizeUsername(p.username)
+    }));
     io.emit('online_users_update', { count: playerList.length, users: playerList });
 }
 
 function broadcastLeaderboard() {
-    // Sort top 5 players by matches played
     const topPlayers = Object.entries(playerStats)
-        .map(([username, matches]) => ({ username, matches }))
+        .map(([username, matches]) => ({ username: sanitizeUsername(username), matches }))
+        .filter(p => p.username !== 'Player')
         .sort((a, b) => b.matches - a.matches)
         .slice(0, 5);
 

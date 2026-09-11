@@ -21,6 +21,10 @@
             <!-- Login Form -->
             <form id="loginForm" onsubmit="handleAuthSubmit(event, 'login')" class="space-y-4">
                 <div>
+                    <label class="block text-xs font-bold uppercase text-blue-200 mb-1">Username</label>
+                    <input type="text" id="loginUsername" required placeholder="Choose a Username..." class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
+                </div>
+                <div>
                     <label class="block text-xs font-bold uppercase text-blue-200 mb-1">Email Address</label>
                     <input type="email" id="loginEmail" required placeholder="player@example.com" class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
                 </div>
@@ -128,7 +132,10 @@
                     <div class="w-9 h-9 rounded-xl bg-yellow-400 flex items-center justify-center font-black text-blue-950 text-lg">👤</div>
                     <div>
                         <span class="block text-[10px] font-bold uppercase text-blue-200">Username</span>
-                        <span id="userDisplayTag" class="text-sm font-bold text-white">Player</span>
+                        <div class="flex items-center gap-2">
+                            <span id="userDisplayTag" class="text-sm font-bold text-white">Player</span>
+                            <button onclick="promptEditUsername()" title="Edit Username" class="text-xs text-yellow-300 hover:underline">✏️</button>
+                        </div>
                     </div>
                 </div>
 
@@ -271,7 +278,8 @@
             isWarningShown: false,
 
             login(email, username) {
-                const session = { email, username: username || email.split('@')[0], token: "token_" + Date.now() };
+                const cleanUser = (username && username.trim() !== '' && username !== 'undefined') ? username.trim() : "Player";
+                const session = { email, username: cleanUser, token: "token_" + Date.now() };
                 localStorage.setItem("user_session", JSON.stringify(session));
                 document.getElementById("authModal").classList.add("hidden");
                 this.startTracker();
@@ -280,7 +288,17 @@
 
             getUser() {
                 const sessionStr = localStorage.getItem("user_session");
-                return sessionStr ? JSON.parse(sessionStr) : null;
+                if (!sessionStr) return null;
+                try {
+                    const session = JSON.parse(sessionStr);
+                    if (!session.username || session.username === 'undefined' || session.username.trim() === '') {
+                        session.username = "Player";
+                        localStorage.setItem("user_session", JSON.stringify(session));
+                    }
+                    return session;
+                } catch(e) {
+                    return null;
+                }
             },
 
             isLoggedIn() {
@@ -361,12 +379,22 @@
         function handleAuthSubmit(e, type) {
             e.preventDefault();
             if (type === 'login') {
+                const username = document.getElementById("loginUsername").value;
                 const email = document.getElementById("loginEmail").value;
-                AuthSession.login(email);
+                AuthSession.login(email, username);
             } else {
                 const username = document.getElementById("regUsername").value;
                 const email = document.getElementById("regEmail").value;
                 AuthSession.login(email, username);
+            }
+        }
+
+        function promptEditUsername() {
+            const user = AuthSession.getUser();
+            const currentUname = user ? user.username : "Player";
+            const newUname = prompt("Enter your new display username:", currentUname);
+            if (newUname && newUname.trim() !== '' && newUname !== 'undefined') {
+                AuthSession.login(user ? user.email : 'player@example.com', newUname.trim());
             }
         }
 
@@ -392,7 +420,6 @@
             const container = document.getElementById('onlineUsersList');
             container.innerHTML = '';
 
-            const currentUser = AuthSession.getUser();
             users.forEach(u => {
                 if (u.id === socket.id) return; // Skip self
                 const row = document.createElement('div');
@@ -616,7 +643,7 @@
             const input = document.getElementById('preGameChatInput');
             const user = AuthSession.getUser();
             if (input.value.trim() && activeRoomData) {
-                socket.emit('send_match_chat', { roomId: activeRoomData.roomId, message: input.value.trim(), senderName: user.username });
+                socket.emit('send_match_chat', { roomId: activeRoomData.roomId, message: input.value.trim(), senderName: user ? user.username : 'Player' });
                 input.value = '';
             }
         }
@@ -625,7 +652,7 @@
             const input = document.getElementById('matchChatInput');
             const user = AuthSession.getUser();
             if (input.value.trim() && activeRoomData) {
-                socket.emit('send_match_chat', { roomId: activeRoomData.roomId, message: input.value.trim(), senderName: user.username });
+                socket.emit('send_match_chat', { roomId: activeRoomData.roomId, message: input.value.trim(), senderName: user ? user.username : 'Player' });
                 input.value = '';
                 triggerChatActivityTimer();
             }
