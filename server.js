@@ -13,7 +13,8 @@ app.use(express.static(path.join(__dirname, '/')));
 const connectedPlayers = {}; 
 const activeRooms = [];
 const playerStats = {}; 
-// DM Storage: 'user1_user2' -> [ { sender, message, timestamp } ] (Max 10 messages)
+
+// DM Storage: 'user1_user2' -> [ { senderUsername, message, timestamp } ] (Max 10 messages)
 const directMessageStore = {}; 
 
 function sanitizeUsername(name) {
@@ -61,7 +62,7 @@ io.on('connection', (socket) => {
         if (player) {
             player.username = uname;
             player.email = userData.email || null;
-            player.isAuthenticated = true; // Mark as logged-in user
+            player.isAuthenticated = true;
         }
         
         if (!playerStats[uname]) {
@@ -109,6 +110,7 @@ io.on('connection', (socket) => {
         }
 
         socket.emit('friend_request_accepted', { username: challengerUsername });
+        broadcastOnlineUsers();
     });
 
     // Direct Messages (Friends Only, Max 10 History)
@@ -124,14 +126,20 @@ io.on('connection', (socket) => {
         const msgObj = { senderUsername: sender.username, message: cleanMsg, timestamp: Date.now() };
         directMessageStore[dmKey].push(msgObj);
         
-        // Cap history to 10 messages
         if (directMessageStore[dmKey].length > 10) {
             directMessageStore[dmKey] = directMessageStore[dmKey].slice(-10);
         }
 
+        // Find target socket if active
+        let recipientSocketId = targetSocketId;
+        if (!recipientSocketId) {
+            const foundPlayer = Object.values(connectedPlayers).find(p => p.username === targetUsername);
+            if (foundPlayer) recipientSocketId = foundPlayer.id;
+        }
+
         // Send to receiver if online
-        if (targetSocketId) {
-            io.to(targetSocketId).emit('receive_direct_message', {
+        if (recipientSocketId) {
+            io.to(recipientSocketId).emit('receive_direct_message', {
                 senderSocketId: socket.id,
                 senderUsername: sender.username,
                 message: cleanMsg,
@@ -165,7 +173,7 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Match Requests
+    // Match Requests (Allowed only between friends)
     socket.on('send_match_challenge', ({ targetSocketId, fromUsername, mode, smashUrl }) => {
         const senderName = sanitizeUsername(fromUsername);
         io.to(targetSocketId).emit('receive_match_challenge', {
@@ -242,7 +250,7 @@ io.on('connection', (socket) => {
             
             if (room) {
                 room.messages.push(msgObj);
-                if (room.messages.length > 10) room.messages = room.messages.slice(-10); // Cap at 10
+                if (room.messages.length > 10) room.messages = room.messages.slice(-10);
             }
             io.to(roomId).emit('receive_match_chat', msgObj);
         }
@@ -255,7 +263,6 @@ io.on('connection', (socket) => {
 });
 
 function broadcastOnlineUsers() {
-    // ONLY include players who HAVE AN ACCOUNT (isAuthenticated) AND ARE SET TO ONLINE (isOnline)
     const playerList = Object.values(connectedPlayers)
         .filter(p => p.isAuthenticated && p.isOnline)
         .map(p => ({
