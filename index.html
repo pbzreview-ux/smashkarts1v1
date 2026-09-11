@@ -3,127 +3,189 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Smash Karts 1v1 Platform</title>
+    <title>Smash Karts Matchmaking Platform</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="/socket.io/socket.io.js"></script>
     <link rel="stylesheet" href="style.css">
 </head>
 <body class="min-h-screen flex flex-col justify-between overflow-x-hidden selection:bg-yellow-400 selection:text-black">
 
-    <!-- TOP HEADER / PLAYER CREATION BAR -->
-    <header class="w-full px-6 py-4 flex justify-between items-center z-20">
-        <!-- Top Left: Set Username -->
-        <div class="flex items-center gap-3 bg-blue-900/40 p-2 pr-4 rounded-2xl border border-white/20 backdrop-blur-md">
-            <div class="w-10 h-10 rounded-xl bg-yellow-400 flex items-center justify-center font-black text-blue-950 text-xl shadow-md">
-                👤
+    <!-- EMBEDDED IN-WEBSITE GAME SCREEN (Hidden by default) -->
+    <div id="gameScreen" class="hidden fixed inset-0 z-50 bg-blue-950 flex flex-col lg:flex-row">
+        <!-- Main Game Frame Area -->
+        <div class="flex-1 h-full flex flex-col relative">
+            <!-- Top In-Game Bar -->
+            <div class="bg-blue-900 border-b border-white/20 px-4 py-2 flex justify-between items-center z-10">
+                <div class="flex items-center gap-3">
+                    <span class="font-bungee text-yellow-300 text-lg">🎮 SMASH KARTS</span>
+                    <span id="gameModeBadge" class="bg-yellow-400 text-blue-950 font-black text-xs px-2.5 py-0.5 rounded-full uppercase">1v1</span>
+                </div>
+                <div class="flex items-center gap-3">
+                    <span id="matchPlayerCount" class="text-xs font-bold text-blue-200">Players in room: 1</span>
+                    <button onclick="leaveEmbeddedGame()" class="bg-red-600 hover:bg-red-500 text-white font-black px-4 py-1.5 rounded-xl text-xs uppercase shadow-md transition-all">
+                        ✕ Exit Game
+                    </button>
+                </div>
             </div>
-            <div>
-                <span class="block text-[10px] font-bold uppercase tracking-wider text-blue-200">Account Username</span>
-                <input type="text" id="accountUsername" placeholder="Enter Tag..." oninput="updateAccountName()" class="bg-transparent text-sm font-bold text-white focus:outline-none placeholder-blue-300/60 w-32 sm:w-40">
-            </div>
+            <!-- Embedded Game Frame -->
+            <iframe id="smashFrame" src="" class="w-full flex-1 border-0 bg-black" allow="autoplay; keyboard; fullscreen"></iframe>
         </div>
 
-        <!-- Top Right: Online Count -->
-        <div class="flex items-center gap-4">
-            <button onclick="toggleOnlineModal()" class="flex items-center gap-2 bg-blue-900/60 hover:bg-blue-800/80 border border-white/20 px-4 py-2 rounded-full text-xs font-bold text-emerald-400 transition-all cursor-pointer shadow-md active:scale-95">
-                <span class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
-                Online: <span id="onlineCount">0</span>
-            </button>
+        <!-- In-Match Side Chat Panel -->
+        <div class="w-full lg:w-80 h-64 lg:h-full bg-blue-900/95 border-t lg:border-t-0 lg:border-l border-white/20 flex flex-col p-4 shadow-2xl">
+            <div class="border-b border-white/10 pb-3 mb-3 flex justify-between items-center">
+                <h3 class="font-bungee text-sm text-yellow-300 flex items-center gap-2">💬 MATCH CHAT</h3>
+                <span class="text-[10px] text-emerald-400 font-bold uppercase">● Live</span>
+            </div>
+            <!-- Chat Messages Container -->
+            <div id="matchChatMessages" class="flex-1 overflow-y-auto space-y-2 pr-1 text-xs mb-3">
+                <p class="text-blue-300 italic text-[11px] text-center py-2">Connected to match chat! Say hi to your opponent.</p>
+            </div>
+            <!-- Chat Input Form -->
+            <div class="flex gap-2">
+                <input type="text" id="matchChatInput" placeholder="Chat with opponent..." onkeydown="if(event.key==='Enter') sendMatchChatMessage()" class="smash-input flex-1 px-3 py-2 rounded-xl text-xs">
+                <button onclick="sendMatchChatMessage()" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 font-black px-3 py-2 rounded-xl text-xs uppercase">
+                    Send
+                </button>
+            </div>
         </div>
-    </header>
+    </div>
 
-    <!-- MAIN INTERFACE BODY -->
-    <div class="flex flex-1 w-full max-w-7xl mx-auto px-4">
+    <!-- MAIN DASHBOARD CONTENT -->
+    <div id="mainDashboard" class="min-h-screen flex flex-col justify-between">
         
-        <!-- LEFT SIDEBAR -->
-        <aside class="flex flex-col gap-4 py-6 pr-4 items-center">
-            <button onclick="showTab('leaderboardTab')" title="Most Played Leaderboard" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg">
-                🏆
-            </button>
-            <button onclick="showTab('setupTab')" title="1v1 Arena" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg">
-                🎮
-            </button>
-        </aside>
-
-        <!-- CENTER CONTENT ZONE -->
-        <main class="flex-1 flex flex-col items-center">
-            
-            <!-- LOGO BADGE -->
-            <div class="mb-8">
-                <div class="bg-gradient-to-b from-yellow-300 to-yellow-500 border-4 border-white rounded-3xl px-10 py-3 shadow-2xl transform -rotate-1">
-                    <span class="font-bungee text-5xl sm:text-6xl text-blue-950 drop-shadow-md tracking-wider">1v1</span>
+        <!-- TOP HEADER / PLAYER BAR -->
+        <header class="w-full px-6 py-4 flex justify-between items-center z-20">
+            <!-- Top Left: Account Username -->
+            <div class="flex items-center gap-3 bg-blue-900/40 p-2 pr-4 rounded-2xl border border-white/20 backdrop-blur-md">
+                <div class="w-10 h-10 rounded-xl bg-yellow-400 flex items-center justify-center font-black text-blue-950 text-xl shadow-md">
+                    👤
+                </div>
+                <div>
+                    <span class="block text-[10px] font-bold uppercase tracking-wider text-blue-200">Account Username</span>
+                    <input type="text" id="accountUsername" placeholder="Enter Tag..." oninput="updateAccountName()" class="bg-transparent text-sm font-bold text-white focus:outline-none placeholder-blue-300/60 w-32 sm:w-40">
                 </div>
             </div>
 
-            <!-- CONTAINER WINDOW -->
-            <div class="w-full max-w-4xl bg-blue-950/40 border-2 border-white/20 backdrop-blur-xl rounded-3xl p-6 shadow-2xl mb-8">
-                
-                <!-- TAB 1: LEADERBOARD -->
-                <div id="leaderboardTab" class="tab-content space-y-3">
-                    <div class="flex justify-between items-center mb-4 px-2">
-                        <h2 class="font-bungee text-xl text-yellow-300">MOST PLAYED PLAYERS</h2>
-                        <button onclick="showTab('setupTab')" class="text-xs bg-yellow-400 hover:bg-yellow-300 text-blue-950 font-black px-4 py-2 rounded-xl">
-                            Go to 1v1 Arena
-                        </button>
-                    </div>
+            <!-- Top Right: Online & Friends Controls -->
+            <div class="flex items-center gap-3">
+                <button onclick="toggleFriendsModal()" class="flex items-center gap-2 bg-blue-900/60 hover:bg-blue-800/80 border border-white/20 px-4 py-2 rounded-full text-xs font-bold text-yellow-300 transition-all cursor-pointer shadow-md active:scale-95">
+                    👥 Friends: <span id="friendsCount">0</span>
+                </button>
+                <button onclick="toggleOnlineModal()" class="flex items-center gap-2 bg-blue-900/60 hover:bg-blue-800/80 border border-white/20 px-4 py-2 rounded-full text-xs font-bold text-emerald-400 transition-all cursor-pointer shadow-md active:scale-95">
+                    <span class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                    Online: <span id="onlineCount">0</span>
+                </button>
+            </div>
+        </header>
 
-                    <div id="leaderboardList" class="space-y-2.5">
-                        <!-- Dynamic Player Rows -->
+        <!-- MAIN INTERFACE BODY -->
+        <div class="flex flex-1 w-full max-w-7xl mx-auto px-4">
+            
+            <!-- LEFT SIDEBAR -->
+            <aside class="flex flex-col gap-4 py-6 pr-4 items-center">
+                <button onclick="showTab('leaderboardTab')" title="Most Played Leaderboard" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg">
+                    🏆
+                </button>
+                <button onclick="showTab('setupTab')" title="Match Arena" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg">
+                    🎮
+                </button>
+            </aside>
+
+            <!-- CENTER CONTENT ZONE -->
+            <main class="flex-1 flex flex-col items-center">
+                
+                <!-- LOGO BADGE -->
+                <div class="mb-8">
+                    <div class="bg-gradient-to-b from-yellow-300 to-yellow-500 border-4 border-white rounded-3xl px-10 py-3 shadow-2xl transform -rotate-1">
+                        <span class="font-bungee text-4xl sm:text-6xl text-blue-950 drop-shadow-md tracking-wider">SMASH ARENA</span>
                     </div>
                 </div>
 
-                <!-- TAB 2: 1v1 MATCH ARENA -->
-                <div id="setupTab" class="tab-content hidden space-y-6">
-                    <div class="flex flex-col sm:flex-row justify-between items-center gap-3 border-b border-white/10 pb-4">
-                        <div>
-                            <h2 class="font-bungee text-2xl text-white">1v1 MATCH ARENA</h2>
-                            <p class="text-xs text-blue-200">Create a 1v1 match or find an active game</p>
-                        </div>
-                        <div class="flex gap-2 w-full sm:w-auto">
-                            <button onclick="openFindGameModal()" class="flex-1 sm:flex-none text-xs bg-emerald-500 hover:bg-emerald-400 text-white font-black px-5 py-2.5 rounded-xl shadow-md uppercase">
-                                🔍 Find Game
+                <!-- CONTAINER WINDOW -->
+                <div class="w-full max-w-4xl bg-blue-950/40 border-2 border-white/20 backdrop-blur-xl rounded-3xl p-6 shadow-2xl mb-8">
+                    
+                    <!-- TAB 1: LEADERBOARD -->
+                    <div id="leaderboardTab" class="tab-content space-y-3">
+                        <div class="flex justify-between items-center mb-4 px-2">
+                            <h2 class="font-bungee text-xl text-yellow-300">TOP 5 PLAYERS</h2>
+                            <button onclick="showTab('setupTab')" class="text-xs bg-yellow-400 hover:bg-yellow-300 text-blue-950 font-black px-4 py-2 rounded-xl">
+                                Go to Match Arena
                             </button>
                         </div>
-                    </div>
 
-                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <div>
-                            <label class="block text-xs font-bold uppercase text-blue-200 mb-2">Host Player Name</label>
-                            <input type="text" id="hostNameInput" placeholder="Enter Host Name" class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
-                        </div>
-                        <div>
-                            <label class="block text-xs font-bold uppercase text-blue-200 mb-2">Smash Karts Copied Link or Share Text</label>
-                            <input type="text" id="smashUrl" placeholder="Paste link or copied Smash Karts text..." class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
+                        <div id="leaderboardList" class="space-y-2.5">
+                            <!-- Dynamic Player Rows -->
                         </div>
                     </div>
 
-                    <div>
-                        <label class="block text-xs font-bold uppercase text-blue-200 mb-2">Win Condition</label>
-                        <select id="winCondition" class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
-                            <option value="First to 3">First to 3</option>
-                            <option value="First to 6">First to 6</option>
-                            <option value="First to 10">First to 10</option>
-                        </select>
+                    <!-- TAB 2: MATCH ARENA SETUP -->
+                    <div id="setupTab" class="tab-content hidden space-y-6">
+                        <div class="flex flex-col sm:flex-row justify-between items-center gap-3 border-b border-white/10 pb-4">
+                            <div>
+                                <h2 class="font-bungee text-2xl text-white">MATCH ARENA</h2>
+                                <p class="text-xs text-blue-200">Create a 1v1 or 2v2 game and play directly in browser</p>
+                            </div>
+                            <div class="flex gap-2 w-full sm:w-auto">
+                                <button onclick="openFindGameModal()" class="flex-1 sm:flex-none text-xs bg-emerald-500 hover:bg-emerald-400 text-white font-black px-5 py-2.5 rounded-xl shadow-md uppercase">
+                                    🔍 Find Game
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-xs font-bold uppercase text-blue-200 mb-2">Host Player Name</label>
+                                <input type="text" id="hostNameInput" placeholder="Enter Host Name" class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-bold uppercase text-blue-200 mb-2">Smash Karts Copied Link or Share Text</label>
+                                <input type="text" id="smashUrl" placeholder="Paste link or copied Smash Karts text..." class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-xs font-bold uppercase text-blue-200 mb-2">Game Mode</label>
+                                <select id="gameModeSelect" class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
+                                    <option value="1v1">1v1 (2 Players)</option>
+                                    <option value="2v2">2v2 (4 Players)</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-bold uppercase text-blue-200 mb-2">Win Condition</label>
+                                <select id="winCondition" class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
+                                    <option value="First to 3">First to 3</option>
+                                    <option value="First to 6">First to 6</option>
+                                    <option value="First to 10">First to 10</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <button onclick="createLobby()" class="btn-smash w-full py-4 rounded-2xl font-bungee text-xl text-white tracking-wider">
+                            + CREATE MATCH
+                        </button>
+
+                        <div id="roomDetails" class="hidden p-4 rounded-2xl bg-emerald-500/20 border border-emerald-400 text-emerald-200 text-center font-bold text-xs">
+                            ✅ Match created! Click <strong>Find Game</strong> to launch or wait for players.
+                        </div>
                     </div>
 
-                    <button onclick="createLobby()" class="btn-smash w-full py-4 rounded-2xl font-bungee text-xl text-white tracking-wider">
-                        + CREATE MATCH
-                    </button>
-
-                    <div id="roomDetails" class="hidden p-4 rounded-2xl bg-emerald-500/20 border border-emerald-400 text-emerald-200 text-center font-bold text-xs">
-                        ✅ Your match is created and listed under "Find Game"!
-                    </div>
                 </div>
+            </main>
+        </div>
 
-            </div>
-        </main>
+        <!-- FOOTER -->
+        <footer class="py-4 text-center text-xs font-bold text-blue-200/60">
+            Smash Karts Matchmaking Platform • Embedded Game & Real-time Chat
+        </footer>
     </div>
 
     <!-- FIND GAME / PUBLIC ROOMS MODAL -->
     <div id="findGameModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
         <div class="w-full max-w-md bg-blue-900 border-2 border-white/30 rounded-3xl p-6 shadow-2xl relative">
             <div class="flex justify-between items-center mb-4">
-                <h3 class="font-bungee text-lg text-yellow-300">🎮 ACTIVE 1v1 GAMES</h3>
+                <h3 class="font-bungee text-lg text-yellow-300">🎮 ACTIVE MATCHES</h3>
                 <button onclick="closeFindGameModal()" class="text-white hover:text-red-400 font-bold text-lg">✕</button>
             </div>
             <div id="publicRoomsList" class="max-h-80 overflow-y-auto space-y-2.5 pr-1">
@@ -145,12 +207,25 @@
         </div>
     </div>
 
-    <!-- INCOMING 1v1 CHALLENGE NOTIFICATION POPUP -->
+    <!-- FRIENDS MODAL -->
+    <div id="friendsModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
+        <div class="w-full max-w-md bg-blue-900 border-2 border-white/30 rounded-3xl p-6 shadow-2xl relative">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="font-bungee text-lg text-yellow-300">👥 MY FRIENDS</h3>
+                <button onclick="toggleFriendsModal()" class="text-white hover:text-red-400 font-bold text-lg">✕</button>
+            </div>
+            <div id="friendsListContainer" class="max-h-80 overflow-y-auto space-y-2 pr-1">
+                <!-- Friends dynamic content -->
+            </div>
+        </div>
+    </div>
+
+    <!-- INCOMING MATCH CHALLENGE NOTIFICATION POPUP -->
     <div id="challengeNotification" class="hidden fixed top-6 right-6 z-50 max-w-sm bg-blue-950 border-2 border-yellow-400 rounded-2xl p-4 shadow-2xl space-y-3 notification-badge">
         <div class="flex items-center gap-2">
             <span class="text-xl">⚔️</span>
             <div>
-                <h4 class="font-bungee text-sm text-yellow-300">1v1 CHALLENGE RECEIVED!</h4>
+                <h4 class="font-bungee text-sm text-yellow-300"><span id="challengerModeText">1v1</span> CHALLENGE RECEIVED!</h4>
                 <p class="text-xs text-white">You are playing against <span id="challengerName" class="font-bold underline"></span>!</p>
             </div>
         </div>
@@ -160,7 +235,22 @@
         </div>
     </div>
 
-    <!-- DIRECT MESSAGING CHAT BOX (MAX 3 MESSAGES) -->
+    <!-- INCOMING FRIEND REQUEST POPUP -->
+    <div id="friendReqNotification" class="hidden fixed top-24 right-6 z-50 max-w-sm bg-blue-950 border-2 border-emerald-400 rounded-2xl p-4 shadow-2xl space-y-3 notification-badge">
+        <div class="flex items-center gap-2">
+            <span class="text-xl">👥</span>
+            <div>
+                <h4 class="font-bungee text-sm text-emerald-400">FRIEND REQUEST!</h4>
+                <p class="text-xs text-white"><span id="friendReqSender" class="font-bold underline"></span> wants to add you as a friend.</p>
+            </div>
+        </div>
+        <div class="flex gap-2 pt-1">
+            <button onclick="respondFriendReq(false)" class="w-1/2 bg-red-600 hover:bg-red-500 py-1.5 rounded-xl text-xs font-bold text-white">Decline</button>
+            <button onclick="respondFriendReq(true)" class="w-1/2 bg-emerald-500 hover:bg-emerald-400 py-1.5 rounded-xl text-xs font-black text-white">Accept</button>
+        </div>
+    </div>
+
+    <!-- DIRECT MESSAGING CHAT BOX -->
     <div id="chatBox" class="hidden fixed bottom-4 right-4 z-50 w-80 bg-blue-950 border-2 border-yellow-400 rounded-2xl shadow-2xl overflow-hidden flex flex-col">
         <div class="bg-blue-900 px-4 py-3 flex justify-between items-center border-b border-white/10">
             <span class="font-bold text-xs text-yellow-300">💬 Chat with: <span id="chatTargetName">Untitled</span></span>
@@ -175,19 +265,17 @@
         </div>
     </div>
 
-    <!-- FOOTER -->
-    <footer class="py-4 text-center text-xs font-bold text-blue-200/60">
-        Smash Karts 1v1 Arena • Custom Room Manager
-    </footer>
-
     <!-- SCRIPT LOGIC -->
     <script>
         const socket = io();
 
         let onlineUsers = [];
+        let myFriends = JSON.parse(localStorage.getItem('smashFriends')) || [];
         let activeChatTargetId = null;
         let incomingChallengeData = null;
+        let incomingFriendReqData = null;
         let activeChatMessages = [];
+        let currentRoomId = null;
 
         // Helper function to extract exact URL on client side
         function cleanUrl(rawText) {
@@ -216,10 +304,16 @@
             document.getElementById('onlineCount').innerText = data.count;
             onlineUsers = data.users;
             renderOnlineModalList();
+            renderFriendsModalList();
         });
 
         function toggleOnlineModal() {
             document.getElementById('onlineModal').classList.toggle('hidden');
+        }
+
+        function toggleFriendsModal() {
+            document.getElementById('friendsModal').classList.toggle('hidden');
+            renderFriendsModalList();
         }
 
         function renderOnlineModalList() {
@@ -228,6 +322,7 @@
 
             onlineUsers.forEach(user => {
                 const isMe = user.id === socket.id;
+                const isFriend = myFriends.some(f => f.name.toLowerCase() === user.username.toLowerCase());
                 const row = document.createElement('div');
                 row.className = 'flex justify-between items-center bg-blue-950/70 border border-white/10 p-3 rounded-xl gap-2';
                 
@@ -238,8 +333,90 @@
                     </div>
                     ${!isMe ? `
                         <div class="flex gap-1.5 flex-shrink-0">
-                            <button onclick="send1v1Challenge('${user.id}')" class="bg-red-500 hover:bg-red-400 text-white font-black px-2.5 py-1 rounded-lg text-[10px] uppercase">1v1 Request</button>
-                            <button onclick="openChat('${user.id}', '${user.username}')" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 font-black px-2.5 py-1 rounded-lg text-[10px] uppercase">Message</button>
+                            ${!isFriend ? `<button onclick="sendFriendRequest('${user.id}')" class="bg-emerald-500 hover:bg-emerald-400 text-white font-black px-2 py-1 rounded-lg text-[10px] uppercase">➕ Friend</button>` : `<span class="text-[10px] text-yellow-300 font-bold self-center px-1">Friend ✓</span>`}
+                            <button onclick="sendMatchChallenge('${user.id}')" class="bg-red-500 hover:bg-red-400 text-white font-black px-2 py-1 rounded-lg text-[10px] uppercase">Challenge</button>
+                            <button onclick="openChat('${user.id}', '${user.username}')" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 font-black px-2 py-1 rounded-lg text-[10px] uppercase">Message</button>
+                        </div>
+                    ` : ''}
+                `;
+                container.appendChild(row);
+            });
+
+            document.getElementById('friendsCount').innerText = myFriends.length;
+        }
+
+        // Friend System Logic
+        function sendFriendRequest(targetId) {
+            const me = document.getElementById('accountUsername').value.trim() || "Untitled";
+            socket.emit('send_friend_request', { targetSocketId: targetId, senderName: me });
+            alert("Friend request sent!");
+        }
+
+        socket.on('receive_friend_request', (data) => {
+            incomingFriendReqData = data;
+            document.getElementById('friendReqSender').innerText = data.senderName;
+            document.getElementById('friendReqNotification').classList.remove('hidden');
+        });
+
+        function respondFriendReq(accepted) {
+            document.getElementById('friendReqNotification').classList.add('hidden');
+            if (incomingFriendReqData) {
+                const me = document.getElementById('accountUsername').value.trim() || "Untitled";
+                socket.emit('respond_friend_request', {
+                    targetSocketId: incomingFriendReqData.senderId,
+                    responderName: me,
+                    accepted: accepted
+                });
+                if (accepted) {
+                    addFriendToList(incomingFriendReqData.senderName);
+                }
+            }
+        }
+
+        socket.on('friend_request_response', (data) => {
+            if (data.accepted) {
+                alert(`🎉 ${data.responderName} accepted your friend request!`);
+                addFriendToList(data.responderName);
+            } else {
+                alert(`❌ ${data.responderName} declined your friend request.`);
+            }
+        });
+
+        function addFriendToList(friendName) {
+            if (!friendName || friendName.toLowerCase() === 'untitled') return;
+            if (!myFriends.some(f => f.name.toLowerCase() === friendName.toLowerCase())) {
+                myFriends.push({ name: friendName });
+                localStorage.setItem('smashFriends', JSON.stringify(myFriends));
+                renderOnlineModalList();
+                renderFriendsModalList();
+            }
+        }
+
+        function renderFriendsModalList() {
+            const container = document.getElementById('friendsListContainer');
+            container.innerHTML = '';
+
+            if (myFriends.length === 0) {
+                container.innerHTML = `<p class="text-center text-xs text-blue-200 py-4">No friends added yet. Add players from Online list!</p>`;
+                return;
+            }
+
+            myFriends.forEach(friend => {
+                const onlineMatch = onlineUsers.find(u => u.username.toLowerCase() === friend.name.toLowerCase());
+                const isOnline = !!onlineMatch;
+
+                const row = document.createElement('div');
+                row.className = 'flex justify-between items-center bg-blue-950/70 border border-white/10 p-3 rounded-xl gap-2';
+                row.innerHTML = `
+                    <div class="flex items-center gap-2">
+                        <span class="w-2.5 h-2.5 rounded-full ${isOnline ? 'bg-emerald-400 animate-pulse' : 'bg-gray-500'}"></span>
+                        <span class="font-bold text-xs text-white">${friend.name}</span>
+                        <span class="text-[10px] text-blue-300">(${isOnline ? 'Online' : 'Offline'})</span>
+                    </div>
+                    ${isOnline ? `
+                        <div class="flex gap-1.5">
+                            <button onclick="sendMatchChallenge('${onlineMatch.id}')" class="bg-red-500 hover:bg-red-400 text-white font-black px-2.5 py-1 rounded-lg text-[10px] uppercase">Challenge</button>
+                            <button onclick="openChat('${onlineMatch.id}', '${onlineMatch.username}')" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 font-black px-2.5 py-1 rounded-lg text-[10px] uppercase">Message</button>
                         </div>
                     ` : ''}
                 `;
@@ -247,46 +424,52 @@
             });
         }
 
-        // 1v1 Request system
-        function send1v1Challenge(targetId) {
+        // Direct Match Challenge System
+        function sendMatchChallenge(targetId) {
             const rawInput = document.getElementById('smashUrl').value;
             const targetUrl = cleanUrl(rawInput);
             const winCondition = document.getElementById('winCondition').value;
+            const mode = document.getElementById('gameModeSelect').value;
 
-            socket.emit('send_1v1_request', {
+            socket.emit('send_match_challenge', {
                 targetSocketId: targetId,
                 smashUrl: targetUrl,
-                winCondition: winCondition
+                winCondition: winCondition,
+                mode: mode
             });
 
-            alert("1v1 Request Sent!");
+            alert(`${mode} Challenge Sent!`);
         }
 
-        socket.on('receive_1v1_request', (data) => {
+        socket.on('receive_match_challenge', (data) => {
             incomingChallengeData = data;
             document.getElementById('challengerName').innerText = data.senderName;
+            document.getElementById('challengerModeText').innerText = data.mode || "1v1";
             document.getElementById('challengeNotification').classList.remove('hidden');
         });
 
         function respondChallenge(accepted) {
             document.getElementById('challengeNotification').classList.add('hidden');
             if (incomingChallengeData) {
-                socket.emit('respond_1v1_request', {
+                socket.emit('respond_match_challenge', {
                     targetSocketId: incomingChallengeData.senderId,
-                    accepted: accepted
+                    accepted: accepted,
+                    smashUrl: incomingChallengeData.smashUrl,
+                    mode: incomingChallengeData.mode
                 });
 
                 if (accepted && incomingChallengeData.smashUrl) {
-                    window.open(cleanUrl(incomingChallengeData.smashUrl), '_blank');
+                    launchEmbeddedGame(incomingChallengeData.smashUrl, incomingChallengeData.mode || '1v1');
                 }
             }
         }
 
-        socket.on('1v1_response_received', (data) => {
+        socket.on('match_challenge_response', (data) => {
             if (data.accepted) {
-                alert(`⚔️ ${data.responderName} ACCEPTED your 1v1 request! Opening match...`);
+                alert(`⚔️ ${data.responderName} ACCEPTED your challenge! Launching game inside website...`);
+                launchEmbeddedGame(data.smashUrl, data.mode || '1v1');
             } else {
-                alert(`❌ ${data.responderName} declined your 1v1 request.`);
+                alert(`❌ ${data.responderName} declined your challenge.`);
             }
         });
 
@@ -328,27 +511,79 @@
 
         function appendChatMessage(sender, text, isMe) {
             activeChatMessages.push({ sender, text, isMe });
-
-            if (activeChatMessages.length > 3) {
-                activeChatMessages.shift();
-            }
-
+            if (activeChatMessages.length > 3) activeChatMessages.shift();
             renderChatMessages();
         }
 
         function renderChatMessages() {
             const box = document.getElementById('chatMessages');
             box.innerHTML = '';
-
             activeChatMessages.forEach(msg => {
                 const msgDiv = document.createElement('div');
                 msgDiv.className = `p-2 rounded-xl text-[11px] ${msg.isMe ? 'bg-yellow-400/20 text-yellow-200 text-right ml-6 border border-yellow-400/30' : 'bg-blue-900/80 text-white mr-6 border border-white/10'}`;
                 msgDiv.innerHTML = `<strong>${msg.sender}:</strong> ${msg.text}`;
                 box.appendChild(msgDiv);
             });
-
             box.scrollTop = box.scrollHeight;
         }
+
+        // Embedded Game Launching & In-Game Chat
+        function launchEmbeddedGame(gameUrl, mode, roomId) {
+            closeFindGameModal();
+            const frame = document.getElementById('smashFrame');
+            frame.src = cleanUrl(gameUrl);
+
+            document.getElementById('gameModeBadge').innerText = mode || '1v1';
+            document.getElementById('gameScreen').classList.remove('hidden');
+            document.getElementById('mainDashboard').classList.add('hidden');
+
+            currentRoomId = roomId || 'direct_match';
+            const me = document.getElementById('accountUsername').value.trim() || "Player";
+
+            socket.emit('join_match_session', {
+                roomId: currentRoomId,
+                playerName: me
+            });
+        }
+
+        function leaveEmbeddedGame() {
+            document.getElementById('smashFrame').src = '';
+            document.getElementById('gameScreen').classList.add('hidden');
+            document.getElementById('mainDashboard').classList.remove('hidden');
+            currentRoomId = null;
+        }
+
+        function sendMatchChatMessage() {
+            const input = document.getElementById('matchChatInput');
+            const msg = input.value.trim();
+            const me = document.getElementById('accountUsername').value.trim() || "Player";
+            if (msg && currentRoomId) {
+                socket.emit('send_match_chat', {
+                    roomId: currentRoomId,
+                    message: msg,
+                    senderName: me
+                });
+                input.value = '';
+            }
+        }
+
+        socket.on('receive_match_chat', (data) => {
+            const box = document.getElementById('matchChatMessages');
+            const msgDiv = document.createElement('div');
+            msgDiv.className = 'bg-blue-950/80 p-2 rounded-xl border border-white/10 text-white';
+            msgDiv.innerHTML = `<strong class="text-yellow-300">${data.senderName}:</strong> ${data.message}`;
+            box.appendChild(msgDiv);
+            box.scrollTop = box.scrollHeight;
+        });
+
+        socket.on('match_player_joined', (data) => {
+            document.getElementById('matchPlayerCount').innerText = `Players in room: ${data.players.length}`;
+            const box = document.getElementById('matchChatMessages');
+            const alertDiv = document.createElement('div');
+            alertDiv.className = 'text-center text-[10px] text-emerald-300 italic py-1';
+            alertDiv.innerText = `🎮 ${data.joinedPlayer} joined the game session!`;
+            box.appendChild(alertDiv);
+        });
 
         // Find Game & Public Rooms
         function openFindGameModal() {
@@ -372,44 +607,49 @@
             rooms.forEach(room => {
                 const row = document.createElement('div');
                 row.className = 'flex justify-between items-center bg-blue-950/80 border border-white/15 p-3 rounded-2xl';
+                const buttonText = room.mode === '2v2' ? 'Join 2v2' : 'Join 1v1';
                 row.innerHTML = `
                     <div>
-                        <p class="text-xs text-white font-bold">You are playing against <span class="text-yellow-300 font-black">${room.hostName}</span></p>
-                        <p class="text-[10px] text-blue-200">${room.winCondition}</p>
+                        <p class="text-xs text-white font-bold">Host: <span class="text-yellow-300 font-black">${room.hostName}</span> (${room.mode})</p>
+                        <p class="text-[10px] text-blue-200">${room.winCondition} • Players: ${room.players.length}/${room.maxPlayers}</p>
                     </div>
-                    <button onclick="joinDirectGame('${room.smashUrl}')" class="bg-emerald-500 hover:bg-emerald-400 text-white font-black px-3.5 py-1.5 rounded-xl text-xs uppercase shadow-md">
-                        Join Game
+                    <button onclick="launchEmbeddedGame('${room.smashUrl}', '${room.mode}', '${room.roomId}')" class="bg-emerald-500 hover:bg-emerald-400 text-white font-black px-3.5 py-1.5 rounded-xl text-xs uppercase shadow-md">
+                        ${buttonText}
                     </button>
                 `;
                 container.appendChild(row);
             });
         });
 
-        function joinDirectGame(targetUrl) {
-            const url = cleanUrl(targetUrl);
-            window.open(url, '_blank');
-        }
-
-        // Leaderboard System
-        let playerStats = JSON.parse(localStorage.getItem('smashLeaderboard')) || [
-            { name: "KartKing", games: 48 },
-            { name: "TurboTerror", games: 36 },
-            { name: "NitroNinja", games: 29 }
-        ];
+        // Leaderboard System (Only real usernames, limited to Top 5)
+        let playerStats = JSON.parse(localStorage.getItem('smashLeaderboard')) || [];
 
         function renderLeaderboard() {
             const list = document.getElementById('leaderboardList');
             list.innerHTML = '';
-            playerStats.sort((a, b) => b.games - a.games);
 
-            playerStats.forEach((player, index) => {
-                const badgeIcons = ['🥇', '🥈', '🥉', '🛡️', '🛡️', '🛡️'];
+            const validPlayers = playerStats
+                .filter(p => p.name && p.name.trim() !== '' && p.name.toLowerCase() !== 'untitled')
+                .sort((a, b) => b.games - a.games)
+                .slice(0, 5);
+
+            if (validPlayers.length === 0) {
+                list.innerHTML = `
+                    <div class="text-center text-xs text-blue-200 py-6 bg-blue-950/30 rounded-2xl border border-white/10">
+                        No players registered yet. Set your username and create a match!
+                    </div>`;
+                return;
+            }
+
+            const badgeIcons = ['🥇', '🥈', '🥉', '4️⃣', '5️⃣'];
+
+            validPlayers.forEach((player, index) => {
                 const row = document.createElement('div');
                 row.className = 'smash-card rounded-2xl p-4 flex justify-between items-center text-white';
                 row.innerHTML = `
                     <div class="flex items-center gap-4">
                         <div class="w-10 h-10 rounded-xl bg-blue-950/60 flex items-center justify-center font-bold text-yellow-300">
-                            ${badgeIcons[index] || '🛡️'} #${index + 1}
+                            ${badgeIcons[index] || '🛡️'}
                         </div>
                         <span class="font-black text-base sm:text-lg">${player.name}</span>
                     </div>
@@ -422,7 +662,9 @@
         }
 
         function registerOrUpdatePlayer(username, addGames = 1) {
-            let cleanName = username.trim().length > 0 ? username.trim() : "Untitled";
+            const cleanName = username ? username.trim() : "";
+            if (!cleanName || cleanName.toLowerCase() === 'untitled') return;
+
             let found = playerStats.find(p => p.name.toLowerCase() === cleanName.toLowerCase());
             if (found) {
                 found.games += addGames;
@@ -444,13 +686,15 @@
             const rawUrl = document.getElementById('smashUrl').value;
             const smashUrl = cleanUrl(rawUrl);
             const winCondition = document.getElementById('winCondition').value;
+            const mode = document.getElementById('gameModeSelect').value;
 
             registerOrUpdatePlayer(player, 1);
 
             socket.emit('create_room', {
                 playerName: player,
                 smashUrl: smashUrl,
-                winCondition: winCondition
+                winCondition: winCondition,
+                mode: mode
             });
         }
 
@@ -458,6 +702,7 @@
             document.getElementById('roomDetails').classList.remove('hidden');
         });
 
+        // Initialize leaderboard on startup
         renderLeaderboard();
     </script>
 </body>

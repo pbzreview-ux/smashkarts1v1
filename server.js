@@ -47,25 +47,28 @@ io.on('connection', (socket) => {
         broadcastOnlineUsers();
     });
 
-    // Create 1v1 Room
+    // Create Room (1v1 or 2v2)
     socket.on('create_room', (data) => {
         const cleanUrl = extractSmashUrl(data.smashUrl);
         const roomId = Math.random().toString(36).substring(2, 8).toUpperCase();
+        const mode = data.mode || '1v1';
+        const maxPlayers = mode === '2v2' ? 4 : 2;
         
         const newRoom = {
             roomId: roomId,
             hostName: data.playerName,
             smashUrl: cleanUrl,
             winCondition: data.winCondition,
-            hostSocketId: socket.id,
+            mode: mode,
+            maxPlayers: maxPlayers,
+            players: [{ id: socket.id, name: data.playerName }],
             createdAt: Date.now()
         };
 
         activeRooms.push(newRoom);
+        if (activeRooms.length > 30) activeRooms.shift();
 
-        // Keep active rooms manageable
-        if (activeRooms.length > 20) activeRooms.shift();
-
+        socket.join(roomId);
         socket.emit('room_created', newRoom);
         io.emit('public_rooms_update', activeRooms);
     });
@@ -75,32 +78,82 @@ io.on('connection', (socket) => {
         socket.emit('public_rooms_update', activeRooms);
     });
 
-    // Handle 1v1 Challenge Requests
-    socket.on('send_1v1_request', ({ targetSocketId, smashUrl, winCondition }) => {
-        const sender = connectedPlayers[socket.id];
-        const cleanUrl = extractSmashUrl(smashUrl);
+    // Join Match Room Session
+    socket.on('join_match_session', ({ roomId, playerName }) => {
+        const room = activeRooms.find(r => r.roomId === roomId);
+        if (room) {
+            if (!room.players.some(p => p.id === socket.id) && room.players.length < room.maxPlayers) {
+                room.players.push({ id: socket.id, name: playerName });
+            }
+            socket.join(roomId);
+            io.to(roomId).emit('match_player_joined', {
+                players: room.players,
+                joinedPlayer: playerName
+            });
+            io.emit('public_rooms_update', activeRooms);
+        }
+    });
 
-        if (connectedPlayers[targetSocketId]) {
-            io.to(targetSocketId).emit('receive_1v1_request', {
-                senderId: socket.id,
-                senderName: sender ? sender.username : "Untitled",
-                smashUrl: cleanUrl,
-                winCondition: winCondition || "First to 3"
+    // Match Room In-Game Chat
+    socket.on('send_match_chat', ({ roomId, message, senderName }) => {
+        if (message && message.trim().length > 0) {
+            const cleanMsg = moderateText(message.trim());
+            io.to(roomId).emit('receive_match_chat', {
+                senderName: senderName || "Player",
+                message: cleanMsg
             });
         }
     });
 
-    socket.on('respond_1v1_request', ({ targetSocketId, accepted }) => {
-        const responder = connectedPlayers[socket.id];
+    // Friend System Events
+    socket.on('send_friend_request', ({ targetSocketId, senderName }) => {
         if (connectedPlayers[targetSocketId]) {
-            io.to(targetSocketId).emit('1v1_response_received', {
-                responderName: responder ? responder.username : "Untitled",
+            io.to(targetSocketId).emit('receive_friend_request', {
+                senderId: socket.id,
+                senderName: senderName || connectedPlayers[socket.id].username
+            });
+        }
+    });
+
+    socket.on('respond_friend_request', ({ targetSocketId, accepted, responderName }) => {
+        if (connectedPlayers[targetSocketId]) {
+            io.to(targetSocketId).emit('friend_request_response', {
+                responderId: socket.id,
+                responderName: responderName,
                 accepted: accepted
             });
         }
     });
 
-    // Chat handling
+    // Handle Direct 1v1 / 2v2 Challenges
+    socket.on('send_match_challenge', ({ targetSocketId, smashUrl, winCondition, mode }) => {
+        const sender = connectedPlayers[socket.id];
+        const cleanUrl = extractSmashUrl(smashUrl);
+
+        if (connectedPlayers[targetSocketId]) {
+            io.to(targetSocketId).emit('receive_match_challenge', {
+                senderId: socket.id,
+                senderName: sender ? sender.username : "Untitled",
+                smashUrl: cleanUrl,
+                mode: mode || "1v1",
+                winCondition: winCondition || "First to 3"
+            });
+        }
+    });
+
+    socket.on('respond_match_challenge', ({ targetSocketId, accepted, smashUrl, mode }) => {
+        const responder = connectedPlayers[socket.id];
+        if (connectedPlayers[targetSocketId]) {
+            io.to(targetSocketId).emit('match_challenge_response', {
+                responderName: responder ? responder.username : "Untitled",
+                accepted: accepted,
+                smashUrl: smashUrl,
+                mode: mode
+            });
+        }
+    });
+
+    // Direct Messaging
     socket.on('send_private_msg', ({ targetSocketId, message }) => {
         const sender = connectedPlayers[socket.id];
         if (connectedPlayers[targetSocketId] && message.trim().length > 0) {

@@ -82,7 +82,7 @@ body {
 
 /* Overlay & Notifications */
 .modal-overlay {
-  background: rgba(4, 15, 38, 0.85);
+  background: rgba(4, 15, 38, 0.88);
   backdrop-filter: blur(8px);
 }
 
