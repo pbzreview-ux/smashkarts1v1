@@ -1,0 +1,66 @@
+@import url('https://fonts.googleapis.com/css2?family=Bungee&family=Orbitron:wght@500;700;900&display=swap');
+
+:root {
+  --neon-red: #ff2a5f;
+  --neon-orange: #ff7e11;
+  --bg-dark: #07090e;
+  --panel-bg: rgba(15, 23, 42, 0.7);
+  --panel-border: rgba(255, 42, 95, 0.25);
+}
+
+body {
+  font-family: 'Orbitron', sans-serif;
+  background-color: var(--bg-dark);
+  background-image: 
+    radial-gradient(circle at 50% 0%, rgba(255, 42, 95, 0.18) 0%, transparent 50%),
+    radial-gradient(circle at 80% 80%, rgba(255, 126, 17, 0.1) 0%, transparent 45%);
+  background-attachment: fixed;
+}
+
+.font-bungee {
+  font-family: 'Bungee', cursive;
+}
+
+/* Glassmorphism Panels */
+.glass-panel {
+  background: var(--panel-bg);
+  backdrop-filter: blur(14px);
+  border: 1px solid var(--panel-border);
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.5);
+}
+
+.glass-panel:hover {
+  border-color: rgba(255, 42, 95, 0.45);
+  box-shadow: 0 0 20px rgba(255, 42, 95, 0.2);
+}
+
+/* Inputs & Select Elements */
+.custom-input {
+  background-color: rgba(3, 7, 18, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #fff;
+  transition: all 0.2s ease-in-out;
+}
+
+.custom-input:focus {
+  outline: none;
+  border-color: var(--neon-red);
+  box-shadow: 0 0 12px rgba(255, 42, 95, 0.35);
+}
+
+/* 3D Arcade Primary Button */
+.btn-arcade {
+  background: linear-gradient(135deg, #ff2a5f 0%, #d91b44 100%);
+  box-shadow: 0 6px 0 0 #8c0a27, 0 0 20px rgba(255, 42, 95, 0.4);
+  transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.btn-arcade:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 0 0 #8c0a27, 0 0 30px rgba(255, 42, 95, 0.6);
+}
+
+.btn-arcade:active {
+  transform: translateY(4px);
+  box-shadow: 0 2px 0 0 #8c0a27, 0 0 10px rgba(255, 42, 95, 0.4);
+}
