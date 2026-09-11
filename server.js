@@ -9,22 +9,17 @@ const io = new Server(server);
 
 app.use(express.static(path.join(__dirname, '/')));
 
-// Active sockets map: socket.id -> { username, id }
 const connectedPlayers = {};
-// Active created rooms array
 const activeRooms = [];
 
-// Helper function to extract valid URL from copied text
 function extractSmashUrl(rawInput) {
     if (!rawInput) return "https://smashkarts.io";
     const match = rawInput.match(/https?:\/\/[^\s]+/);
     return match ? match[0] : rawInput.trim();
 }
 
-// Basic Chat Moderation Filter
-const BANNED_WORDS = ['badword1', 'badword2', 'hate', 'spam'];
-
 function moderateText(text) {
+    const BANNED_WORDS = ['badword1', 'badword2', 'hate', 'spam'];
     let cleanText = text;
     BANNED_WORDS.forEach(word => {
         const regex = new RegExp(word, 'gi');
@@ -34,20 +29,15 @@ function moderateText(text) {
 }
 
 io.on('connection', (socket) => {
-    connectedPlayers[socket.id] = {
-        id: socket.id,
-        username: "Untitled"
-    };
-
+    connectedPlayers[socket.id] = { id: socket.id, username: "Player" };
     broadcastOnlineUsers();
 
-    socket.on('set_username', (name) => {
-        const cleanName = name ? name.trim() : "";
-        connectedPlayers[socket.id].username = cleanName.length > 0 ? cleanName : "Untitled";
+    socket.on('set_user_session', (userData) => {
+        connectedPlayers[socket.id].username = userData.email ? userData.email.split('@')[0] : "Player";
+        connectedPlayers[socket.id].email = userData.email;
         broadcastOnlineUsers();
     });
 
-    // Create Room (1v1 or 2v2)
     socket.on('create_room', (data) => {
         const cleanUrl = extractSmashUrl(data.smashUrl);
         const roomId = Math.random().toString(36).substring(2, 8).toUpperCase();
@@ -55,12 +45,12 @@ io.on('connection', (socket) => {
         const maxPlayers = mode === '2v2' ? 4 : 2;
         
         const newRoom = {
-            roomId: roomId,
+            roomId,
             hostName: data.playerName,
             smashUrl: cleanUrl,
             winCondition: data.winCondition,
-            mode: mode,
-            maxPlayers: maxPlayers,
+            mode,
+            maxPlayers,
             players: [{ id: socket.id, name: data.playerName }],
             messages: [],
             createdAt: Date.now()
@@ -74,12 +64,10 @@ io.on('connection', (socket) => {
         io.emit('public_rooms_update', activeRooms);
     });
 
-    // Fetch Active Public Rooms
     socket.on('get_public_rooms', () => {
         socket.emit('public_rooms_update', activeRooms);
     });
 
-    // Join Lobby Session (Pre-game & Game)
     socket.on('join_match_session', ({ roomId, playerName }) => {
         const room = activeRooms.find(r => r.roomId === roomId);
         if (room) {
@@ -87,15 +75,11 @@ io.on('connection', (socket) => {
                 room.players.push({ id: socket.id, name: playerName });
             }
             socket.join(roomId);
-            io.to(roomId).emit('match_player_joined', {
-                room: room,
-                joinedPlayer: playerName
-            });
+            io.to(roomId).emit('match_player_joined', { room, joinedPlayer: playerName });
             io.emit('public_rooms_update', activeRooms);
         }
     });
 
-    // Lobby & Match Unified Chat
     socket.on('send_match_chat', ({ roomId, message, senderName }) => {
         const room = activeRooms.find(r => r.roomId === roomId);
         if (message && message.trim().length > 0) {
@@ -103,73 +87,6 @@ io.on('connection', (socket) => {
             const msgObj = { senderName: senderName || "Player", message: cleanMsg };
             if (room) room.messages.push(msgObj);
             io.to(roomId).emit('receive_match_chat', msgObj);
-        }
-    });
-
-    // Friend System Events
-    socket.on('send_friend_request', ({ targetSocketId, senderName }) => {
-        if (connectedPlayers[targetSocketId]) {
-            io.to(targetSocketId).emit('receive_friend_request', {
-                senderId: socket.id,
-                senderName: senderName || connectedPlayers[socket.id].username
-            });
-        }
-    });
-
-    socket.on('respond_friend_request', ({ targetSocketId, accepted, responderName }) => {
-        if (connectedPlayers[targetSocketId]) {
-            io.to(targetSocketId).emit('friend_request_response', {
-                responderId: socket.id,
-                responderName: responderName,
-                accepted: accepted
-            });
-        }
-    });
-
-    // Direct Match Challenges
-    socket.on('send_match_challenge', ({ targetSocketId, smashUrl, winCondition, mode }) => {
-        const sender = connectedPlayers[socket.id];
-        const cleanUrl = extractSmashUrl(smashUrl);
-
-        if (connectedPlayers[targetSocketId]) {
-            io.to(targetSocketId).emit('receive_match_challenge', {
-                senderId: socket.id,
-                senderName: sender ? sender.username : "Untitled",
-                smashUrl: cleanUrl,
-                mode: mode || "1v1",
-                winCondition: winCondition || "First to 3"
-            });
-        }
-    });
-
-    socket.on('respond_match_challenge', ({ targetSocketId, accepted, smashUrl, mode }) => {
-        const responder = connectedPlayers[socket.id];
-        if (connectedPlayers[targetSocketId]) {
-            io.to(targetSocketId).emit('match_challenge_response', {
-                responderName: responder ? responder.username : "Untitled",
-                accepted: accepted,
-                smashUrl: smashUrl,
-                mode: mode
-            });
-        }
-    });
-
-    // Direct Messaging
-    socket.on('send_private_msg', ({ targetSocketId, message }) => {
-        const sender = connectedPlayers[socket.id];
-        if (connectedPlayers[targetSocketId] && message.trim().length > 0) {
-            const cleanMessage = moderateText(message.trim());
-            
-            io.to(targetSocketId).emit('receive_private_msg', {
-                senderId: socket.id,
-                senderName: sender ? sender.username : "Untitled",
-                message: cleanMessage
-            });
-
-            socket.emit('private_msg_sent_confirm', {
-                targetSocketId,
-                message: cleanMessage
-            });
         }
     });
 
@@ -181,11 +98,8 @@ io.on('connection', (socket) => {
 
 function broadcastOnlineUsers() {
     const playerList = Object.values(connectedPlayers);
-    io.emit('online_users_update', {
-        count: playerList.length,
-        users: playerList
-    });
+    io.emit('online_users_update', { count: playerList.length, users: playerList });
 }
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+server.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));

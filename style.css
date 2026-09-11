@@ -1,10 +1,6 @@
 @import url('https://fonts.googleapis.com/css2?family=Bungee&family=Inter:wght@400;600;700;800;900&display=swap');
 
 :root {
-  --smash-blue: #1b7cf6;
-  --smash-dark-blue: #0f58ca;
-  --panel-bg: rgba(255, 255, 255, 0.12);
-  --panel-border: rgba(255, 255, 255, 0.2);
   --card-blue: #3b8cf8;
 }
 
@@ -19,54 +15,28 @@ body {
   font-family: 'Bungee', cursive;
 }
 
-/* Glass & Card Panels */
 .smash-card {
   background: var(--card-blue);
   border: 2px solid rgba(255, 255, 255, 0.25);
   box-shadow: 0 8px 20px rgba(0, 0, 0, 0.25);
-  transition: transform 0.15s ease, background-color 0.15s ease;
 }
 
-.smash-card:hover {
-  background: #4a95f9;
-}
-
-/* Custom Input Styling */
 .smash-input {
   background-color: rgba(10, 40, 100, 0.6);
   border: 2px solid rgba(255, 255, 255, 0.25);
   color: #fff;
-  transition: all 0.2s ease-in-out;
 }
 
 .smash-input:focus {
   outline: none;
   border-color: #ffaa00;
-  box-shadow: 0 0 10px rgba(255, 170, 0, 0.5);
 }
 
-.smash-input option {
-  background-color: #0f58ca;
-  color: white;
-}
-
-/* Buttons */
 .btn-smash {
   background: linear-gradient(180deg, #ff9d00 0%, #ff6c00 100%);
   border: 2px solid #ffffff;
   box-shadow: 0 6px 0 0 #b34a00, 0 10px 20px rgba(0, 0, 0, 0.3);
   text-shadow: 0 2px 4px rgba(0,0,0,0.4);
-  transition: all 0.15s ease;
-}
-
-.btn-smash:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 8px 0 0 #b34a00, 0 12px 25px rgba(0, 0, 0, 0.4);
-}
-
-.btn-smash:active {
-  transform: translateY(4px);
-  box-shadow: 0 2px 0 0 #b34a00;
 }
 
 .sidebar-btn {
@@ -75,40 +45,28 @@ body {
   transition: all 0.2s ease;
 }
 
-.sidebar-btn:hover, .sidebar-btn.active {
+.sidebar-btn.active, .sidebar-btn:hover {
   background: rgba(255, 204, 0, 0.3);
   border-color: #ffcc00;
-  transform: scale(1.08);
 }
 
-/* Collapsible In-Game Chat Drawer */
-.chat-drawer {
-  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s ease;
+/* Floating Chat Overlay over Game */
+#chatOverlay {
+  position: absolute;
+  bottom: 24px;
+  right: 24px;
+  width: 320px;
+  z-index: 100;
+  transition: opacity 0.3s ease, visibility 0.3s ease;
 }
 
-.chat-drawer.collapsed {
-  transform: translateX(100%);
+#chatOverlay.hidden-overlay {
   opacity: 0;
+  visibility: hidden;
   pointer-events: none;
 }
 
-@media (max-width: 1024px) {
-  .chat-drawer.collapsed {
-    transform: translateY(100%);
-  }
-}
-
-/* Modals & Notifications */
 .modal-overlay {
-  background: rgba(4, 15, 38, 0.88);
+  background: rgba(4, 15, 38, 0.90);
   backdrop-filter: blur(8px);
-}
-
-.notification-badge {
-  animation: bounce 1s infinite;
-}
-
-@keyframes bounce {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-5px); }
 }
