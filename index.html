@@ -12,7 +12,7 @@
 
     <!-- TOP HEADER / PLAYER CREATION BAR -->
     <header class="w-full px-6 py-4 flex justify-between items-center z-20">
-        <!-- Top Left: Create Account / Set Username -->
+        <!-- Top Left: Set Username -->
         <div class="flex items-center gap-3 bg-blue-900/40 p-2 pr-4 rounded-2xl border border-white/20 backdrop-blur-md">
             <div class="w-10 h-10 rounded-xl bg-yellow-400 flex items-center justify-center font-black text-blue-950 text-xl shadow-md">
                 👤
@@ -23,7 +23,7 @@
             </div>
         </div>
 
-        <!-- Top Right: Interactive Online Button -->
+        <!-- Top Right: Online Count -->
         <div class="flex items-center gap-4">
             <button onclick="toggleOnlineModal()" class="flex items-center gap-2 bg-blue-900/60 hover:bg-blue-800/80 border border-white/20 px-4 py-2 rounded-full text-xs font-bold text-emerald-400 transition-all cursor-pointer shadow-md active:scale-95">
                 <span class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
@@ -35,12 +35,12 @@
     <!-- MAIN INTERFACE BODY -->
     <div class="flex flex-1 w-full max-w-7xl mx-auto px-4">
         
-        <!-- LEFT SIDEBAR ICON MENU -->
+        <!-- LEFT SIDEBAR -->
         <aside class="flex flex-col gap-4 py-6 pr-4 items-center">
             <button onclick="showTab('leaderboardTab')" title="Most Played Leaderboard" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg">
                 🏆
             </button>
-            <button onclick="showTab('setupTab')" title="1v1 Hub" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg">
+            <button onclick="showTab('setupTab')" title="1v1 Arena" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg">
                 🎮
             </button>
         </aside>
@@ -58,7 +58,7 @@
             <!-- CONTAINER WINDOW -->
             <div class="w-full max-w-4xl bg-blue-950/40 border-2 border-white/20 backdrop-blur-xl rounded-3xl p-6 shadow-2xl mb-8">
                 
-                <!-- TAB 1: MOST PLAYED LEADERBOARD -->
+                <!-- TAB 1: LEADERBOARD -->
                 <div id="leaderboardTab" class="tab-content space-y-3">
                     <div class="flex justify-between items-center mb-4 px-2">
                         <h2 class="font-bungee text-xl text-yellow-300">MOST PLAYED PLAYERS</h2>
@@ -72,16 +72,16 @@
                     </div>
                 </div>
 
-                <!-- TAB 2: 1v1 MATCH HUB (CREATE & JOIN) -->
+                <!-- TAB 2: 1v1 MATCH ARENA -->
                 <div id="setupTab" class="tab-content hidden space-y-6">
                     <div class="flex flex-col sm:flex-row justify-between items-center gap-3 border-b border-white/10 pb-4">
                         <div>
                             <h2 class="font-bungee text-2xl text-white">1v1 MATCH ARENA</h2>
-                            <p class="text-xs text-blue-200">Create a new match or join a player's room</p>
+                            <p class="text-xs text-blue-200">Create a 1v1 match or find an active game</p>
                         </div>
                         <div class="flex gap-2 w-full sm:w-auto">
-                            <button onclick="openJoinModal()" class="flex-1 sm:flex-none text-xs bg-emerald-500 hover:bg-emerald-400 text-white font-black px-4 py-2.5 rounded-xl shadow-md uppercase">
-                                🔗 Join Match
+                            <button onclick="openFindGameModal()" class="flex-1 sm:flex-none text-xs bg-emerald-500 hover:bg-emerald-400 text-white font-black px-5 py-2.5 rounded-xl shadow-md uppercase">
+                                🔍 Find Game
                             </button>
                         </div>
                     </div>
@@ -92,36 +92,26 @@
                             <input type="text" id="hostNameInput" placeholder="Enter Host Name" class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
                         </div>
                         <div>
-                            <label class="block text-xs font-bold uppercase text-blue-200 mb-2">Smash Karts Private Link</label>
-                            <input type="text" id="smashUrl" placeholder="https://smashkarts.io/..." class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
+                            <label class="block text-xs font-bold uppercase text-blue-200 mb-2">Smash Karts Copied Link or Share Text</label>
+                            <input type="text" id="smashUrl" placeholder="Paste link or copied Smash Karts text..." class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
                         </div>
                     </div>
 
-                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <div>
-                            <label class="block text-xs font-bold uppercase text-blue-200 mb-2">Win Condition</label>
-                            <select id="winCondition" class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
-                                <option value="First to 3">First to 3</option>
-                                <option value="First to 6">First to 6</option>
-                                <option value="First to 10">First to 10</option>
-                            </select>
-                        </div>
-                        <div>
-                            <label class="block text-xs font-bold uppercase text-blue-200 mb-2">Game Mode</label>
-                            <select id="gameMode" class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
-                                <option value="1v1 Deathmatch">⚔️ 1v1 Deathmatch</option>
-                                <option value="Arms Race">🚀 Arms Race</option>
-                                <option value="Sudden Death">💀 Sudden Death</option>
-                            </select>
-                        </div>
+                    <div>
+                        <label class="block text-xs font-bold uppercase text-blue-200 mb-2">Win Condition</label>
+                        <select id="winCondition" class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
+                            <option value="First to 3">First to 3</option>
+                            <option value="First to 6">First to 6</option>
+                            <option value="First to 10">First to 10</option>
+                        </select>
                     </div>
 
                     <button onclick="createLobby()" class="btn-smash w-full py-4 rounded-2xl font-bungee text-xl text-white tracking-wider">
-                        + CREATE MATCH ROOM
+                        + CREATE MATCH
                     </button>
 
                     <div id="roomDetails" class="hidden p-4 rounded-2xl bg-emerald-500/20 border border-emerald-400 text-emerald-200 text-center font-bold text-xs">
-                        Match created! Share Code: <span id="displayRoomId" class="underline text-yellow-300 font-black text-sm"></span>
+                        ✅ Your match is created and listed under "Find Game"!
                     </div>
                 </div>
 
@@ -129,17 +119,16 @@
         </main>
     </div>
 
-    <!-- JOIN MATCH MODAL -->
-    <div id="joinModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
-        <div class="w-full max-w-sm bg-blue-900 border-2 border-white/30 rounded-3xl p-6 shadow-2xl relative text-center space-y-4">
-            <h3 class="font-bungee text-xl text-yellow-300">JOIN EXISTING 1v1</h3>
-            <p class="text-xs text-blue-200">Enter the 6-character Match Code given by the host:</p>
-            <input type="text" id="joinCodeInput" placeholder="e.g. A1B2C3" class="smash-input uppercase text-center w-full px-4 py-3 rounded-2xl text-base font-black tracking-widest">
-            <div class="flex gap-2">
-                <button onclick="closeJoinModal()" class="w-1/2 py-2.5 rounded-xl bg-blue-950 font-bold text-xs">Cancel</button>
-                <button onclick="submitJoinMatch()" class="w-1/2 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-white font-black text-xs">Join Now</button>
+    <!-- FIND GAME / PUBLIC ROOMS MODAL -->
+    <div id="findGameModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
+        <div class="w-full max-w-md bg-blue-900 border-2 border-white/30 rounded-3xl p-6 shadow-2xl relative">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="font-bungee text-lg text-yellow-300">🎮 ACTIVE 1v1 GAMES</h3>
+                <button onclick="closeFindGameModal()" class="text-white hover:text-red-400 font-bold text-lg">✕</button>
             </div>
-            <p id="joinErrorMsg" class="hidden text-xs text-red-400 font-bold"></p>
+            <div id="publicRoomsList" class="max-h-80 overflow-y-auto space-y-2.5 pr-1">
+                <!-- Public match rows load here -->
+            </div>
         </div>
     </div>
 
@@ -162,23 +151,23 @@
             <span class="text-xl">⚔️</span>
             <div>
                 <h4 class="font-bungee text-sm text-yellow-300">1v1 CHALLENGE RECEIVED!</h4>
-                <p class="text-xs text-white"><span id="challengerName" class="font-bold underline"></span> wants to play 1v1!</p>
+                <p class="text-xs text-white">You are playing against <span id="challengerName" class="font-bold underline"></span>!</p>
             </div>
         </div>
         <div class="flex gap-2 pt-1">
             <button onclick="respondChallenge(false)" class="w-1/2 bg-red-600 hover:bg-red-500 py-1.5 rounded-xl text-xs font-bold text-white">Decline</button>
-            <button onclick="respondChallenge(true)" class="w-1/2 bg-emerald-500 hover:bg-emerald-400 py-1.5 rounded-xl text-xs font-black text-white">Accept & Join</button>
+            <button onclick="respondChallenge(true)" class="w-1/2 bg-emerald-500 hover:bg-emerald-400 py-1.5 rounded-xl text-xs font-black text-white">Join Game</button>
         </div>
     </div>
 
-    <!-- DIRECT MESSAGING CHAT BOX (3 MESSAGES MAX CAP) -->
+    <!-- DIRECT MESSAGING CHAT BOX (MAX 3 MESSAGES) -->
     <div id="chatBox" class="hidden fixed bottom-4 right-4 z-50 w-80 bg-blue-950 border-2 border-yellow-400 rounded-2xl shadow-2xl overflow-hidden flex flex-col">
         <div class="bg-blue-900 px-4 py-3 flex justify-between items-center border-b border-white/10">
             <span class="font-bold text-xs text-yellow-300">💬 Chat with: <span id="chatTargetName">Untitled</span></span>
             <button onclick="closeChat()" class="text-white hover:text-red-400 font-bold text-sm">✕</button>
         </div>
         <div id="chatMessages" class="h-48 p-3 overflow-y-auto text-xs space-y-2 bg-blue-950/90">
-            <!-- Max 3 messages displayed here to save storage -->
+            <!-- Messages capped at 3 -->
         </div>
         <div class="p-2 bg-blue-900/60 border-t border-white/10 flex gap-2">
             <input type="text" id="chatInput" placeholder="Type message..." onkeydown="if(event.key==='Enter') sendChatMessage()" class="smash-input flex-1 px-3 py-1.5 rounded-xl text-xs">
@@ -198,7 +187,14 @@
         let onlineUsers = [];
         let activeChatTargetId = null;
         let incomingChallengeData = null;
-        let activeChatMessages = []; // Storage array strictly capped at 3 messages
+        let activeChatMessages = [];
+
+        // Helper function to extract exact URL on client side
+        function cleanUrl(rawText) {
+            if (!rawText) return "https://smashkarts.io";
+            const match = rawText.match(/https?:\/\/[^\s]+/);
+            return match ? match[0] : rawText.trim();
+        }
 
         // Account Username Tracking
         let currentAccount = localStorage.getItem('smashUser') || '';
@@ -251,14 +247,15 @@
             });
         }
 
-        // 1v1 Challenge Request Logic
+        // 1v1 Request system
         function send1v1Challenge(targetId) {
-            const smashUrl = document.getElementById('smashUrl').value || "https://smashkarts.io";
+            const rawInput = document.getElementById('smashUrl').value;
+            const targetUrl = cleanUrl(rawInput);
             const winCondition = document.getElementById('winCondition').value;
 
             socket.emit('send_1v1_request', {
                 targetSocketId: targetId,
-                smashUrl: smashUrl,
+                smashUrl: targetUrl,
                 winCondition: winCondition
             });
 
@@ -280,20 +277,20 @@
                 });
 
                 if (accepted && incomingChallengeData.smashUrl) {
-                    window.open(incomingChallengeData.smashUrl, '_blank');
+                    window.open(cleanUrl(incomingChallengeData.smashUrl), '_blank');
                 }
             }
         }
 
         socket.on('1v1_response_received', (data) => {
             if (data.accepted) {
-                alert(`⚔️ ${data.responderName} ACCEPTED your 1v1 request! Starting match...`);
+                alert(`⚔️ ${data.responderName} ACCEPTED your 1v1 request! Opening match...`);
             } else {
                 alert(`❌ ${data.responderName} declined your 1v1 request.`);
             }
         });
 
-        // Chat Logic with 3-Message Auto-Purge to Save Storage
+        // Chat System (3 messages max)
         function openChat(targetId, targetName) {
             activeChatTargetId = targetId;
             document.getElementById('chatTargetName').innerText = targetName;
@@ -332,7 +329,6 @@
         function appendChatMessage(sender, text, isMe) {
             activeChatMessages.push({ sender, text, isMe });
 
-            // ENFORCE STORAGE SAVING: Keep only the 3 most recent messages
             if (activeChatMessages.length > 3) {
                 activeChatMessages.shift();
             }
@@ -354,36 +350,45 @@
             box.scrollTop = box.scrollHeight;
         }
 
-        // Join Room Functions
-        function openJoinModal() {
-            document.getElementById('joinModal').classList.remove('hidden');
-            document.getElementById('joinErrorMsg').classList.add('hidden');
+        // Find Game & Public Rooms
+        function openFindGameModal() {
+            document.getElementById('findGameModal').classList.remove('hidden');
+            socket.emit('get_public_rooms');
         }
 
-        function closeJoinModal() {
-            document.getElementById('joinModal').classList.add('hidden');
+        function closeFindGameModal() {
+            document.getElementById('findGameModal').classList.add('hidden');
         }
 
-        function submitJoinMatch() {
-            const code = document.getElementById('joinCodeInput').value.trim();
-            if (code) {
-                socket.emit('join_room_request', code);
+        socket.on('public_rooms_update', (rooms) => {
+            const container = document.getElementById('publicRoomsList');
+            container.innerHTML = '';
+
+            if (rooms.length === 0) {
+                container.innerHTML = `<p class="text-center text-xs text-blue-200 py-4">No active games right now. Create one!</p>`;
+                return;
             }
-        }
 
-        socket.on('join_room_success', (room) => {
-            closeJoinModal();
-            alert(`Joining Match hosted by ${room.hostName}!`);
-            if (room.smashUrl) {
-                window.open(room.smashUrl, '_blank');
-            }
+            rooms.forEach(room => {
+                const row = document.createElement('div');
+                row.className = 'flex justify-between items-center bg-blue-950/80 border border-white/15 p-3 rounded-2xl';
+                row.innerHTML = `
+                    <div>
+                        <p class="text-xs text-white font-bold">You are playing against <span class="text-yellow-300 font-black">${room.hostName}</span></p>
+                        <p class="text-[10px] text-blue-200">${room.winCondition}</p>
+                    </div>
+                    <button onclick="joinDirectGame('${room.smashUrl}')" class="bg-emerald-500 hover:bg-emerald-400 text-white font-black px-3.5 py-1.5 rounded-xl text-xs uppercase shadow-md">
+                        Join Game
+                    </button>
+                `;
+                container.appendChild(row);
+            });
         });
 
-        socket.on('join_room_error', (msg) => {
-            const err = document.getElementById('joinErrorMsg');
-            err.innerText = msg;
-            err.classList.remove('hidden');
-        });
+        function joinDirectGame(targetUrl) {
+            const url = cleanUrl(targetUrl);
+            window.open(url, '_blank');
+        }
 
         // Leaderboard System
         let playerStats = JSON.parse(localStorage.getItem('smashLeaderboard')) || [
@@ -436,7 +441,8 @@
         function createLobby() {
             const playerInput = document.getElementById('accountUsername').value.trim();
             const player = playerInput.length > 0 ? playerInput : "Untitled";
-            const smashUrl = document.getElementById('smashUrl').value || "https://smashkarts.io";
+            const rawUrl = document.getElementById('smashUrl').value;
+            const smashUrl = cleanUrl(rawUrl);
             const winCondition = document.getElementById('winCondition').value;
 
             registerOrUpdatePlayer(player, 1);
@@ -448,12 +454,8 @@
             });
         }
 
-        socket.on('room_created', (data) => {
+        socket.on('room_created', () => {
             document.getElementById('roomDetails').classList.remove('hidden');
-            document.getElementById('displayRoomId').innerText = data.roomId;
-            if (data.lobby.smashUrl.includes('smashkarts.io')) {
-                setTimeout(() => window.open(data.lobby.smashUrl, '_blank'), 1000);
-            }
         });
 
         renderLeaderboard();
