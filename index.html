@@ -49,8 +49,20 @@
             <h3 class="font-bungee text-lg text-yellow-300 mb-3">✏️ CHANGE USERNAME</h3>
             <input type="text" id="newUsernameInput" placeholder="Enter new username..." class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold mb-4">
             <div class="flex gap-2">
-                <button onclick="closeEditUsernameModal()" class="w-1/2 bg-gray-600 text-white font-bold py-2.5 rounded-xl text-xs">Cancel</button>
+                <button onclick="closeEditUsernameModal()" class="w-1/2 bg-gray-600 hover:bg-gray-500 text-white font-bold py-2.5 rounded-xl text-xs">Cancel</button>
                 <button onclick="saveNewUsername()" class="w-1/2 btn-smash text-white font-bungee py-2.5 rounded-xl text-xs">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- CHALLENGE RECEIVED MODAL -->
+    <div id="challengeModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
+        <div class="w-full max-w-sm bg-blue-900 border-2 border-yellow-400 rounded-3xl p-6 text-center shadow-2xl">
+            <span class="text-4xl block mb-2">⚔️</span>
+            <h3 id="challengeText" class="font-bungee text-base text-yellow-300 mb-4">Match Challenge Received!</h3>
+            <div class="flex gap-2">
+                <button onclick="declineChallenge()" class="w-1/2 bg-red-600 hover:bg-red-500 text-white font-bold py-3 rounded-xl text-xs">DECLINE</button>
+                <button onclick="acceptChallenge()" class="w-1/2 btn-smash text-white font-bungee py-3 rounded-xl text-xs">ACCEPT & PLAY</button>
             </div>
         </div>
     </div>
@@ -99,6 +111,15 @@
         </div>
     </div>
 
+    <!-- INACTIVITY WARNING MODAL -->
+    <div id="inactivityModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
+        <div class="w-full max-w-sm bg-blue-900 border-2 border-red-500 rounded-3xl p-6 text-center shadow-2xl">
+            <h3 class="font-bungee text-lg text-red-400 mb-2">⚠️ SESSION EXPIRING</h3>
+            <p class="text-xs text-white mb-4">You have been inactive. Logging out in <strong id="countdownTimer" class="text-yellow-300 text-base">60</strong> seconds.</p>
+            <button onclick="AuthSession.resetInactivity()" class="btn-smash w-full py-3 rounded-xl font-bungee text-sm text-white">STAY LOGGED IN</button>
+        </div>
+    </div>
+
     <!-- ONLINE USERS MODAL -->
     <div id="onlineUsersModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
         <div class="w-full max-w-md bg-blue-900 border-2 border-emerald-400 rounded-3xl p-6 shadow-2xl">
@@ -118,6 +139,9 @@
                 <span id="gameModeBadge" class="bg-yellow-400 text-blue-950 font-black text-xs px-2.5 py-0.5 rounded-full uppercase">1v1</span>
             </div>
             <div class="flex items-center gap-2">
+                <button onclick="toggleOverlayChat()" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 font-black px-3 py-1.5 rounded-xl text-xs uppercase shadow-md">
+                    💬 <span id="toggleChatBtnLabel">Show Chat</span>
+                </button>
                 <button onclick="leaveEmbeddedGame()" class="bg-red-600 hover:bg-red-500 text-white font-black px-4 py-1.5 rounded-xl text-xs uppercase shadow-md">
                     ✕ Exit Game
                 </button>
@@ -126,6 +150,19 @@
 
         <div class="relative flex-1 w-full h-full">
             <iframe id="smashFrame" src="" class="w-full h-full border-0" allow="autoplay; keyboard; fullscreen"></iframe>
+
+            <!-- FLOATING OVERLAY CHAT -->
+            <div id="chatOverlay" class="hidden-overlay bg-blue-900/90 border-2 border-yellow-400 rounded-2xl p-3 shadow-2xl flex flex-col">
+                <div class="flex justify-between items-center mb-2 border-b border-white/10 pb-1">
+                    <span class="font-bungee text-xs text-yellow-300">💬 IN-GAME CHAT</span>
+                    <button onclick="toggleOverlayChat()" class="text-white hover:text-red-400 font-bold text-xs">✕</button>
+                </div>
+                <div id="matchChatMessages" class="h-36 overflow-y-auto space-y-1.5 text-xs mb-2 pr-1"></div>
+                <div class="flex gap-1.5">
+                    <input type="text" id="matchChatInput" placeholder="Type..." onkeydown="if(event.key==='Enter') sendMatchChatMessage()" class="smash-input flex-1 px-2.5 py-1.5 rounded-xl text-xs">
+                    <button onclick="sendMatchChatMessage()" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 font-black px-3 py-1.5 rounded-xl text-xs">Send</button>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -157,9 +194,9 @@
             <!-- SIDEBAR -->
             <aside class="flex flex-col gap-4 py-6 pr-4 items-center">
                 <button id="btnNavLeaderboard" onclick="showTab('leaderboardTab')" title="Leaderboard" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg">🏆</button>
-                <button id="btnNav1v1" onclick="showTab('setupTab')" title="1v1 Matchmaking" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg active">🎮</button>
+                <button id="btnNav1v1" onclick="switchMatchMode('1v1')" title="1v1 Matchmaking" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg active">🎮</button>
+                <button id="btnNav2v2" onclick="switchMatchMode('2v2')" title="2v2 Matchmaking" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg">⚔️</button>
                 
-                <!-- MESSAGES / FRIENDS TAB -->
                 <button id="btnNavMessages" onclick="showMessagesTab()" title="Friends & Messages" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg">
                     💬
                     <span id="messagesBadge" class="unread-badge hidden">0</span>
@@ -176,47 +213,26 @@
                 <div class="w-full max-w-4xl bg-blue-950/40 border-2 border-white/20 backdrop-blur-xl rounded-3xl p-6 shadow-2xl mb-8">
                     <!-- LEADERBOARD TAB -->
                     <div id="leaderboardTab" class="tab-content hidden space-y-4">
-                        <h2 class="font-bungee text-xl text-yellow-300 mb-2">🏆 TOP PLAYERS</h2>
+                        <h2 class="font-bungee text-xl text-yellow-300 mb-2">🏆 TOP 5 PLAYERS (MOST GAMES PLAYED)</h2>
                         <div id="leaderboardList" class="space-y-2"></div>
                     </div>
 
                     <!-- MESSAGES & FRIENDS TAB -->
                     <div id="messagesTab" class="tab-content hidden space-y-4">
-                        <div class="flex justify-between items-center mb-2">
-                            <h2 class="font-bungee text-xl text-yellow-300">💬 FRIENDS & DIRECT MESSAGES</h2>
-                            <!-- Add Friends button taking user directly to Online Players -->
-                            <button onclick="openOnlineModal()" class="bg-emerald-500 hover:bg-emerald-400 text-white text-xs font-bold px-3.5 py-2 rounded-xl flex items-center gap-1.5 shadow-md">
-                                ➕ Add Friends
-                            </button>
-                        </div>
-
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 h-96">
-                            <!-- Left: Active Conversation Chat Window -->
-                            <div class="bg-blue-900/60 p-3 rounded-2xl border border-white/10 flex flex-col justify-between">
-                                <div>
-                                    <div class="flex justify-between items-center mb-2 border-b border-white/10 pb-2">
-                                        <span id="activeDMChatHeader" class="font-bungee text-xs text-yellow-300">YOUR MESSAGES</span>
-                                        <div id="activeDMActions"></div>
-                                    </div>
-                                    <div id="tabDMMessages" class="h-64 overflow-y-auto space-y-1.5 pr-1 text-xs bg-blue-950/80 p-2.5 rounded-xl border border-white/10">
-                                        <p class="text-blue-300 italic text-center py-8">Select a friend from the right panel to view messages</p>
-                                    </div>
-                                </div>
-                                <div class="flex gap-2 mt-2">
+                        <h2 class="font-bungee text-xl text-yellow-300 mb-2">💬 FRIENDS & DIRECT MESSAGES</h2>
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 h-80">
+                            <!-- Friends List -->
+                            <div class="bg-blue-900/60 p-3 rounded-2xl border border-white/10 flex flex-col">
+                                <span class="font-bungee text-xs text-yellow-300 mb-2">YOUR FRIENDS</span>
+                                <div id="friendsTabList" class="flex-1 overflow-y-auto space-y-1.5 pr-1"></div>
+                            </div>
+                            <!-- Direct Message Window -->
+                            <div class="md:col-span-2 bg-blue-900/60 p-3 rounded-2xl border border-white/10 flex flex-col">
+                                <span id="activeDMChatHeader" class="font-bungee text-xs text-yellow-300 mb-2">SELECT A FRIEND TO MESSAGE</span>
+                                <div id="tabDMMessages" class="flex-1 overflow-y-auto space-y-1.5 pr-1 text-xs mb-3 bg-blue-950/80 p-2.5 rounded-xl border border-white/10"></div>
+                                <div class="flex gap-2">
                                     <input type="text" id="tabDMInput" placeholder="Type message..." onkeydown="if(event.key==='Enter') sendTabDM()" class="smash-input flex-1 px-3 py-2 rounded-xl text-xs">
                                     <button onclick="sendTabDM()" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 font-black px-4 py-2 rounded-xl text-xs uppercase">Send</button>
-                                </div>
-                            </div>
-
-                            <!-- Right: Friends Searchbar & List of All Friends -->
-                            <div class="bg-blue-900/60 p-3 rounded-2xl border border-white/10 flex flex-col">
-                                <span class="font-bungee text-xs text-yellow-300 mb-2">SELECT A FRIEND TO MESSAGE</span>
-                                
-                                <!-- Searchbar replacing old chatbox -->
-                                <input type="text" id="friendSearchInput" placeholder="🔍 Search friends..." oninput="filterFriendsSearch()" class="smash-input w-full px-3 py-2 rounded-xl text-xs mb-3">
-                                
-                                <div id="friendsSearchList" class="flex-1 overflow-y-auto space-y-1.5 pr-1">
-                                    <!-- Friends will render here -->
                                 </div>
                             </div>
                         </div>
@@ -226,414 +242,731 @@
                     <div id="setupTab" class="tab-content space-y-6">
                         <div class="flex justify-between items-center border-b border-white/10 pb-4">
                             <div>
-                                <h2 class="font-bungee text-2xl text-white">1v1 MATCHMAKING</h2>
-                                <p class="text-xs text-blue-200">Play custom matches with friends</p>
+                                <h2 id="arenaTitle" class="font-bungee text-2xl text-white">1v1 MATCHMAKING</h2>
+                                <p id="arenaSubtitle" class="text-xs text-blue-200">Start or join a match</p>
+                            </div>
+                            <button onclick="openFindGameModal()" class="text-xs bg-emerald-500 hover:bg-emerald-400 text-white font-black px-5 py-2.5 rounded-xl uppercase">🔍 Public Lobbies</button>
+                        </div>
+
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-xs font-bold uppercase text-blue-200 mb-2">Smash Karts Room Link or Code</label>
+                                <div class="flex gap-2">
+                                    <input type="text" id="smashUrl" placeholder="Paste link or code here..." class="smash-input flex-1 px-4 py-3 rounded-2xl text-sm font-bold">
+                                    <button onclick="openMakeCodeModal()" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 font-black px-3 py-3 rounded-2xl text-xs uppercase flex-shrink-0">⚡ Make Code</button>
+                                </div>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-bold uppercase text-blue-200 mb-2">Win Condition</label>
+                                <select id="winCondition" class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
+                                    <option value="First to 3">First to 3</option>
+                                    <option value="First to 6">First to 6</option>
+                                    <option value="First to 10">First to 10</option>
+                                </select>
                             </div>
                         </div>
 
-                        <div class="bg-blue-900/40 p-4 rounded-2xl border border-white/10 space-y-3">
-                            <label class="block text-xs font-bold uppercase text-blue-200">Smash Karts Room Link</label>
-                            <input type="text" id="smashRoomLink" placeholder="https://smashkarts.io?room=..." class="smash-input w-full px-4 py-3 rounded-xl text-xs">
-                            <button onclick="startCustomRoom()" class="btn-smash w-full py-3 rounded-xl font-bungee text-sm text-white">LAUNCH MATCH</button>
-                        </div>
+                        <button onclick="createLobby()" class="btn-smash w-full py-4 rounded-2xl font-bungee text-xl text-white">+ CREATE LOBBY & PRE-CHAT</button>
                     </div>
                 </div>
             </main>
         </div>
     </div>
 
+    <!-- PRE-GAME LOBBY MODAL -->
+    <div id="preGameLobbyModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
+        <div class="w-full max-w-2xl bg-blue-900 border-2 border-yellow-400 rounded-3xl p-6 shadow-2xl relative flex flex-col max-h-[90vh]">
+            <div class="flex justify-between items-center border-b border-white/10 pb-3 mb-4">
+                <h3 class="font-bungee text-lg text-yellow-300">🎮 PRE-GAME LOBBY</h3>
+                <button onclick="closePreGameLobbyModal()" class="text-white hover:text-red-400 font-bold text-lg">✕</button>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 flex-1">
+                <div class="bg-blue-950/80 rounded-2xl p-3 border border-white/10 flex flex-col justify-between">
+                    <div>
+                        <h4 class="font-bungee text-xs text-yellow-300 mb-2">PLAYERS</h4>
+                        <div id="preGamePlayerList" class="space-y-2 text-xs"></div>
+                    </div>
+                    <button onclick="enterGameFromLobby()" class="btn-smash w-full py-3 rounded-xl font-bungee text-sm text-white">🚀 JOIN GAME</button>
+                </div>
+                <div class="md:col-span-2 bg-blue-950/80 rounded-2xl p-3 border border-white/10 flex flex-col">
+                    <h4 class="font-bungee text-xs text-yellow-300 mb-2">💬 PRE-MATCH CHAT</h4>
+                    <div id="preGameChatMessages" class="flex-1 overflow-y-auto space-y-2 text-xs pr-1 mb-3 min-h-[160px]"></div>
+                    <div class="flex gap-2">
+                        <input type="text" id="preGameChatInput" placeholder="Plan teams..." onkeydown="if(event.key==='Enter') sendPreGameChatMessage()" class="smash-input flex-1 px-3 py-2 rounded-xl text-xs">
+                        <button onclick="sendPreGameChatMessage()" class="bg-yellow-400 text-blue-950 font-black px-4 py-2 rounded-xl text-xs uppercase">Send</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- MAKE CODE MODAL -->
+    <div id="makeCodeModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
+        <div class="w-full max-w-3xl bg-blue-900 border-2 border-white/30 rounded-3xl p-5 shadow-2xl flex flex-col h-[85vh]">
+            <div class="flex justify-between items-center mb-3">
+                <h3 class="font-bungee text-base text-yellow-300">⚡ MAKE ROOM CODE IN SMASH KARTS</h3>
+                <button onclick="closeMakeCodeModal()" class="text-white hover:text-red-400 font-bold text-lg">✕</button>
+            </div>
+            <div class="flex-1 bg-black rounded-2xl overflow-hidden mb-3">
+                <iframe id="makeCodeIframe" src="" class="w-full h-full border-0"></iframe>
+            </div>
+            <div class="flex gap-2">
+                <input type="text" id="copyCodeInput" placeholder="Paste created room link/code..." class="smash-input flex-1 px-3 py-2 rounded-xl text-xs font-bold">
+                <button onclick="copyAndPlay()" class="btn-smash px-5 py-2 rounded-xl font-bungee text-xs text-white">📋 COPY & PLAY NOW</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- PUBLIC ROOMS MODAL -->
+    <div id="findGameModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
+        <div class="w-full max-w-md bg-blue-900 border-2 border-white/30 rounded-3xl p-6 shadow-2xl relative">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="font-bungee text-lg text-yellow-300">🎮 ACTIVE MATCHES</h3>
+                <button onclick="closeFindGameModal()" class="text-white hover:text-red-400 font-bold text-lg">✕</button>
+            </div>
+            <div id="publicRoomsList" class="max-h-80 overflow-y-auto space-y-2.5"></div>
+        </div>
+    </div>
+
+    <!-- SCRIPT LOGIC -->
     <script>
         const socket = io();
+        let currentMode = '1v1';
+        let activeRoomData = null;
+        let chatInactivityTimer = null;
+        let activeDMTargetUser = null;
+        let unreadMessageCount = 0;
+        let pendingChallengeData = null;
+        let onlineUsersCache = [];
+        let publicRoomsCache = [];
 
-        // Local state
-        let currentUser = null;
-        let onlinePlayers = [];
-        let myFriends = new Set();
-        let activeDMUsername = null;
-        let activeDMSocketId = null;
-        let unreadCount = 0;
+        function escapeHTML(str) {
+            if (!str) return '';
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+        }
 
-        // AUTH & SESSION
+        /* IN-APP TOAST NOTIFICATION SYSTEM */
+        function showToast(message, icon = '🔔') {
+            const container = document.getElementById('toastContainer');
+            const toast = document.createElement('div');
+            toast.className = 'toast-msg';
+            toast.innerHTML = `<span>${icon}</span> <span>${escapeHTML(message)}</span>`;
+            container.appendChild(toast);
+
+            setTimeout(() => {
+                toast.style.opacity = '0';
+                toast.style.transform = 'translateY(-20px)';
+                setTimeout(() => toast.remove(), 300);
+            }, 3500);
+        }
+
+        function incrementUnreadBadge() {
+            unreadMessageCount++;
+            const badge = document.getElementById('messagesBadge');
+            badge.innerText = unreadMessageCount;
+            badge.classList.remove('hidden');
+        }
+
+        function clearUnreadBadge() {
+            unreadMessageCount = 0;
+            const badge = document.getElementById('messagesBadge');
+            badge.innerText = '0';
+            badge.classList.add('hidden');
+        }
+
+        /* SETTINGS & ONLINE VISIBILITY */
+        function openSettingsModal() {
+            document.getElementById('settingsModal').classList.remove('hidden');
+        }
+
+        function closeSettingsModal() {
+            document.getElementById('settingsModal').classList.add('hidden');
+        }
+
+        function toggleOnlineStatus(isOnline) {
+            socket.emit('toggle_online_status', isOnline);
+            showToast(isOnline ? "You are now VISIBLE online." : "You are now HIDDEN (Invisible).", isOnline ? "🟢" : "👻");
+        }
+
+        /* AUTH & SESSION MANAGEMENT */
         const AuthSession = {
-            login(username, email) {
-                currentUser = { username, email };
-                localStorage.setItem('smash_user', JSON.stringify(currentUser));
-                document.getElementById('authModal').classList.add('hidden');
-                document.getElementById('userDisplayTag').innerText = username;
-                socket.emit('set_user_session', currentUser);
+            INACTIVITY_LIMIT_MS: 30 * 60 * 1000,
+            WARNING_WINDOW_MS: 60 * 1000,
+            THROTTLE_MS: 5000,
+            lastActivity: Date.now(),
+            isWarningShown: false,
+
+            login(email, username) {
+                const cleanUser = (username && username.trim() !== '') ? username.trim() : "Player";
+                const session = { email, username: cleanUser, token: "token_" + Date.now() };
+                localStorage.setItem("user_session", JSON.stringify(session));
+                document.getElementById("authModal").classList.add("hidden");
+                this.startTracker();
+                updateUserUI();
+                showToast(`Welcome, ${cleanUser}!`, "🎮");
             },
-            logout() {
-                localStorage.removeItem('smash_user');
-                location.reload();
-            },
-            check() {
-                const saved = localStorage.getItem('smash_user');
-                if (saved) {
-                    const u = JSON.parse(saved);
-                    this.login(u.username, u.email);
+
+            getUser() {
+                const sessionStr = localStorage.getItem("user_session");
+                if (!sessionStr) return null;
+                try {
+                    return JSON.parse(sessionStr);
+                } catch(e) {
+                    return null;
                 }
+            },
+
+            isLoggedIn() {
+                return this.getUser() !== null;
+            },
+
+            logout() {
+                localStorage.removeItem("user_session");
+                window.location.reload();
+            },
+
+            startTracker() {
+                this.lastActivity = Date.now();
+                ["click", "mousemove", "keydown", "scroll", "touchstart"].forEach((event) => {
+                    window.addEventListener(event, () => this.handleActivity());
+                });
+                setInterval(() => this.checkInactivity(), 1000);
+            },
+
+            handleActivity() {
+                if (this.isWarningShown) return;
+                const now = Date.now();
+                if (now - this.lastActivity > this.THROTTLE_MS) {
+                    this.lastActivity = now;
+                }
+            },
+
+            resetInactivity() {
+                this.lastActivity = Date.now();
+                this.hideWarning();
+            },
+
+            checkInactivity() {
+                if (!this.isLoggedIn()) return;
+                const timeIdle = Date.now() - this.lastActivity;
+                const timeRemaining = this.INACTIVITY_LIMIT_MS - timeIdle;
+
+                if (timeRemaining <= 0) {
+                    this.logout();
+                } else if (timeRemaining <= this.WARNING_WINDOW_MS) {
+                    this.showWarning(Math.ceil(timeRemaining / 1000));
+                } else {
+                    if (this.isWarningShown) this.hideWarning();
+                }
+            },
+
+            showWarning(secondsLeft) {
+                this.isWarningShown = true;
+                document.getElementById("inactivityModal").classList.remove("hidden");
+                document.getElementById("countdownTimer").textContent = secondsLeft;
+            },
+
+            hideWarning() {
+                this.isWarningShown = false;
+                document.getElementById("inactivityModal").classList.add("hidden");
             }
         };
 
+        function toggleAuthTab(type) {
+            const loginForm = document.getElementById("loginForm");
+            const regForm = document.getElementById("registerForm");
+            const tabLogin = document.getElementById("tabLoginBtn");
+            const tabReg = document.getElementById("tabRegisterBtn");
+
+            if (type === 'login') {
+                loginForm.classList.remove("hidden");
+                regForm.classList.add("hidden");
+                tabLogin.className = "font-bungee text-lg text-yellow-300 border-b-2 border-yellow-300 pb-1";
+                tabReg.className = "font-bungee text-lg text-white/50 pb-1 hover:text-white";
+            } else {
+                loginForm.classList.add("hidden");
+                regForm.classList.remove("hidden");
+                tabReg.className = "font-bungee text-lg text-yellow-300 border-b-2 border-yellow-300 pb-1";
+                tabLogin.className = "font-bungee text-lg text-white/50 pb-1 hover:text-white";
+            }
+        }
+
         function handleAuthSubmit(e, type) {
             e.preventDefault();
-            const uname = type === 'login' ? document.getElementById('loginUsername').value : document.getElementById('regUsername').value;
-            const email = type === 'login' ? document.getElementById('loginEmail').value : document.getElementById('regEmail').value;
-            AuthSession.login(uname, email);
+            const usernameId = type === 'login' ? 'loginUsername' : 'regUsername';
+            const emailId = type === 'login' ? 'loginEmail' : 'regEmail';
+            
+            const username = document.getElementById(usernameId).value;
+            const email = document.getElementById(emailId).value;
+            AuthSession.login(email, username);
         }
 
-        function toggleAuthTab(tab) {
-            if (tab === 'login') {
-                document.getElementById('loginForm').classList.remove('hidden');
-                document.getElementById('registerForm').classList.add('hidden');
-            } else {
-                document.getElementById('loginForm').classList.add('hidden');
-                document.getElementById('registerForm').classList.remove('hidden');
-            }
+        function promptEditUsername() {
+            const user = AuthSession.getUser();
+            document.getElementById("newUsernameInput").value = user ? user.username : "";
+            document.getElementById("editUsernameModal").classList.remove("hidden");
         }
 
-        // CUSTOM TOAST NOTIFICATION BUBBLES
-        function showToast(type, title, text, buttons = []) {
-            const container = document.getElementById('toastContainer');
-            const toast = document.createElement('div');
-            toast.className = `toast-msg ${type}`;
-
-            let content = `
-                <div class="toast-header">
-                    <span>${title}</span>
-                </div>
-                <div>${text}</div>
-            `;
-
-            toast.innerHTML = content;
-
-            if (buttons.length > 0) {
-                const actionsDiv = document.createElement('div');
-                actionsDiv.className = 'toast-actions';
-                buttons.forEach(b => {
-                    const btn = document.createElement('button');
-                    btn.className = `px-3 py-1.5 rounded-lg text-xs font-bold text-white ${b.bgClass || 'bg-blue-600'}`;
-                    btn.innerText = b.label;
-                    btn.onclick = () => {
-                        b.onClick();
-                        toast.remove();
-                    };
-                    actionsDiv.appendChild(btn);
-                });
-                toast.appendChild(actionsDiv);
-            } else {
-                setTimeout(() => toast.remove(), 4000);
-            }
-
-            container.appendChild(toast);
+        function closeEditUsernameModal() {
+            document.getElementById("editUsernameModal").classList.add("hidden");
         }
 
-        // TABS & UI NAVIGATION
-        function showTab(tabId) {
-            document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
-            document.getElementById(tabId).classList.remove('hidden');
-        }
-
-        function showMessagesTab() {
-            showTab('messagesTab');
-            unreadCount = 0;
-            updateUnreadBadge();
-            renderFriendsLists();
-        }
-
-        function updateUnreadBadge() {
-            const badge = document.getElementById('messagesBadge');
-            if (unreadCount > 0) {
-                badge.innerText = unreadCount;
-                badge.classList.remove('hidden');
-            } else {
-                badge.classList.add('hidden');
-            }
-        }
-
-        // ONLINE PLAYERS MODAL
-        function openOnlineModal() {
-            document.getElementById('onlineUsersModal').classList.remove('hidden');
-        }
-        function closeOnlineModal() {
-            document.getElementById('onlineUsersModal').classList.add('hidden');
-        }
-
-        function openSettingsModal() { document.getElementById('settingsModal').classList.remove('hidden'); }
-        function closeSettingsModal() { document.getElementById('settingsModal').classList.add('hidden'); }
-        function toggleOnlineStatus(status) { socket.emit('toggle_online_status', status); }
-
-        function promptEditUsername() { document.getElementById('editUsernameModal').classList.remove('hidden'); }
-        function closeEditUsernameModal() { document.getElementById('editUsernameModal').classList.add('hidden'); }
         function saveNewUsername() {
-            const newU = document.getElementById('newUsernameInput').value.trim();
-            if (newU) {
-                AuthSession.login(newU, currentUser ? currentUser.email : '');
+            const newUname = document.getElementById("newUsernameInput").value;
+            const user = AuthSession.getUser();
+            if (newUname && newUname.trim() !== '') {
+                AuthSession.login(user ? user.email : 'player@example.com', newUname.trim());
                 closeEditUsernameModal();
             }
         }
 
-        // SOCKET LISTENERS
+        function updateUserUI() {
+            const user = AuthSession.getUser();
+            if (user) {
+                document.getElementById("userDisplayTag").innerText = user.username;
+                socket.emit("set_user_session", user);
+            }
+        }
+
+        /* ONLINE PLAYERS & FRIENDS MATCH REQUESTS */
+        function openOnlineModal() {
+            if (!AuthSession.isLoggedIn()) {
+                showToast("Please log in to view online players!", "⚠️");
+                return;
+            }
+            document.getElementById('onlineUsersModal').classList.remove('hidden');
+        }
+
+        function closeOnlineModal() {
+            document.getElementById('onlineUsersModal').classList.add('hidden');
+        }
+
         socket.on('online_users_update', ({ count, users }) => {
-            onlinePlayers = users;
+            onlineUsersCache = users;
             document.getElementById('onlineCountBadge').innerText = `${count} Online`;
-
-            // Update friends list from server payload
-            const me = users.find(u => u.username === currentUser?.username);
-            if (me && me.friends) {
-                myFriends = new Set(me.friends);
-            }
-
-            renderOnlineUsersList();
-            renderFriendsLists();
+            renderOnlineUsersList(users);
+            updateFriendsTabList();
         });
 
-        socket.on('receive_friend_request', ({ fromSocketId, fromUsername }) => {
-            showToast(
-                'friend-req',
-                '📩 FRIEND REQUEST',
-                `Accept Friend Request from <strong>${fromUsername}</strong>?`,
-                [
-                    {
-                        label: 'Accept',
-                        bgClass: 'bg-emerald-600 hover:bg-emerald-500',
-                        onClick: () => {
-                            socket.emit('accept_friend_request', {
-                                challengerSocketId: fromSocketId,
-                                challengerUsername: fromUsername
-                            });
-                        }
-                    },
-                    {
-                        label: 'Decline',
-                        bgClass: 'bg-red-600 hover:bg-red-500',
-                        onClick: () => {}
-                    }
-                ]
-            );
-        });
-
-        socket.on('friend_request_accepted', ({ username }) => {
-            myFriends.add(username);
-            showToast('message', '✅ FRIEND ADDED', `You are now friends with ${username}!`);
-            renderFriendsLists();
-        });
-
-        socket.on('receive_direct_message', ({ senderSocketId, senderUsername, message, history }) => {
-            if (activeDMUsername === senderUsername) {
-                renderDMHistory(history);
-            } else {
-                unreadCount++;
-                updateUnreadBadge();
-                showToast('message', `💬 Message from ${senderUsername}`, message, [
-                    {
-                        label: 'Reply',
-                        bgClass: 'bg-yellow-500 text-blue-950 font-black',
-                        onClick: () => {
-                            selectFriendForDM(senderUsername, senderSocketId);
-                            showMessagesTab();
-                        }
-                    }
-                ]);
-            }
-        });
-
-        socket.on('load_dm_history', ({ targetUsername, history }) => {
-            if (activeDMUsername === targetUsername) {
-                renderDMHistory(history);
-            }
-        });
-
-        socket.on('dm_sent_success', ({ targetUsername, history }) => {
-            if (activeDMUsername === targetUsername) {
-                renderDMHistory(history);
-            }
-        });
-
-        socket.on('receive_match_challenge', ({ challengerSocketId, fromUsername, smashUrl }) => {
-            showToast(
-                'invite',
-                '⚔️ 1v1 MATCH INVITE',
-                `<strong>${fromUsername}</strong> challenged you to a 1v1 match!`,
-                [
-                    {
-                        label: 'Accept & Play',
-                        bgClass: 'bg-emerald-600 hover:bg-emerald-500',
-                        onClick: () => {
-                            socket.emit('accept_match_challenge', {
-                                challengerSocketId,
-                                targetUsername: currentUser.username
-                            });
-                        }
-                    },
-                    {
-                        label: 'Decline',
-                        bgClass: 'bg-red-600 hover:bg-red-500',
-                        onClick: () => {}
-                    }
-                ]
-            );
-        });
-
-        socket.on('challenge_game_start', (room) => {
-            document.getElementById('smashFrame').src = room.smashUrl;
-            document.getElementById('gameScreen').classList.remove('hidden');
-        });
-
-        // RENDER ONLINE USERS (NO 1v1 OPTION HERE)
-        function renderOnlineUsersList() {
-            const list = document.getElementById('onlineUsersList');
-            list.innerHTML = '';
-
-            const filtered = onlinePlayers.filter(p => p.username !== currentUser?.username);
-            if (filtered.length === 0) {
-                list.innerHTML = '<p class="text-xs text-blue-200 italic p-2">No other players currently online.</p>';
-                return;
-            }
-
-            filtered.forEach(player => {
-                const isFriend = myFriends.has(player.username);
-                const item = document.createElement('div');
-                item.className = 'flex justify-between items-center bg-blue-950/80 p-3 rounded-2xl border border-white/10';
-                item.innerHTML = `
-                    <div class="flex items-center gap-2">
-                        <span class="w-2.5 h-2.5 rounded-full bg-emerald-400"></span>
-                        <span class="text-xs font-bold text-white">${player.username}</span>
-                    </div>
-                    <div>
-                        ${isFriend 
-                            ? '<span class="text-[10px] bg-blue-800 text-blue-200 px-2.5 py-1 rounded-xl font-bold">✓ Friend</span>' 
-                            : `<button onclick="sendFriendRequest('${player.id}')" class="bg-emerald-500 hover:bg-emerald-400 text-white font-bold text-[10px] px-3 py-1.5 rounded-xl">➕ Add Friend</button>`
-                        }
-                    </div>
-                `;
-                list.appendChild(item);
-            });
-        }
-
-        function sendFriendRequest(targetSocketId) {
-            socket.emit('send_friend_request', { targetSocketId });
-            showToast('message', 'Request Sent', 'Friend request sent!');
-        }
-
-        // FRIENDS SEARCH & MESSAGING SECTION
-        function renderFriendsLists() {
-            filterFriendsSearch();
-        }
-
-        function filterFriendsSearch() {
-            const query = document.getElementById('friendSearchInput').value.toLowerCase();
-            const list = document.getElementById('friendsSearchList');
-            list.innerHTML = '';
-
-            const friendArray = Array.from(myFriends);
-            const filtered = friendArray.filter(f => f.toLowerCase().includes(query));
-
-            if (filtered.length === 0) {
-                list.innerHTML = '<p class="text-xs text-blue-200 italic p-2">No friends found</p>';
-                return;
-            }
-
-            filtered.forEach(friendName => {
-                const onlinePlayer = onlinePlayers.find(p => p.username === friendName);
-                const isOnline = !!onlinePlayer;
-                
-                const item = document.createElement('div');
-                item.className = `flex justify-between items-center p-2.5 rounded-xl border transition-all cursor-pointer ${activeDMUsername === friendName ? 'bg-yellow-400/20 border-yellow-400' : 'bg-blue-950/80 border-white/10 hover:border-yellow-400/50'}`;
-                item.onclick = () => selectFriendForDM(friendName, onlinePlayer ? onlinePlayer.id : null);
-
-                item.innerHTML = `
-                    <div class="flex items-center gap-2">
-                        <span class="w-2 h-2 rounded-full ${isOnline ? 'bg-emerald-400' : 'bg-gray-500'}"></span>
-                        <span class="text-xs font-bold text-white">${friendName}</span>
-                    </div>
-                    <div class="flex gap-1">
-                        ${isOnline ? `<button onclick="event.stopPropagation(); challengeFriend('${onlinePlayer.id}', '${friendName}')" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 font-black text-[10px] px-2 py-1 rounded-lg">⚔️ 1v1</button>` : ''}
-                        <button class="bg-blue-600 hover:bg-blue-500 text-white font-bold text-[10px] px-2 py-1 rounded-lg">💬 Message</button>
-                    </div>
-                `;
-                list.appendChild(item);
-            });
-        }
-
-        function selectFriendForDM(username, socketId) {
-            activeDMUsername = username;
-            activeDMSocketId = socketId;
-
-            document.getElementById('activeDMChatHeader').innerText = `CHAT WITH ${username.toUpperCase()}`;
-            
-            const actions = document.getElementById('activeDMActions');
-            if (socketId) {
-                actions.innerHTML = `<button onclick="challengeFriend('${socketId}', '${username}')" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 font-black text-[10px] px-2.5 py-1 rounded-lg">⚔️ 1v1</button>`;
-            } else {
-                actions.innerHTML = `<span class="text-[10px] text-gray-400">Offline</span>`;
-            }
-
-            socket.emit('get_dm_history', { targetUsername: username });
-            renderFriendsLists();
-        }
-
-        function renderDMHistory(history) {
-            const container = document.getElementById('tabDMMessages');
+        function renderOnlineUsersList(users) {
+            const container = document.getElementById('onlineUsersList');
             container.innerHTML = '';
 
-            if (history.length === 0) {
-                container.innerHTML = '<p class="text-xs text-blue-300 italic text-center py-6">No previous messages. Say hello!</p>';
+            const currentUser = AuthSession.getUser();
+            const myUsername = currentUser ? currentUser.username : '';
+
+            users.forEach(u => {
+                if (u.id === socket.id || u.username === myUsername) return;
+
+                const isFriend = u.friends && u.friends.includes(myUsername);
+                const row = document.createElement('div');
+                row.className = 'flex justify-between items-center bg-blue-950/80 p-3 rounded-2xl border border-white/10';
+                
+                row.innerHTML = `
+                    <span class="font-bold text-xs text-white">👤 ${escapeHTML(u.username)}</span>
+                    <div class="flex gap-2">
+                        ${isFriend 
+                            ? `<button onclick="openTabDMWith('${escapeHTML(u.username)}')" class="bg-blue-600 hover:bg-blue-500 text-white text-[10px] font-bold px-2.5 py-1.5 rounded-lg">💬 Message</button>`
+                            : `<button onclick="sendFriendRequest('${u.id}', '${escapeHTML(u.username)}')" class="bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold px-2.5 py-1.5 rounded-lg">➕ Add Friend</button>`
+                        }
+                        <button onclick="requestMatch('${u.id}', '${escapeHTML(u.username)}')" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 text-[10px] font-black px-2.5 py-1.5 rounded-lg uppercase">⚔️ 1v1 Match</button>
+                    </div>
+                `;
+                container.appendChild(row);
+            });
+        }
+
+        /* FRIEND REQUEST HANDLERS */
+        function sendFriendRequest(targetSocketId, username) {
+            socket.emit('send_friend_request', { targetSocketId });
+            showToast(`Friend request sent to ${username}!`, "➕");
+        }
+
+        socket.on('receive_friend_request', (data) => {
+            incrementUnreadBadge();
+            showToast(`New Friend Request from ${data.fromUsername}!`, "👋");
+            
+            if (confirm(`Accept Friend Request from ${data.fromUsername}?`)) {
+                socket.emit('accept_friend_request', { challengerSocketId: data.fromSocketId, challengerUsername: data.fromUsername });
+            }
+        });
+
+        socket.on('friend_request_accepted', (data) => {
+            showToast(`You and ${data.username} are now friends!`, "🤝");
+            updateFriendsTabList();
+        });
+
+        /* MATCH CHALLENGE MODAL */
+        function requestMatch(targetSocketId, username) {
+            const user = AuthSession.getUser();
+            const smashUrl = document.getElementById('smashUrl').value || 'https://smashkarts.io';
+            socket.emit('send_match_challenge', {
+                targetSocketId,
+                fromUsername: user ? user.username : 'Player',
+                mode: currentMode,
+                smashUrl
+            });
+            showToast(`Match request sent to ${username}!`, "⚔️");
+        }
+
+        socket.on('receive_match_challenge', (data) => {
+            pendingChallengeData = data;
+            document.getElementById('challengeText').innerText = `${data.fromUsername} challenged you to a ${data.mode} match!`;
+            document.getElementById('challengeModal').classList.remove('hidden');
+        });
+
+        function acceptChallenge() {
+            if (pendingChallengeData) {
+                const user = AuthSession.getUser();
+                socket.emit('accept_match_challenge', {
+                    challengerSocketId: pendingChallengeData.challengerSocketId,
+                    targetUsername: user ? user.username : 'Player'
+                });
+            }
+            document.getElementById('challengeModal').classList.add('hidden');
+        }
+
+        function declineChallenge() {
+            pendingChallengeData = null;
+            document.getElementById('challengeModal').classList.add('hidden');
+            showToast("Challenge declined.", "✕");
+        }
+
+        socket.on('challenge_game_start', (room) => {
+            activeRoomData = room;
+            enterGameFromLobby();
+        });
+
+        /* DIRECT MESSAGING & MESSAGES TAB */
+        function showMessagesTab() {
+            showTab('messagesTab');
+            clearUnreadBadge();
+            updateFriendsTabList();
+        }
+
+        function updateFriendsTabList() {
+            const container = document.getElementById('friendsTabList');
+            if (!container) return;
+            container.innerHTML = '';
+            
+            const currentUser = AuthSession.getUser();
+            if (!currentUser) return;
+
+            const myUserObj = onlineUsersCache.find(u => u.username === currentUser.username);
+            const friendNames = myUserObj ? myUserObj.friends : [];
+
+            if (friendNames.length === 0) {
+                container.innerHTML = '<p class="text-xs text-blue-200">No friends added yet. Open "Online Players" to add friends!</p>';
                 return;
             }
 
-            history.forEach(msg => {
-                const isMe = msg.senderUsername === currentUser?.username;
-                const bubble = document.createElement('div');
-                bubble.className = `max-w-[80%] p-2 rounded-xl text-xs ${isMe ? 'bg-yellow-400 text-blue-950 font-bold ml-auto' : 'bg-blue-900 text-white mr-auto'}`;
-                bubble.innerText = msg.message;
-                container.appendChild(bubble);
+            friendNames.forEach(name => {
+                const isOnline = onlineUsersCache.some(u => u.username === name);
+                const btn = document.createElement('button');
+                btn.className = `w-full text-left p-2 rounded-xl flex items-center justify-between transition-all ${activeDMTargetUser === name ? 'bg-yellow-400/30 border border-yellow-400' : 'bg-blue-950/60 hover:bg-blue-800/60'}`;
+                btn.onclick = () => openTabDMWith(name);
+                btn.innerHTML = `
+                    <span class="font-bold text-xs text-white">👤 ${escapeHTML(name)}</span>
+                    <span class="w-2 h-2 rounded-full ${isOnline ? 'bg-emerald-400' : 'bg-gray-500'}"></span>
+                `;
+                container.appendChild(btn);
             });
+        }
 
-            container.scrollTop = container.scrollHeight;
+        function openTabDMWith(username) {
+            activeDMTargetUser = username;
+            showMessagesTab();
+            closeOnlineModal();
+            document.getElementById('activeDMChatHeader').innerText = `💬 MESSAGE WITH ${username.toUpperCase()}`;
+            socket.emit('get_dm_history', { targetUsername: username });
         }
 
         function sendTabDM() {
             const input = document.getElementById('tabDMInput');
-            const msg = input.value.trim();
-            if (!msg || !activeDMUsername) return;
-
-            socket.emit('send_direct_message', {
-                targetSocketId: activeDMSocketId,
-                targetUsername: activeDMUsername,
-                message: msg
-            });
-
-            input.value = '';
-        }
-
-        function challengeFriend(targetSocketId, username) {
-            socket.emit('send_match_challenge', {
-                targetSocketId,
-                fromUsername: currentUser.username,
-                mode: '1v1',
-                smashUrl: 'https://smashkarts.io'
-            });
-            showToast('invite', 'Challenge Sent', `Waiting for ${username} to respond...`);
-        }
-
-        function startCustomRoom() {
-            const link = document.getElementById('smashRoomLink').value.trim();
-            if (link) {
-                document.getElementById('smashFrame').src = link;
-                document.getElementById('gameScreen').classList.remove('hidden');
+            const user = AuthSession.getUser();
+            if (input.value.trim() && activeDMTargetUser) {
+                socket.emit('send_direct_message', {
+                    targetUsername: activeDMTargetUser,
+                    message: input.value.trim(),
+                    senderUsername: user ? user.username : 'Player'
+                });
+                input.value = '';
             }
         }
 
-        function leaveEmbeddedGame() {
-            document.getElementById('gameScreen').classList.add('hidden');
-            document.getElementById('smashFrame').src = '';
+        socket.on('dm_error', (data) => {
+            showToast(data.message, "⚠️");
+        });
+
+        socket.on('receive_direct_message', (data) => {
+            incrementUnreadBadge();
+            showToast(`New message from ${data.senderUsername}`, "💬");
+            if (activeDMTargetUser === data.senderUsername) {
+                renderDMMessages(data.history);
+            }
+        });
+
+        socket.on('dm_sent_success', (data) => {
+            renderDMMessages(data.history);
+        });
+
+        socket.on('load_dm_history', (data) => {
+            renderDMMessages(data.history);
+        });
+
+        function renderDMMessages(history) {
+            const container = document.getElementById('tabDMMessages');
+            container.innerHTML = '';
+            const user = AuthSession.getUser();
+            const myUname = user ? user.username : 'Player';
+
+            const capped = history.slice(-10);
+            capped.forEach(msg => {
+                const isMe = msg.senderUsername === myUname;
+                const div = document.createElement('div');
+                div.className = isMe ? 'text-right' : 'text-left';
+                div.innerHTML = `<span class="${isMe ? 'bg-yellow-400 text-blue-950' : 'bg-blue-800 text-white'} font-bold px-2.5 py-1 rounded-xl inline-block text-[11px] mb-1">${isMe ? 'Me' : escapeHTML(msg.senderUsername)}: ${escapeHTML(msg.message)}</span>`;
+                container.appendChild(div);
+            });
+            container.scrollTop = container.scrollHeight;
         }
 
-        // Init
-        window.onload = () => {
-            AuthSession.check();
-        };
+        /* LEADERBOARD UPDATE */
+        socket.on('leaderboard_update', (topPlayers) => {
+            const list = document.getElementById('leaderboardList');
+            list.innerHTML = topPlayers.length === 0 ? `<p class="text-xs text-blue-200">No matches recorded yet.</p>` : '';
+            topPlayers.forEach((p, idx) => {
+                const item = document.createElement('div');
+                item.className = 'flex justify-between items-center bg-blue-900/60 border border-white/10 p-3 rounded-2xl';
+                item.innerHTML = `
+                    <div class="flex items-center gap-3">
+                        <span class="font-bungee text-sm ${idx===0 ? 'text-yellow-300' : 'text-white'}">#${idx + 1}</span>
+                        <span class="font-bold text-xs text-white">👤 ${escapeHTML(p.username)}</span>
+                    </div>
+                    <span class="font-black text-xs text-yellow-300">${p.matches} Games Played</span>
+                `;
+                list.appendChild(item);
+            });
+        });
+
+        /* 5-SEC CHAT OVERLAY AUTO-HIDE */
+        function triggerChatActivityTimer() {
+            const overlay = document.getElementById('chatOverlay');
+            overlay.classList.remove('hidden-overlay');
+            clearTimeout(chatInactivityTimer);
+            chatInactivityTimer = setTimeout(() => {
+                overlay.classList.add('hidden-overlay');
+                document.getElementById('toggleChatBtnLabel').innerText = 'Show Chat';
+            }, 5000);
+        }
+
+        function toggleOverlayChat() {
+            const overlay = document.getElementById('chatOverlay');
+            const label = document.getElementById('toggleChatBtnLabel');
+            if (overlay.classList.contains('hidden-overlay')) {
+                overlay.classList.remove('hidden-overlay');
+                label.innerText = 'Hide Chat';
+                triggerChatActivityTimer();
+            } else {
+                overlay.classList.add('hidden-overlay');
+                label.innerText = 'Show Chat';
+                clearTimeout(chatInactivityTimer);
+            }
+        }
+
+        document.getElementById('matchChatInput').addEventListener('input', triggerChatActivityTimer);
+
+        /* MAKE CODE MODAL */
+        function openMakeCodeModal() {
+            document.getElementById('makeCodeIframe').src = "https://smashkarts.io";
+            document.getElementById('makeCodeModal').classList.remove('hidden');
+        }
+
+        function closeMakeCodeModal() {
+            document.getElementById('makeCodeIframe').src = "";
+            document.getElementById('makeCodeModal').classList.add('hidden');
+        }
+
+        function copyAndPlay() {
+            const codeInput = document.getElementById('copyCodeInput').value;
+            if (!codeInput.trim()) {
+                showToast("Please paste the generated Smash Karts code or link!", "⚠️");
+                return;
+            }
+            document.getElementById('smashUrl').value = codeInput;
+            closeMakeCodeModal();
+            createLobby();
+        }
+
+        /* MATCHMAKING & DASHBOARD NAVIGATION */
+        function switchMatchMode(mode) {
+            currentMode = mode;
+            showTab('setupTab');
+            document.getElementById('btnNav1v1').classList.toggle('active', mode === '1v1');
+            document.getElementById('btnNav2v2').classList.toggle('active', mode === '2v2');
+            document.getElementById('arenaTitle').innerText = `${mode.toUpperCase()} MATCHMAKING`;
+            document.getElementById('arenaSubtitle').innerText = `Start or join a ${mode} match`;
+        }
+
+        function showTab(tabId) {
+            document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
+            document.querySelectorAll('.sidebar-btn').forEach(btn => btn.classList.remove('active'));
+            
+            if (tabId === 'leaderboardTab') document.getElementById('btnNavLeaderboard').classList.add('active');
+            if (tabId === 'messagesTab') document.getElementById('btnNavMessages').classList.add('active');
+            if (tabId === 'setupTab') {
+                document.getElementById(currentMode === '2v2' ? 'btnNav2v2' : 'btnNav1v1').classList.add('active');
+            }
+            
+            document.getElementById(tabId).classList.remove('hidden');
+        }
+
+        function createLobby() {
+            const user = AuthSession.getUser();
+            const playerName = user ? user.username : "Player";
+            const smashUrl = document.getElementById('smashUrl').value || "https://smashkarts.io";
+            const winCondition = document.getElementById('winCondition').value;
+
+            socket.emit('create_room', { playerName, smashUrl, winCondition, mode: currentMode });
+        }
+
+        socket.on('room_created', (room) => openPreGameLobby(room));
+
+        function openPreGameLobby(room) {
+            activeRoomData = room;
+            closeFindGameModal();
+            document.getElementById('preGameLobbyModal').classList.remove('hidden');
+            updatePreGameLobbyUI(room);
+        }
+
+        function updatePreGameLobbyUI(room) {
+            const playerList = document.getElementById('preGamePlayerList');
+            playerList.innerHTML = '';
+            room.players.forEach((p, idx) => {
+                const item = document.createElement('div');
+                item.className = 'bg-blue-900/60 p-2 rounded-xl border border-white/10 flex justify-between';
+                item.innerHTML = `<span class="font-bold text-white">👤 ${escapeHTML(p.name)}</span><span class="text-yellow-300 font-bold text-[10px]">Slot ${idx+1}</span>`;
+                playerList.appendChild(item);
+            });
+        }
+
+        function closePreGameLobbyModal() {
+            document.getElementById('preGameLobbyModal').classList.add('hidden');
+        }
+
+        function enterGameFromLobby() {
+            if (!activeRoomData) return;
+            closePreGameLobbyModal();
+
+            const user = AuthSession.getUser();
+            if (user) {
+                socket.emit('record_match_played', user.username);
+            }
+
+            const gameScreen = document.getElementById('gameScreen');
+            gameScreen.classList.remove('game-fade-exit', 'hidden');
+            document.getElementById('smashFrame').src = activeRoomData.smashUrl;
+            document.getElementById('gameModeBadge').innerText = activeRoomData.mode;
+            document.getElementById('mainDashboard').classList.add('hidden');
+            triggerChatActivityTimer();
+        }
+
+        function leaveEmbeddedGame() {
+            const gameScreen = document.getElementById('gameScreen');
+            gameScreen.classList.add('game-fade-exit');
+
+            setTimeout(() => {
+                document.getElementById('smashFrame').src = '';
+                gameScreen.classList.add('hidden');
+                document.getElementById('mainDashboard').classList.remove('hidden');
+            }, 350);
+        }
+
+        function sendPreGameChatMessage() {
+            const input = document.getElementById('preGameChatInput');
+            const user = AuthSession.getUser();
+            if (input.value.trim() && activeRoomData) {
+                socket.emit('send_match_chat', { roomId: activeRoomData.roomId, message: input.value.trim(), senderName: user ? user.username : 'Player' });
+                input.value = '';
+            }
+        }
+
+        function sendMatchChatMessage() {
+            const input = document.getElementById('matchChatInput');
+            const user = AuthSession.getUser();
+            if (input.value.trim() && activeRoomData) {
+                socket.emit('send_match_chat', { roomId: activeRoomData.roomId, message: input.value.trim(), senderName: user ? user.username : 'Player' });
+                input.value = '';
+                triggerChatActivityTimer();
+            }
+        }
+
+        socket.on('receive_match_chat', (data) => {
+            const msg = `<div class="bg-blue-950/80 p-1.5 rounded-xl border border-white/10"><strong class="text-yellow-300">${escapeHTML(data.senderName)}:</strong> ${escapeHTML(data.message)}</div>`;
+            
+            const matchChat = document.getElementById('matchChatMessages');
+            const preGameChat = document.getElementById('preGameChatMessages');
+
+            matchChat.innerHTML += msg;
+            preGameChat.innerHTML += msg;
+
+            while (matchChat.children.length > 10) matchChat.removeChild(matchChat.firstChild);
+            while (preGameChat.children.length > 10) preGameChat.removeChild(preGameChat.firstChild);
+
+            matchChat.scrollTop = matchChat.scrollHeight;
+            preGameChat.scrollTop = preGameChat.scrollHeight;
+        });
+
+        function openFindGameModal() {
+            document.getElementById('findGameModal').classList.remove('hidden');
+            socket.emit('get_public_rooms');
+        }
+
+        function closeFindGameModal() {
+            document.getElementById('findGameModal').classList.add('hidden');
+        }
+
+        socket.on('public_rooms_update', (rooms) => {
+            publicRoomsCache = rooms;
+            const container = document.getElementById('publicRoomsList');
+            if (!container) return;
+            container.innerHTML = rooms.length === 0 ? `<p class="text-center text-xs text-blue-200">No rooms active.</p>` : '';
+            
+            rooms.forEach(room => {
+                const row = document.createElement('div');
+                row.className = 'flex justify-between items-center bg-blue-950/80 p-3 rounded-2xl';
+                row.innerHTML = `
+                    <div>
+                        <p class="text-xs text-white font-bold">${escapeHTML(room.hostName)} (${escapeHTML(room.mode)})</p>
+                        <p class="text-[10px] text-blue-200">${escapeHTML(room.winCondition)}</p>
+                    </div>
+                    <button onclick="joinPublicRoomById('${room.roomId}')" class="bg-emerald-500 hover:bg-emerald-400 text-white font-black px-3 py-1.5 rounded-xl text-xs uppercase">Join</button>
+                `;
+                container.appendChild(row);
+            });
+        });
+
+        function joinPublicRoomById(roomId) {
+            const room = publicRoomsCache.find(r => r.roomId === roomId);
+            if (room) {
+                openPreGameLobby(room);
+            }
+        }
+
+        document.addEventListener("DOMContentLoaded", () => {
+            if (AuthSession.isLoggedIn()) {
+                document.getElementById("authModal").classList.add("hidden");
+                AuthSession.startTracker();
+                updateUserUI();
+            } else {
+                document.getElementById("authModal").classList.remove("hidden");
+            }
+        });
     </script>
 </body>
 </html>

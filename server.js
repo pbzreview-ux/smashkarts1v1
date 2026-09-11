@@ -5,34 +5,49 @@ const path = require('path');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server);
+const io = new Server(server, {
+    cors: { origin: "*" }
+});
 
 app.use(express.static(path.join(__dirname, '/')));
 
-// Socket Data Storage: socketId -> { id, username, email, isAuthenticated, isOnline, friends: Set, friendRequests: Set }
-const connectedPlayers = {}; 
-const activeRooms = [];
-const playerStats = {}; 
+// Socket Data Storage
+const connectedPlayers = {}; // socketId -> { id, username, email, isAuthenticated, isOnline, friends: Set, friendRequests: Set }
+const activeRooms = []; // Array of room objects
+const playerStats = {}; // username -> matches count
+const directMessageStore = {}; // 'user1__DM__user2' -> [ { senderUsername, message, timestamp } ]
 
-// DM Storage: 'user1_user2' -> [ { senderUsername, message, timestamp } ] (Max 10 messages)
-const directMessageStore = {}; 
+function escapeHTML(str) {
+    if (!str) return '';
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
 
 function sanitizeUsername(name) {
-    if (!name || name === 'undefined' || name.trim() === '') return 'Player';
-    return name.trim();
+    if (!name || typeof name !== 'string') return 'Player';
+    const trimmed = name.trim();
+    if (!trimmed || trimmed.toLowerCase() === 'undefined' || trimmed.toLowerCase() === 'null') {
+        return 'Player';
+    }
+    return escapeHTML(trimmed.slice(0, 20));
 }
 
 function extractSmashUrl(rawInput) {
     if (!rawInput) return "https://smashkarts.io";
-    const match = rawInput.match(/https?:\/\/[^\s]+/);
-    return match ? match[0] : rawInput.trim();
+    const match = String(rawInput).match(/https?:\/\/[^\s]+/);
+    return match ? match[0] : "https://smashkarts.io";
 }
 
 function moderateText(text) {
+    if (!text) return '';
     const BANNED_WORDS = ['badword1', 'badword2', 'hate', 'spam'];
-    let cleanText = text;
+    let cleanText = escapeHTML(text);
     BANNED_WORDS.forEach(word => {
-        const regex = new RegExp(word, 'gi');
+        const regex = new RegExp(`\\b${word}\\b`, 'gi');
         cleanText = cleanText.replace(regex, '***');
     });
     return cleanText;
@@ -40,6 +55,12 @@ function moderateText(text) {
 
 function getDMKey(u1, u2) {
     return [u1, u2].sort().join('__DM__');
+}
+
+function findSocketByUsername(username) {
+    return Object.values(connectedPlayers).find(
+        p => p.username.toLowerCase() === username.toLowerCase()
+    );
 }
 
 io.on('connection', (socket) => {
@@ -53,7 +74,7 @@ io.on('connection', (socket) => {
         friendRequests: new Set()
     };
 
-    // User Session Set (Requires Account)
+    // Set User Session
     socket.on('set_user_session', (userData) => {
         if (!userData || !userData.username) return;
         const uname = sanitizeUsername(userData.username);
@@ -73,7 +94,7 @@ io.on('connection', (socket) => {
         broadcastLeaderboard();
     });
 
-    // Toggle Online Visibility Setting
+    // Toggle Visibility
     socket.on('toggle_online_status', (isOnline) => {
         if (connectedPlayers[socket.id]) {
             connectedPlayers[socket.id].isOnline = !!isOnline;
@@ -97,29 +118,36 @@ io.on('connection', (socket) => {
 
     socket.on('accept_friend_request', ({ challengerSocketId, challengerUsername }) => {
         const user = connectedPlayers[socket.id];
-        if (!user) return;
+        if (!user || !user.isAuthenticated) return;
 
         user.friends.add(challengerUsername);
         user.friendRequests.delete(challengerUsername);
 
-        // Update challenger if online
-        const challenger = connectedPlayers[challengerSocketId];
+        const challenger = connectedPlayers[challengerSocketId] || findSocketByUsername(challengerUsername);
         if (challenger) {
             challenger.friends.add(user.username);
-            io.to(challengerSocketId).emit('friend_request_accepted', { username: user.username });
+            io.to(challenger.id).emit('friend_request_accepted', { username: user.username });
         }
 
         socket.emit('friend_request_accepted', { username: challengerUsername });
         broadcastOnlineUsers();
     });
 
-    // Direct Messages (Friends Only, Max 10 History)
-    socket.on('send_direct_message', ({ targetSocketId, targetUsername, message }) => {
+    // Direct Messages (Friends Only, Max 10 Messages)
+    socket.on('send_direct_message', ({ targetUsername, message }) => {
         const sender = connectedPlayers[socket.id];
         if (!sender || !sender.isAuthenticated || !message || !message.trim()) return;
 
+        const cleanTarget = sanitizeUsername(targetUsername);
+        const targetPlayer = findSocketByUsername(cleanTarget);
+
+        // Verify mutual friendship
+        if (!sender.friends.has(cleanTarget)) {
+            return socket.emit('dm_error', { message: 'You can only message users on your friends list.' });
+        }
+
         const cleanMsg = moderateText(message.trim());
-        const dmKey = getDMKey(sender.username, targetUsername);
+        const dmKey = getDMKey(sender.username, cleanTarget);
 
         if (!directMessageStore[dmKey]) directMessageStore[dmKey] = [];
         
@@ -130,16 +158,8 @@ io.on('connection', (socket) => {
             directMessageStore[dmKey] = directMessageStore[dmKey].slice(-10);
         }
 
-        // Find target socket if active
-        let recipientSocketId = targetSocketId;
-        if (!recipientSocketId) {
-            const foundPlayer = Object.values(connectedPlayers).find(p => p.username === targetUsername);
-            if (foundPlayer) recipientSocketId = foundPlayer.id;
-        }
-
-        // Send to receiver if online
-        if (recipientSocketId) {
-            io.to(recipientSocketId).emit('receive_direct_message', {
+        if (targetPlayer) {
+            io.to(targetPlayer.id).emit('receive_direct_message', {
                 senderSocketId: socket.id,
                 senderUsername: sender.username,
                 message: cleanMsg,
@@ -147,9 +167,8 @@ io.on('connection', (socket) => {
             });
         }
 
-        // Send back to sender for sync
         socket.emit('dm_sent_success', {
-            targetUsername,
+            targetUsername: cleanTarget,
             history: directMessageStore[dmKey]
         });
     });
@@ -157,14 +176,15 @@ io.on('connection', (socket) => {
     socket.on('get_dm_history', ({ targetUsername }) => {
         const sender = connectedPlayers[socket.id];
         if (!sender) return;
-        const dmKey = getDMKey(sender.username, targetUsername);
+        const cleanTarget = sanitizeUsername(targetUsername);
+        const dmKey = getDMKey(sender.username, cleanTarget);
         socket.emit('load_dm_history', {
-            targetUsername,
+            targetUsername: cleanTarget,
             history: directMessageStore[dmKey] || []
         });
     });
 
-    // Record completed match for Leaderboard
+    // Record Match Stats
     socket.on('record_match_played', (rawUsername) => {
         const uname = sanitizeUsername(rawUsername);
         if (uname && uname !== 'Player' && uname !== 'Guest') {
@@ -173,20 +193,21 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Match Requests (Allowed only between friends)
+    // Match Challenges
     socket.on('send_match_challenge', ({ targetSocketId, fromUsername, mode, smashUrl }) => {
         const senderName = sanitizeUsername(fromUsername);
         io.to(targetSocketId).emit('receive_match_challenge', {
             challengerSocketId: socket.id,
             fromUsername: senderName,
             mode: mode || '1v1',
-            smashUrl: smashUrl || 'https://smashkarts.io'
+            smashUrl: extractSmashUrl(smashUrl)
         });
     });
 
     socket.on('accept_match_challenge', ({ challengerSocketId, targetUsername }) => {
         const acceptName = sanitizeUsername(targetUsername);
-        const challengerName = sanitizeUsername(connectedPlayers[challengerSocketId]?.username);
+        const challenger = connectedPlayers[challengerSocketId];
+        const challengerName = challenger ? challenger.username : 'Challenger';
         const roomId = Math.random().toString(36).substring(2, 8).toUpperCase();
         
         const room = {
@@ -209,20 +230,21 @@ io.on('connection', (socket) => {
         if (challengerSocket) challengerSocket.join(roomId);
 
         io.to(roomId).emit('challenge_game_start', room);
+        io.emit('public_rooms_update', activeRooms);
     });
 
-    // Room operations
+    // Room Management
     socket.on('create_room', (data) => {
         const cleanUrl = extractSmashUrl(data.smashUrl);
         const roomId = Math.random().toString(36).substring(2, 8).toUpperCase();
-        const mode = data.mode || '1v1';
+        const mode = data.mode === '2v2' ? '2v2' : '1v1';
         const hostName = sanitizeUsername(data.playerName);
         
         const newRoom = {
             roomId,
             hostName,
             smashUrl: cleanUrl,
-            winCondition: data.winCondition,
+            winCondition: escapeHTML(data.winCondition || 'First to 3'),
             mode,
             maxPlayers: mode === '2v2' ? 4 : 2,
             players: [{ id: socket.id, name: hostName }],
@@ -258,7 +280,17 @@ io.on('connection', (socket) => {
 
     socket.on('disconnect', () => {
         delete connectedPlayers[socket.id];
+        
+        // Clean empty players out of active rooms
+        for (let i = activeRooms.length - 1; i >= 0; i--) {
+            activeRooms[i].players = activeRooms[i].players.filter(p => p.id !== socket.id);
+            if (activeRooms[i].players.length === 0) {
+                activeRooms.splice(i, 1);
+            }
+        }
+
         broadcastOnlineUsers();
+        io.emit('public_rooms_update', activeRooms);
     });
 });
 
@@ -267,7 +299,7 @@ function broadcastOnlineUsers() {
         .filter(p => p.isAuthenticated && p.isOnline)
         .map(p => ({
             id: p.id,
-            username: sanitizeUsername(p.username),
+            username: p.username,
             friends: Array.from(p.friends)
         }));
 
@@ -276,7 +308,7 @@ function broadcastOnlineUsers() {
 
 function broadcastLeaderboard() {
     const topPlayers = Object.entries(playerStats)
-        .map(([username, matches]) => ({ username: sanitizeUsername(username), matches }))
+        .map(([username, matches]) => ({ username, matches }))
         .filter(p => p.username !== 'Player' && p.username !== 'Guest')
         .sort((a, b) => b.matches - a.matches)
         .slice(0, 5);
@@ -285,4 +317,4 @@ function broadcastLeaderboard() {
 }
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
+server.listen(PORT, () => console.log(`Smash Karts Arena running on port ${PORT}`));
