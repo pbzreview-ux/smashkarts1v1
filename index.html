@@ -3,147 +3,218 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Smash Karts 1v1 Arena</title>
+    <title>Smash Karts 1v1 Platform</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="/socket.io/socket.io.js"></script>
     <link rel="stylesheet" href="style.css">
 </head>
-<body class="text-white min-h-screen flex flex-col justify-between selection:bg-red-500 selection:text-white">
+<body class="min-h-screen flex flex-col justify-between overflow-x-hidden selection:bg-yellow-400 selection:text-black">
 
-    <!-- NAVIGATION BAR -->
-    <nav class="bg-slate-950/80 border-b border-red-500/20 px-6 py-4 sticky top-0 z-50 backdrop-blur-md">
-        <div class="max-w-6xl mx-auto flex flex-col sm:flex-row justify-between items-center gap-4">
-            <a href="#" onclick="showTab('homeTab')" class="text-2xl font-bungee text-transparent bg-clip-text bg-gradient-to-r from-red-500 via-orange-400 to-yellow-400">
-                🏎️ SMASH 1v1
-            </a>
-            <div class="flex items-center gap-3">
-                <span class="text-xs bg-red-500/20 border border-red-500/40 text-red-400 px-3 py-1 rounded-full font-bold">
-                    🟢 Online: <span id="onlineCount">1</span>
-                </span>
-                <div class="flex gap-2">
-                    <button onclick="showTab('homeTab')" class="px-3 py-2 text-xs font-bold rounded-xl bg-slate-900 border border-slate-700 hover:border-red-500/40">Home</button>
-                    <button onclick="showTab('setupTab')" class="px-3 py-2 text-xs font-bold rounded-xl bg-red-600 shadow-lg shadow-red-600/30">Create 1v1</button>
-                    <button onclick="showTab('leaderboardTab')" class="px-3 py-2 text-xs font-bold rounded-xl bg-slate-900 border border-slate-700 hover:border-red-500/40">Leaderboard</button>
-                    <button onclick="showTab('rulesTab')" class="px-3 py-2 text-xs font-bold rounded-xl bg-slate-900 border border-slate-700 hover:border-red-500/40">Rules</button>
-                </div>
+    <!-- TOP HEADER / PLAYER CREATION BAR -->
+    <header class="w-full px-6 py-4 flex justify-between items-center z-20">
+        <!-- Top Left: Create Account / Set Username -->
+        <div class="flex items-center gap-3 bg-blue-900/40 p-2 pr-4 rounded-2xl border border-white/20 backdrop-blur-md">
+            <div class="w-10 h-10 rounded-xl bg-yellow-400 flex items-center justify-center font-black text-blue-950 text-xl shadow-md">
+                👤
             </div>
-        </div>
-    </nav>
-
-    <!-- SECTION 1: HOME PAGE -->
-    <div id="homeTab" class="tab-content max-w-4xl mx-auto px-6 py-12 text-center w-full">
-        <h1 class="text-4xl sm:text-6xl font-bungee text-white mb-6 leading-tight">
-            SETTLE THE SCORE IN <br>
-            <span class="text-transparent bg-clip-text bg-gradient-to-r from-red-500 to-orange-400">1v1 SMASH KARTS</span>
-        </h1>
-        <p class="text-slate-400 text-sm sm:text-base max-w-xl mx-auto mb-8">
-            Create custom private lobbies, choose custom options, and challenge players on the competitive ladder.
-        </p>
-        <button onclick="showTab('setupTab')" class="btn-arcade px-8 py-4 text-white font-black text-xl rounded-2xl uppercase tracking-wider">
-            ⚔️ Open 1v1 Match Setup
-        </button>
-    </div>
-
-    <!-- SECTION 2: CREATE 1v1 MATCH SETUP -->
-    <div id="setupTab" class="tab-content hidden max-w-3xl mx-auto px-6 py-12 w-full">
-        <div class="text-center mb-8">
-            <h1 class="text-3xl sm:text-5xl font-bungee text-white mb-2">🎮 CUSTOM 1v1 SETUP</h1>
-            <p class="text-slate-400 text-xs sm:text-sm">Configure arena rules, weapons, and generate match invitations.</p>
-        </div>
-
-        <div class="glass-panel p-6 sm:p-8 rounded-3xl space-y-6">
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                    <label class="block text-xs font-bold uppercase text-slate-300 mb-2">Host Player Name</label>
-                    <input type="text" id="playerName" placeholder="SpeedyKart99" class="custom-input w-full px-4 py-3 rounded-xl text-sm">
-                </div>
-                <div>
-                    <label class="block text-xs font-bold uppercase text-slate-300 mb-2">Smash Karts Room Link</label>
-                    <input type="text" id="smashUrl" placeholder="https://smashkarts.io/..." class="custom-input w-full px-4 py-3 rounded-xl text-sm">
-                </div>
-            </div>
-
             <div>
-                <label class="block text-xs font-bold uppercase text-slate-300 mb-2">Game Mode</label>
-                <select id="gameMode" class="custom-input w-full px-4 py-3 rounded-xl text-sm">
-                    <option value="Free For All (1v1 Deathmatch)">⚔️ Free For All (1v1 Deathmatch)</option>
-                    <option value="Arms Race (Weapon Swap)">🚀 Arms Race (Weapon Swap)</option>
-                    <option value="Gem Collector">💎 Gem Collector</option>
-                    <option value="Capture The Flag">🚩 Capture The Flag</option>
-                    <option value="Sudden Death (1 Life)">💀 Sudden Death (1 Life)</option>
-                </select>
+                <span class="block text-[10px] font-bold uppercase tracking-wider text-blue-200">Account Username</span>
+                <input type="text" id="accountUsername" placeholder="Enter Tag..." onchange="saveAccount()" class="bg-transparent text-sm font-bold text-white focus:outline-none placeholder-blue-300/60 w-32 sm:w-40">
             </div>
+        </div>
 
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                    <label class="block text-xs font-bold uppercase text-slate-300 mb-2">Win Condition</label>
-                    <select id="winCondition" class="custom-input w-full px-4 py-3 rounded-xl text-sm">
-                        <option value="First to 5 Smashes">First to 5 Smashes</option>
-                        <option value="First to 10 Smashes">First to 10 Smashes</option>
-                        <option value="3 Minute Limit">3 Minute Time Limit</option>
-                    </select>
-                </div>
-                <div>
-                    <label class="block text-xs font-bold uppercase text-slate-300 mb-2">Arena Map</label>
-                    <select id="mapSelect" class="custom-input w-full px-4 py-3 rounded-xl text-sm">
-                        <option value="Random Map">🎲 Random Map</option>
-                        <option value="Graveyard">☠️ Graveyard</option>
-                        <option value="Lava Pit">🌋 Lava Pit</option>
-                        <option value="Space Station">🚀 Space Station</option>
-                    </select>
-                </div>
+        <!-- Top Right: Player Search & Online Counter -->
+        <div class="flex items-center gap-4">
+            <div class="hidden sm:flex items-center gap-2 bg-blue-900/40 border border-white/20 px-3 py-1.5 rounded-full text-xs font-bold text-emerald-400">
+                <span class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                Online: <span id="onlineCount">1</span>
             </div>
+            <div class="relative">
+                <input type="text" placeholder="Search player..." class="smash-input px-4 py-2 rounded-full text-xs w-36 sm:w-48 placeholder-white/50">
+            </div>
+        </div>
+    </header>
 
-            <button onclick="createLobby()" class="btn-arcade w-full py-4 text-white font-black text-base rounded-2xl uppercase tracking-wider">
-                🚀 Launch Custom 1v1 Room
+    <!-- MAIN INTERFACE BODY -->
+    <div class="flex flex-1 w-full max-w-7xl mx-auto px-4">
+        
+        <!-- LEFT SIDEBAR ICON MENU -->
+        <aside class="flex flex-col gap-4 py-6 pr-4 items-center">
+            <button onclick="showTab('leaderboardTab')" title="Most Played Leaderboard" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg">
+                🏆
             </button>
+            <button onclick="showTab('setupTab')" title="Create 1v1 Room" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg">
+                🎮
+            </button>
+        </aside>
 
-            <div id="roomDetails" class="hidden p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs text-center">
-                Room Created! Room ID: <span id="displayRoomId" class="font-bold underline"></span>
+        <!-- CENTER CONTENT ZONE -->
+        <main class="flex-1 flex flex-col items-center">
+            
+            <!-- LOGO BADGE -->
+            <div class="mb-6">
+                <div class="bg-gradient-to-b from-yellow-300 to-yellow-500 border-4 border-white rounded-3xl px-10 py-3 shadow-2xl transform -rotate-1">
+                    <span class="font-bungee text-5xl sm:text-6xl text-blue-950 drop-shadow-md tracking-wider">1v1</span>
+                </div>
             </div>
-        </div>
-    </div>
 
-    <!-- SECTION 3: LEADERBOARD -->
-    <div id="leaderboardTab" class="tab-content hidden max-w-3xl mx-auto px-6 py-12 w-full">
-        <h1 class="text-3xl font-bungee text-yellow-400 mb-6 text-center">🏆 1v1 LEADERBOARD</h1>
-        <div class="glass-panel rounded-2xl overflow-hidden">
-            <table class="w-full text-left">
-                <thead class="bg-slate-900/80 text-slate-400 text-xs uppercase">
-                    <tr><th class="p-4">Rank</th><th class="p-4">Player</th><th class="p-4">Wins</th><th class="p-4">Win Rate</th></tr>
-                </thead>
-                <tbody class="divide-y divide-slate-800 text-sm">
-                    <tr><td class="p-4 font-bold text-yellow-400">#1 🥇</td><td class="p-4 font-bold">SpeedyKart99</td><td class="p-4 text-emerald-400">42</td><td class="p-4">88%</td></tr>
-                    <tr><td class="p-4 font-bold text-slate-300">#2 🥈</td><td class="p-4 font-bold">RedShellPro</td><td class="p-4 text-emerald-400">35</td><td class="p-4">79%</td></tr>
-                    <tr><td class="p-4 font-bold text-amber-600">#3 🥉</td><td class="p-4 font-bold">DriftKing</td><td class="p-4 text-emerald-400">29</td><td class="p-4">71%</td></tr>
-                </tbody>
-            </table>
-        </div>
-    </div>
+            <!-- MAP PREVIEWS BANNER -->
+            <div class="w-full max-w-4xl overflow-x-auto pb-4 mb-6 flex gap-3 justify-start sm:justify-center no-scrollbar">
+                <div class="flex-shrink-0 bg-blue-900/60 border border-white/30 rounded-2xl p-2 text-center w-24">
+                    <div class="w-full h-12 bg-purple-900/80 rounded-xl mb-1 flex items-center justify-center text-xs font-bold">👻</div>
+                    <span class="text-[10px] font-bold block truncate">Graveyard</span>
+                </div>
+                <div class="flex-shrink-0 bg-blue-900/60 border border-white/30 rounded-2xl p-2 text-center w-24">
+                    <div class="w-full h-12 bg-red-900/80 rounded-xl mb-1 flex items-center justify-center text-xs font-bold">🌋</div>
+                    <span class="text-[10px] font-bold block truncate">Lava Pit</span>
+                </div>
+                <div class="flex-shrink-0 bg-blue-900/60 border border-white/30 rounded-2xl p-2 text-center w-24">
+                    <div class="w-full h-12 bg-indigo-900/80 rounded-xl mb-1 flex items-center justify-center text-xs font-bold">🚀</div>
+                    <span class="text-[10px] font-bold block truncate">Space Station</span>
+                </div>
+                <div class="flex-shrink-0 bg-blue-900/60 border border-white/30 rounded-2xl p-2 text-center w-24">
+                    <div class="w-full h-12 bg-emerald-900/80 rounded-xl mb-1 flex items-center justify-center text-xs font-bold">☁️</div>
+                    <span class="text-[10px] font-bold block truncate">Sky Arena</span>
+                </div>
+            </div>
 
-    <!-- SECTION 4: RULES -->
-    <div id="rulesTab" class="tab-content hidden max-w-2xl mx-auto px-6 py-12 w-full">
-        <h1 class="text-3xl font-bungee text-red-500 mb-6 text-center">📜 MATCH RULES</h1>
-        <div class="glass-panel p-6 rounded-2xl space-y-4 text-slate-300 text-sm">
-            <div class="border-b border-slate-800 pb-3">
-                <h3 class="font-bold text-white text-base mb-1">1. Match Setup</h3>
-                <p>Rooms must be set to 2 players max with standard 3-minute round timers.</p>
+            <!-- CONTAINER WINDOW -->
+            <div class="w-full max-w-4xl bg-blue-950/40 border-2 border-white/20 backdrop-blur-xl rounded-3xl p-6 shadow-2xl mb-8">
+                
+                <!-- TAB 1: MOST PLAYED LEADERBOARD -->
+                <div id="leaderboardTab" class="tab-content space-y-3">
+                    <div class="flex justify-between items-center mb-4 px-2">
+                        <h2 class="font-bungee text-xl text-yellow-300">MOST PLAYED PLAYERS</h2>
+                        <button onclick="showTab('setupTab')" class="text-xs bg-yellow-400 hover:bg-yellow-300 text-blue-950 font-black px-4 py-2 rounded-xl">
+                            + Create Match
+                        </button>
+                    </div>
+
+                    <div id="leaderboardList" class="space-y-2.5">
+                        <!-- Dynamic Player Rows Rendered Here -->
+                    </div>
+                </div>
+
+                <!-- TAB 2: CREATE 1v1 MATCH SETUP -->
+                <div id="setupTab" class="tab-content hidden space-y-6">
+                    <div class="text-center mb-4">
+                        <h2 class="font-bungee text-2xl text-white">CUSTOM 1v1 MATCH SETUP</h2>
+                        <p class="text-xs text-blue-200">Configure your match options below</p>
+                    </div>
+
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-xs font-bold uppercase text-blue-200 mb-2">Host Player Name</label>
+                            <input type="text" id="hostNameInput" placeholder="Enter Host Name" class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-bold uppercase text-blue-200 mb-2">Smash Karts Private Link</label>
+                            <input type="text" id="smashUrl" placeholder="https://smashkarts.io/..." class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
+                        </div>
+                    </div>
+
+                    <!-- WIN CONDITION SELECTOR (FIRST TO 3, 6, 10 ONLY) -->
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-xs font-bold uppercase text-blue-200 mb-2">Win Condition</label>
+                            <select id="winCondition" class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
+                                <option value="First to 3">First to 3</option>
+                                <option value="First to 6">First to 6</option>
+                                <option value="First to 10">First to 10</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-bold uppercase text-blue-200 mb-2">Game Mode</label>
+                            <select id="gameMode" class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
+                                <option value="1v1 Deathmatch">⚔️ 1v1 Deathmatch</option>
+                                <option value="Arms Race">🚀 Arms Race</option>
+                                <option value="Sudden Death">💀 Sudden Death</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <button onclick="createLobby()" class="btn-smash w-full py-4 rounded-2xl font-bungee text-xl text-white tracking-wider">
+                        START 1v1 MATCH
+                    </button>
+
+                    <div id="roomDetails" class="hidden p-4 rounded-2xl bg-emerald-500/20 border border-emerald-400 text-emerald-200 text-center font-bold text-xs">
+                        Match registered! Room Code: <span id="displayRoomId" class="underline"></span>
+                    </div>
+                </div>
+
             </div>
-            <div>
-                <h3 class="font-bold text-white text-base mb-1">2. Disconnections</h3>
-                <p>If a player disconnects in the first 30 seconds, restart the game.</p>
-            </div>
-        </div>
+        </main>
     </div>
 
     <!-- FOOTER -->
-    <footer class="bg-slate-950/60 border-t border-slate-900 py-6 text-center text-xs text-slate-600">
-        <p>Fan-made Smash Karts 1v1 Platform • Not affiliated with SmashKarts.io</p>
+    <footer class="py-4 text-center text-xs font-bold text-blue-200/60">
+        Smash Karts 1v1 Arena • Custom Room Manager
     </footer>
 
-    <!-- JS & SOCKETS -->
+    <!-- LOGIC & SOCKETS -->
     <script>
         const socket = io();
+
+        // Local Storage Account System
+        let currentAccount = localStorage.getItem('smashUser') || '';
+        if (currentAccount) {
+            document.getElementById('accountUsername').value = currentAccount;
+            document.getElementById('hostNameInput').value = currentAccount;
+        }
+
+        function saveAccount() {
+            const val = document.getElementById('accountUsername').value.trim();
+            if (val) {
+                localStorage.setItem('smashUser', val);
+                document.getElementById('hostNameInput').value = val;
+                registerOrUpdatePlayer(val, 0);
+            }
+        }
+
+        // Leaderboard Local Memory
+        let playerStats = JSON.parse(localStorage.getItem('smashLeaderboard')) || [
+            { name: "KartKing", games: 48 },
+            { name: "TurboTerror", games: 36 },
+            { name: "NitroNinja", games: 29 },
+            { name: "BlastBandit", games: 18 }
+        ];
+
+        function renderLeaderboard() {
+            const list = document.getElementById('leaderboardList');
+            list.innerHTML = '';
+            
+            // Sort by most games played
+            playerStats.sort((a, b) => b.games - a.games);
+
+            playerStats.forEach((player, index) => {
+                const badgeIcons = ['🥇', '🥈', '🥉', '🛡️', '🛡️', '🛡️'];
+                const row = document.createElement('div');
+                row.className = 'smash-card rounded-2xl p-4 flex justify-between items-center text-white';
+                row.innerHTML = `
+                    <div class="flex items-center gap-4">
+                        <div class="w-10 h-10 rounded-xl bg-blue-950/60 flex items-center justify-center font-bold text-yellow-300">
+                            ${badgeIcons[index] || '🛡️'} #${index + 1}
+                        </div>
+                        <span class="font-black text-base sm:text-lg">${player.name}</span>
+                    </div>
+                    <div class="bg-blue-950/50 px-4 py-1.5 rounded-xl border border-white/10 text-xs font-bold text-blue-100">
+                        🎮 ${player.games} Matches Played
+                    </div>
+                `;
+                list.appendChild(row);
+            });
+        }
+
+        function registerOrUpdatePlayer(username, addGames = 1) {
+            let found = playerStats.find(p => p.name.toLowerCase() === username.toLowerCase());
+            if (found) {
+                found.games += addGames;
+            } else {
+                playerStats.push({ name: username, games: addGames });
+            }
+            localStorage.setItem('smashLeaderboard', JSON.stringify(playerStats));
+            renderLeaderboard();
+        }
 
         function showTab(tabId) {
             document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
@@ -151,11 +222,18 @@
         }
 
         function createLobby() {
-            const playerName = document.getElementById('playerName').value || "Player 1";
+            const player = document.getElementById('accountUsername').value || document.getElementById('hostNameInput').value || "GuestPlayer";
             const smashUrl = document.getElementById('smashUrl').value || "https://smashkarts.io";
-            const gameMode = document.getElementById('gameMode').value;
+            const winCondition = document.getElementById('winCondition').value;
 
-            socket.emit('create_room', { playerName, smashUrl, gameMode });
+            // Increment player count for leaderboard
+            registerOrUpdatePlayer(player, 1);
+
+            socket.emit('create_room', {
+                playerName: player,
+                smashUrl: smashUrl,
+                winCondition: winCondition
+            });
         }
 
         socket.on('online_count', (count) => {
@@ -166,9 +244,12 @@
             document.getElementById('roomDetails').classList.remove('hidden');
             document.getElementById('displayRoomId').innerText = data.roomId;
             if (data.lobby.smashUrl.includes('smashkarts.io')) {
-                setTimeout(() => window.open(data.lobby.smashUrl, '_blank'), 1200);
+                setTimeout(() => window.open(data.lobby.smashUrl, '_blank'), 1000);
             }
         });
+
+        // Initial Render
+        renderLeaderboard();
     </script>
 </body>
 </html>
