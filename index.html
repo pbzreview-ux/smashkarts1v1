@@ -10,37 +10,83 @@
 </head>
 <body class="min-h-screen flex flex-col justify-between overflow-x-hidden">
 
-    <!-- LOGIN / REGISTER MODAL -->
+    <!-- LOGIN / CREATE ACCOUNT MODAL -->
     <div id="authModal" class="fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
         <div class="w-full max-w-md bg-blue-900 border-2 border-yellow-400 rounded-3xl p-6 shadow-2xl">
-            <h2 class="font-bungee text-xl text-yellow-300 text-center mb-2">LOGIN TO PLAY</h2>
-            <p class="text-xs text-blue-200 text-center mb-6">Enter your account details to save your session.</p>
-            <form id="authForm" onsubmit="handleLogin(event)" class="space-y-4">
+            <div class="flex border-b border-white/20 mb-6 pb-2 gap-4 justify-center">
+                <button id="tabLoginBtn" onclick="toggleAuthTab('login')" class="font-bungee text-lg text-yellow-300 border-b-2 border-yellow-300 pb-1">LOG IN</button>
+                <button id="tabRegisterBtn" onclick="toggleAuthTab('register')" class="font-bungee text-lg text-white/50 pb-1 hover:text-white">CREATE ACCOUNT</button>
+            </div>
+
+            <!-- Login Form -->
+            <form id="loginForm" onsubmit="handleAuthSubmit(event, 'login')" class="space-y-4">
                 <div>
                     <label class="block text-xs font-bold uppercase text-blue-200 mb-1">Email Address</label>
-                    <input type="email" id="authEmail" required placeholder="player@example.com" class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
+                    <input type="email" id="loginEmail" required placeholder="player@example.com" class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
                 </div>
                 <div>
                     <label class="block text-xs font-bold uppercase text-blue-200 mb-1">Password</label>
-                    <input type="password" id="authPassword" required placeholder="••••••••" class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
+                    <input type="password" id="loginPassword" required placeholder="••••••••" class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
                 </div>
-                <button type="submit" class="btn-smash w-full py-3.5 rounded-2xl font-bungee text-lg text-white">LOGIN & PLAY</button>
+                <button type="submit" class="btn-smash w-full py-3.5 rounded-2xl font-bungee text-lg text-white">LOG IN & PLAY</button>
+            </form>
+
+            <!-- Register Form -->
+            <form id="registerForm" onsubmit="handleAuthSubmit(event, 'register')" class="space-y-4 hidden">
+                <div>
+                    <label class="block text-xs font-bold uppercase text-blue-200 mb-1">Username (Visible to others)</label>
+                    <input type="text" id="regUsername" required placeholder="SpeedRacer99" class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
+                </div>
+                <div>
+                    <label class="block text-xs font-bold uppercase text-blue-200 mb-1">Email Address</label>
+                    <input type="email" id="regEmail" required placeholder="player@example.com" class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
+                </div>
+                <div>
+                    <label class="block text-xs font-bold uppercase text-blue-200 mb-1">Password</label>
+                    <input type="password" id="regPassword" required placeholder="••••••••" class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
+                </div>
+                <button type="submit" class="btn-smash w-full py-3.5 rounded-2xl font-bungee text-lg text-white">CREATE ACCOUNT</button>
             </form>
         </div>
     </div>
 
-    <!-- 60-SECOND INACTIVITY LOGOUT WARNING MODAL -->
+    <!-- 60-SEC INACTIVITY WARNING MODAL -->
     <div id="inactivityModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
         <div class="w-full max-w-sm bg-blue-900 border-2 border-red-500 rounded-3xl p-6 text-center shadow-2xl">
             <h3 class="font-bungee text-lg text-red-400 mb-2">⚠️ SESSION EXPIRING</h3>
-            <p class="text-xs text-white mb-4">You have been inactive. You will be logged out in <strong id="countdownTimer" class="text-yellow-300 text-base">60</strong> seconds.</p>
+            <p class="text-xs text-white mb-4">You have been inactive. Logging out in <strong id="countdownTimer" class="text-yellow-300 text-base">60</strong> seconds.</p>
             <button onclick="AuthSession.resetInactivity()" class="btn-smash w-full py-3 rounded-xl font-bungee text-sm text-white">STAY LOGGED IN</button>
         </div>
     </div>
 
-    <!-- EMBEDDED GAME SCREEN WITH FLOATING OVERLAY CHAT -->
+    <!-- ONLINE USERS MODAL -->
+    <div id="onlineUsersModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
+        <div class="w-full max-w-md bg-blue-900 border-2 border-emerald-400 rounded-3xl p-6 shadow-2xl">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="font-bungee text-lg text-emerald-300">🟢 ONLINE PLAYERS</h3>
+                <button onclick="closeOnlineModal()" class="text-white hover:text-red-400 font-bold text-lg">✕</button>
+            </div>
+            <div id="onlineUsersList" class="max-h-80 overflow-y-auto space-y-2"></div>
+        </div>
+    </div>
+
+    <!-- DIRECT MESSAGE MODAL -->
+    <div id="dmModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
+        <div class="w-full max-w-md bg-blue-900 border-2 border-yellow-400 rounded-3xl p-6 shadow-2xl">
+            <div class="flex justify-between items-center mb-3">
+                <h3 id="dmTargetTitle" class="font-bungee text-sm text-yellow-300">💬 DM USER</h3>
+                <button onclick="closeDMModal()" class="text-white hover:text-red-400 font-bold text-lg">✕</button>
+            </div>
+            <div id="dmMessages" class="bg-blue-950/80 p-3 rounded-2xl h-48 overflow-y-auto space-y-2 text-xs mb-3 border border-white/10"></div>
+            <div class="flex gap-2">
+                <input type="text" id="dmInput" placeholder="Type message..." onkeydown="if(event.key==='Enter') sendDM()" class="smash-input flex-1 px-3 py-2 rounded-xl text-xs">
+                <button onclick="sendDM()" class="bg-yellow-400 text-blue-950 font-black px-4 py-2 rounded-xl text-xs">Send</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- EMBEDDED GAME SCREEN WITH OVERLAY CHAT -->
     <div id="gameScreen" class="hidden fixed inset-0 z-40 bg-black flex flex-col">
-        <!-- Top Bar -->
         <div class="bg-blue-900 border-b border-white/20 px-4 py-2 flex justify-between items-center z-10">
             <div class="flex items-center gap-3">
                 <span class="font-bungee text-yellow-300 text-lg">🎮 SMASH KARTS</span>
@@ -56,19 +102,16 @@
             </div>
         </div>
 
-        <!-- Fullscreen Game Frame -->
         <div class="relative flex-1 w-full h-full">
             <iframe id="smashFrame" src="" class="w-full h-full border-0" allow="autoplay; keyboard; fullscreen"></iframe>
 
-            <!-- FLOATING OVERLAY CHAT -->
+            <!-- FLOATING OVERLAY CHAT (Auto-Hides after 5s) -->
             <div id="chatOverlay" class="hidden-overlay bg-blue-900/90 border-2 border-yellow-400 rounded-2xl p-3 shadow-2xl flex flex-col">
                 <div class="flex justify-between items-center mb-2 border-b border-white/10 pb-1">
                     <span class="font-bungee text-xs text-yellow-300">💬 IN-GAME CHAT</span>
                     <button onclick="toggleOverlayChat()" class="text-white hover:text-red-400 font-bold text-xs">✕</button>
                 </div>
-                <div id="matchChatMessages" class="h-36 overflow-y-auto space-y-1.5 text-xs mb-2 pr-1">
-                    <p class="text-blue-300 italic text-[10px] text-center">Chat active! Auto-hides after 5s of inactivity.</p>
-                </div>
+                <div id="matchChatMessages" class="h-36 overflow-y-auto space-y-1.5 text-xs mb-2 pr-1"></div>
                 <div class="flex gap-1.5">
                     <input type="text" id="matchChatInput" placeholder="Type..." onkeydown="if(event.key==='Enter') sendMatchChatMessage()" class="smash-input flex-1 px-2.5 py-1.5 rounded-xl text-xs">
                     <button onclick="sendMatchChatMessage()" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 font-black px-3 py-1.5 rounded-xl text-xs">Send</button>
@@ -80,13 +123,22 @@
     <!-- MAIN DASHBOARD -->
     <div id="mainDashboard" class="min-h-screen flex flex-col justify-between">
         <header class="w-full px-6 py-4 flex justify-between items-center">
-            <div class="flex items-center gap-3 bg-blue-900/40 p-2 pr-4 rounded-2xl border border-white/20">
-                <div class="w-10 h-10 rounded-xl bg-yellow-400 flex items-center justify-center font-black text-blue-950 text-xl">👤</div>
-                <div>
-                    <span class="block text-[10px] font-bold uppercase text-blue-200">Logged In As</span>
-                    <span id="userDisplayTag" class="text-sm font-bold text-white">Player</span>
+            <div class="flex items-center gap-3">
+                <div class="flex items-center gap-2 bg-blue-900/40 p-2 pr-4 rounded-2xl border border-white/20">
+                    <div class="w-9 h-9 rounded-xl bg-yellow-400 flex items-center justify-center font-black text-blue-950 text-lg">👤</div>
+                    <div>
+                        <span class="block text-[10px] font-bold uppercase text-blue-200">Username</span>
+                        <span id="userDisplayTag" class="text-sm font-bold text-white">Player</span>
+                    </div>
                 </div>
+
+                <!-- Online Counter Button -->
+                <button onclick="openOnlineModal()" class="bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/50 px-3 py-2 rounded-2xl flex items-center gap-2 transition-all">
+                    <span class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                    <span id="onlineCountBadge" class="text-xs font-bold text-emerald-300">1 Online</span>
+                </button>
             </div>
+
             <button onclick="AuthSession.logout()" class="bg-red-600 hover:bg-red-500 text-white text-xs font-bold px-4 py-2 rounded-xl">Logout</button>
         </header>
 
@@ -98,7 +150,6 @@
                 <button id="btnNav2v2" onclick="switchMatchMode('2v2')" title="2v2 Matchmaking" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg">⚔️</button>
             </aside>
 
-            <!-- MAIN CONTENT ZONE -->
             <main class="flex-1 flex flex-col items-center">
                 <div class="mb-8">
                     <div class="bg-gradient-to-b from-yellow-300 to-yellow-500 border-4 border-white rounded-3xl px-10 py-3 shadow-2xl">
@@ -107,18 +158,18 @@
                 </div>
 
                 <div class="w-full max-w-4xl bg-blue-950/40 border-2 border-white/20 backdrop-blur-xl rounded-3xl p-6 shadow-2xl mb-8">
-                    <!-- LEADERBOARD TAB -->
-                    <div id="leaderboardTab" class="tab-content hidden space-y-3">
-                        <h2 class="font-bungee text-xl text-yellow-300 mb-4">TOP PLAYERS LEADERBOARD</h2>
+                    <!-- LEADERBOARD TAB (Top 5 Players by Matches Played) -->
+                    <div id="leaderboardTab" class="tab-content hidden space-y-4">
+                        <h2 class="font-bungee text-xl text-yellow-300 mb-2">🏆 TOP 5 PLAYERS (MOST GAMES PLAYED)</h2>
                         <div id="leaderboardList" class="space-y-2"></div>
                     </div>
 
-                    <!-- MATCHMAKING SETUP TAB -->
+                    <!-- MATCHMAKING TAB -->
                     <div id="setupTab" class="tab-content space-y-6">
                         <div class="flex justify-between items-center border-b border-white/10 pb-4">
                             <div>
                                 <h2 id="arenaTitle" class="font-bungee text-2xl text-white">1v1 MATCHMAKING</h2>
-                                <p id="arenaSubtitle" class="text-xs text-blue-200">Start or join a 1v1 match</p>
+                                <p id="arenaSubtitle" class="text-xs text-blue-200">Start or join a match</p>
                             </div>
                             <button onclick="openFindGameModal()" class="text-xs bg-emerald-500 hover:bg-emerald-400 text-white font-black px-5 py-2.5 rounded-xl uppercase">🔍 Public Lobbies</button>
                         </div>
@@ -167,7 +218,7 @@
                     <h4 class="font-bungee text-xs text-yellow-300 mb-2">💬 PRE-MATCH CHAT</h4>
                     <div id="preGameChatMessages" class="flex-1 overflow-y-auto space-y-2 text-xs pr-1 mb-3 min-h-[160px]"></div>
                     <div class="flex gap-2">
-                        <input type="text" id="preGameChatInput" placeholder="Plan teams or talk..." onkeydown="if(event.key==='Enter') sendPreGameChatMessage()" class="smash-input flex-1 px-3 py-2 rounded-xl text-xs">
+                        <input type="text" id="preGameChatInput" placeholder="Plan teams..." onkeydown="if(event.key==='Enter') sendPreGameChatMessage()" class="smash-input flex-1 px-3 py-2 rounded-xl text-xs">
                         <button onclick="sendPreGameChatMessage()" class="bg-yellow-400 text-blue-950 font-black px-4 py-2 rounded-xl text-xs uppercase">Send</button>
                     </div>
                 </div>
@@ -175,7 +226,7 @@
         </div>
     </div>
 
-    <!-- MAKE CODE EMBEDDED MODAL -->
+    <!-- MAKE CODE MODAL WITH COPY & PLAY -->
     <div id="makeCodeModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
         <div class="w-full max-w-3xl bg-blue-900 border-2 border-white/30 rounded-3xl p-5 shadow-2xl flex flex-col h-[85vh]">
             <div class="flex justify-between items-center mb-3">
@@ -185,7 +236,10 @@
             <div class="flex-1 bg-black rounded-2xl overflow-hidden mb-3">
                 <iframe id="makeCodeIframe" src="" class="w-full h-full border-0"></iframe>
             </div>
-            <button onclick="closeMakeCodeModal()" class="bg-blue-800 text-white font-bold py-2 rounded-xl text-xs">Close</button>
+            <div class="flex gap-2">
+                <input type="text" id="copyCodeInput" placeholder="Paste created room link/code..." class="smash-input flex-1 px-3 py-2 rounded-xl text-xs font-bold">
+                <button onclick="copyAndPlay()" class="btn-smash px-5 py-2 rounded-xl font-bungee text-xs text-white">📋 COPY & PLAY NOW</button>
+            </div>
         </div>
     </div>
 
@@ -206,8 +260,9 @@
         let currentMode = '1v1';
         let activeRoomData = null;
         let chatInactivityTimer = null;
+        let activeDMTargetSocketId = null;
 
-        /* INACTIVITY SESSION MANAGER */
+        /* AUTH & SESSION MANAGEMENT */
         const AuthSession = {
             INACTIVITY_LIMIT_MS: 30 * 60 * 1000,
             WARNING_WINDOW_MS: 60 * 1000,
@@ -215,8 +270,8 @@
             lastActivity: Date.now(),
             isWarningShown: false,
 
-            login(email) {
-                const session = { email, token: "token_" + Date.now() };
+            login(email, username) {
+                const session = { email, username: username || email.split('@')[0], token: "token_" + Date.now() };
                 localStorage.setItem("user_session", JSON.stringify(session));
                 document.getElementById("authModal").classList.add("hidden");
                 this.startTracker();
@@ -284,22 +339,153 @@
             }
         };
 
-        function handleLogin(e) {
+        function toggleAuthTab(type) {
+            const loginForm = document.getElementById("loginForm");
+            const regForm = document.getElementById("registerForm");
+            const tabLogin = document.getElementById("tabLoginBtn");
+            const tabReg = document.getElementById("tabRegisterBtn");
+
+            if (type === 'login') {
+                loginForm.classList.remove("hidden");
+                regForm.classList.add("hidden");
+                tabLogin.className = "font-bungee text-lg text-yellow-300 border-b-2 border-yellow-300 pb-1";
+                tabReg.className = "font-bungee text-lg text-white/50 pb-1 hover:text-white";
+            } else {
+                loginForm.classList.add("hidden");
+                regForm.classList.remove("hidden");
+                tabReg.className = "font-bungee text-lg text-yellow-300 border-b-2 border-yellow-300 pb-1";
+                tabLogin.className = "font-bungee text-lg text-white/50 pb-1 hover:text-white";
+            }
+        }
+
+        function handleAuthSubmit(e, type) {
             e.preventDefault();
-            const email = document.getElementById("authEmail").value;
-            AuthSession.login(email);
+            if (type === 'login') {
+                const email = document.getElementById("loginEmail").value;
+                AuthSession.login(email);
+            } else {
+                const username = document.getElementById("regUsername").value;
+                const email = document.getElementById("regEmail").value;
+                AuthSession.login(email, username);
+            }
         }
 
         function updateUserUI() {
             const user = AuthSession.getUser();
             if (user) {
-                const name = user.email.split('@')[0];
-                document.getElementById("userDisplayTag").innerText = name;
+                document.getElementById("userDisplayTag").innerText = user.username;
                 socket.emit("set_user_session", user);
             }
         }
 
-        /* 5-SECOND INACTIVITY CHAT OVERLAY */
+        /* ONLINE PLAYERS & MATCH REQUESTS */
+        function openOnlineModal() {
+            document.getElementById('onlineUsersModal').classList.remove('hidden');
+        }
+
+        function closeOnlineModal() {
+            document.getElementById('onlineUsersModal').classList.add('hidden');
+        }
+
+        socket.on('online_users_update', ({ count, users }) => {
+            document.getElementById('onlineCountBadge').innerText = `${count} Online`;
+            const container = document.getElementById('onlineUsersList');
+            container.innerHTML = '';
+
+            const currentUser = AuthSession.getUser();
+            users.forEach(u => {
+                if (u.id === socket.id) return; // Skip self
+                const row = document.createElement('div');
+                row.className = 'flex justify-between items-center bg-blue-950/80 p-3 rounded-2xl border border-white/10';
+                row.innerHTML = `
+                    <span class="font-bold text-xs text-white">👤 ${u.username}</span>
+                    <div class="flex gap-2">
+                        <button onclick="openDMModal('${u.id}', '${u.username}')" class="bg-blue-600 hover:bg-blue-500 text-white text-[10px] font-bold px-2.5 py-1 rounded-lg">💬 Message</button>
+                        <button onclick="requestMatch('${u.id}')" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 text-[10px] font-black px-2.5 py-1 rounded-lg uppercase">⚔️ Request Match</button>
+                    </div>
+                `;
+                container.appendChild(row);
+            });
+        });
+
+        function requestMatch(targetSocketId) {
+            const user = AuthSession.getUser();
+            const smashUrl = document.getElementById('smashUrl').value || 'https://smashkarts.io';
+            socket.emit('send_match_challenge', {
+                targetSocketId,
+                fromUsername: user ? user.username : 'Player',
+                mode: currentMode,
+                smashUrl
+            });
+            alert('Match request sent!');
+        }
+
+        socket.on('receive_match_challenge', (data) => {
+            if (confirm(`${data.fromUsername} challenged you to a ${data.mode} match! Accept?`)) {
+                const user = AuthSession.getUser();
+                socket.emit('accept_match_challenge', {
+                    challengerSocketId: data.challengerSocketId,
+                    targetUsername: user ? user.username : 'Player'
+                });
+            }
+        });
+
+        socket.on('challenge_game_start', (room) => {
+            activeRoomData = room;
+            enterGameFromLobby();
+        });
+
+        /* DIRECT MESSAGING */
+        function openDMModal(targetSocketId, targetUsername) {
+            activeDMTargetSocketId = targetSocketId;
+            document.getElementById('dmTargetTitle').innerText = `💬 MESSAGE WITH ${targetUsername}`;
+            document.getElementById('dmMessages').innerHTML = '';
+            document.getElementById('dmModal').classList.remove('hidden');
+        }
+
+        function closeDMModal() {
+            document.getElementById('dmModal').classList.add('hidden');
+            activeDMTargetSocketId = null;
+        }
+
+        function sendDM() {
+            const input = document.getElementById('dmInput');
+            const user = AuthSession.getUser();
+            if (input.value.trim() && activeDMTargetSocketId) {
+                socket.emit('send_direct_message', {
+                    targetSocketId: activeDMTargetSocketId,
+                    message: input.value.trim(),
+                    senderUsername: user ? user.username : 'Player'
+                });
+                document.getElementById('dmMessages').innerHTML += `<div class="text-right"><span class="bg-yellow-400 text-blue-950 font-bold px-2 py-1 rounded-lg text-[10px]">Me: ${input.value.trim()}</span></div>`;
+                input.value = '';
+            }
+        }
+
+        socket.on('receive_direct_message', (data) => {
+            openDMModal(data.senderSocketId, data.senderUsername);
+            document.getElementById('dmMessages').innerHTML += `<div class="text-left"><span class="bg-blue-800 text-white font-bold px-2 py-1 rounded-lg text-[10px]">${data.senderUsername}: ${data.message}</span></div>`;
+        });
+
+        /* LEADERBOARD UPDATE */
+        socket.on('leaderboard_update', (topPlayers) => {
+            const list = document.getElementById('leaderboardList');
+            list.innerHTML = topPlayers.length === 0 ? `<p class="text-xs text-blue-200">No matches recorded yet.</p>` : '';
+            topPlayers.forEach((p, idx) => {
+                const item = document.createElement('div');
+                item.className = 'flex justify-between items-center bg-blue-900/60 border border-white/10 p-3 rounded-2xl';
+                item.innerHTML = `
+                    <div class="flex items-center gap-3">
+                        <span class="font-bungee text-sm ${idx===0 ? 'text-yellow-300' : 'text-white'}">#${idx + 1}</span>
+                        <span class="font-bold text-xs text-white">👤 ${p.username}</span>
+                    </div>
+                    <span class="font-black text-xs text-yellow-300">${p.matches} Games Played</span>
+                `;
+                list.appendChild(item);
+            });
+        });
+
+        /* 5-SEC CHAT OVERLAY AUTO-HIDE */
         function triggerChatActivityTimer() {
             const overlay = document.getElementById('chatOverlay');
             overlay.classList.remove('hidden-overlay');
@@ -326,7 +512,29 @@
 
         document.getElementById('matchChatInput').addEventListener('input', triggerChatActivityTimer);
 
-        /* MATCHMAKING & TABS */
+        /* COPY & PLAY IN MAKE CODE MODAL */
+        function openMakeCodeModal() {
+            document.getElementById('makeCodeIframe').src = "https://smashkarts.io";
+            document.getElementById('makeCodeModal').classList.remove('hidden');
+        }
+
+        function closeMakeCodeModal() {
+            document.getElementById('makeCodeIframe').src = "";
+            document.getElementById('makeCodeModal').classList.add('hidden');
+        }
+
+        function copyAndPlay() {
+            const codeInput = document.getElementById('copyCodeInput').value;
+            if (!codeInput.trim()) {
+                alert("Please paste the generated Smash Karts code or link into the box!");
+                return;
+            }
+            document.getElementById('smashUrl').value = codeInput;
+            closeMakeCodeModal();
+            createLobby();
+        }
+
+        /* MATCHMAKING & EMBEDDED GAME SMOOTH EXIT */
         function switchMatchMode(mode) {
             currentMode = mode;
             showTab('setupTab');
@@ -342,19 +550,9 @@
             document.getElementById(tabId).classList.remove('hidden');
         }
 
-        function openMakeCodeModal() {
-            document.getElementById('makeCodeIframe').src = "https://smashkarts.io";
-            document.getElementById('makeCodeModal').classList.remove('hidden');
-        }
-
-        function closeMakeCodeModal() {
-            document.getElementById('makeCodeIframe').src = "";
-            document.getElementById('makeCodeModal').classList.add('hidden');
-        }
-
         function createLobby() {
             const user = AuthSession.getUser();
-            const playerName = user ? user.email.split('@')[0] : "Player";
+            const playerName = user ? user.username : "Player";
             const smashUrl = document.getElementById('smashUrl').value || "https://smashkarts.io";
             const winCondition = document.getElementById('winCondition').value;
 
@@ -388,24 +586,37 @@
         function enterGameFromLobby() {
             if (!activeRoomData) return;
             closePreGameLobbyModal();
+
+            const user = AuthSession.getUser();
+            if (user) {
+                socket.emit('record_match_played', user.username);
+            }
+
+            const gameScreen = document.getElementById('gameScreen');
+            gameScreen.classList.remove('game-fade-exit', 'hidden');
             document.getElementById('smashFrame').src = activeRoomData.smashUrl;
             document.getElementById('gameModeBadge').innerText = activeRoomData.mode;
-            document.getElementById('gameScreen').classList.remove('hidden');
             document.getElementById('mainDashboard').classList.add('hidden');
             triggerChatActivityTimer();
         }
 
+        /* SMOOTH TRANSITION EXIT */
         function leaveEmbeddedGame() {
-            document.getElementById('smashFrame').src = '';
-            document.getElementById('gameScreen').classList.add('hidden');
-            document.getElementById('mainDashboard').classList.remove('hidden');
+            const gameScreen = document.getElementById('gameScreen');
+            gameScreen.classList.add('game-fade-exit');
+
+            setTimeout(() => {
+                document.getElementById('smashFrame').src = '';
+                gameScreen.classList.add('hidden');
+                document.getElementById('mainDashboard').classList.remove('hidden');
+            }, 350); // Matches CSS transition duration
         }
 
         function sendPreGameChatMessage() {
             const input = document.getElementById('preGameChatInput');
             const user = AuthSession.getUser();
             if (input.value.trim() && activeRoomData) {
-                socket.emit('send_match_chat', { roomId: activeRoomData.roomId, message: input.value.trim(), senderName: user.email.split('@')[0] });
+                socket.emit('send_match_chat', { roomId: activeRoomData.roomId, message: input.value.trim(), senderName: user.username });
                 input.value = '';
             }
         }
@@ -414,7 +625,7 @@
             const input = document.getElementById('matchChatInput');
             const user = AuthSession.getUser();
             if (input.value.trim() && activeRoomData) {
-                socket.emit('send_match_chat', { roomId: activeRoomData.roomId, message: input.value.trim(), senderName: user.email.split('@')[0] });
+                socket.emit('send_match_chat', { roomId: activeRoomData.roomId, message: input.value.trim(), senderName: user.username });
                 input.value = '';
                 triggerChatActivityTimer();
             }
@@ -446,7 +657,6 @@
             });
         });
 
-        /* INIT APP */
         document.addEventListener("DOMContentLoaded", () => {
             if (AuthSession.isLoggedIn()) {
                 document.getElementById("authModal").classList.add("hidden");
