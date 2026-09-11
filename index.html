@@ -1,116 +1,174 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>Smash Karts 1v1 Matchmaker</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smash Karts 1v1 Arena</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="/socket.io/socket.io.js"></script>
+    <link rel="stylesheet" href="style.css">
 </head>
-<body class="bg-[#121212] text-white flex items-center justify-center min-h-screen">
+<body class="text-white min-h-screen flex flex-col justify-between selection:bg-red-500 selection:text-white">
 
-  <div class="bg-[#1e1e1e] border border-gray-800 rounded-2xl p-8 max-w-md w-full text-center shadow-2xl">
-    <h1 class="text-3xl font-extrabold text-[#ff4757] tracking-wider mb-2">SMASH KARTS 1V1</h1>
-    <p class="text-gray-400 text-sm mb-6">Online Matchmaking Platform</p>
+    <!-- NAVIGATION BAR -->
+    <nav class="bg-slate-950/80 border-b border-red-500/20 px-6 py-4 sticky top-0 z-50 backdrop-blur-md">
+        <div class="max-w-6xl mx-auto flex flex-col sm:flex-row justify-between items-center gap-4">
+            <a href="#" onclick="showTab('homeTab')" class="text-2xl font-bungee text-transparent bg-clip-text bg-gradient-to-r from-red-500 via-orange-400 to-yellow-400">
+                🏎️ SMASH 1v1
+            </a>
+            <div class="flex items-center gap-3">
+                <span class="text-xs bg-red-500/20 border border-red-500/40 text-red-400 px-3 py-1 rounded-full font-bold">
+                    🟢 Online: <span id="onlineCount">1</span>
+                </span>
+                <div class="flex gap-2">
+                    <button onclick="showTab('homeTab')" class="px-3 py-2 text-xs font-bold rounded-xl bg-slate-900 border border-slate-700 hover:border-red-500/40">Home</button>
+                    <button onclick="showTab('setupTab')" class="px-3 py-2 text-xs font-bold rounded-xl bg-red-600 shadow-lg shadow-red-600/30">Create 1v1</button>
+                    <button onclick="showTab('leaderboardTab')" class="px-3 py-2 text-xs font-bold rounded-xl bg-slate-900 border border-slate-700 hover:border-red-500/40">Leaderboard</button>
+                    <button onclick="showTab('rulesTab')" class="px-3 py-2 text-xs font-bold rounded-xl bg-slate-900 border border-slate-700 hover:border-red-500/40">Rules</button>
+                </div>
+            </div>
+        </div>
+    </nav>
 
-    <!-- Start Button -->
-    <div id="start-box">
-      <button onclick="startMatchmaking()" 
-              class="w-full bg-[#ff4757] hover:bg-[#e03e4e] text-white font-extrabold py-4 text-xl rounded-xl transition duration-200 shadow-lg tracking-wide">
-        PLAY 1V1
-      </button>
+    <!-- SECTION 1: HOME PAGE -->
+    <div id="homeTab" class="tab-content max-w-4xl mx-auto px-6 py-12 text-center w-full">
+        <h1 class="text-4xl sm:text-6xl font-bungee text-white mb-6 leading-tight">
+            SETTLE THE SCORE IN <br>
+            <span class="text-transparent bg-clip-text bg-gradient-to-r from-red-500 to-orange-400">1v1 SMASH KARTS</span>
+        </h1>
+        <p class="text-slate-400 text-sm sm:text-base max-w-xl mx-auto mb-8">
+            Create custom private lobbies, choose custom options, and challenge players on the competitive ladder.
+        </p>
+        <button onclick="showTab('setupTab')" class="btn-arcade px-8 py-4 text-white font-black text-xl rounded-2xl uppercase tracking-wider">
+            ⚔️ Open 1v1 Match Setup
+        </button>
     </div>
 
-    <!-- Searching Loader -->
-    <div id="loading-box" class="hidden py-6">
-      <div class="inline-block animate-spin rounded-full h-12 w-12 border-4 border-[#ff4757] border-t-transparent mb-4"></div>
-      <p class="text-lg font-bold text-gray-200">Finding Opponent...</p>
+    <!-- SECTION 2: CREATE 1v1 MATCH SETUP -->
+    <div id="setupTab" class="tab-content hidden max-w-3xl mx-auto px-6 py-12 w-full">
+        <div class="text-center mb-8">
+            <h1 class="text-3xl sm:text-5xl font-bungee text-white mb-2">🎮 CUSTOM 1v1 SETUP</h1>
+            <p class="text-slate-400 text-xs sm:text-sm">Configure arena rules, weapons, and generate match invitations.</p>
+        </div>
+
+        <div class="glass-panel p-6 sm:p-8 rounded-3xl space-y-6">
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                    <label class="block text-xs font-bold uppercase text-slate-300 mb-2">Host Player Name</label>
+                    <input type="text" id="playerName" placeholder="SpeedyKart99" class="custom-input w-full px-4 py-3 rounded-xl text-sm">
+                </div>
+                <div>
+                    <label class="block text-xs font-bold uppercase text-slate-300 mb-2">Smash Karts Room Link</label>
+                    <input type="text" id="smashUrl" placeholder="https://smashkarts.io/..." class="custom-input w-full px-4 py-3 rounded-xl text-sm">
+                </div>
+            </div>
+
+            <div>
+                <label class="block text-xs font-bold uppercase text-slate-300 mb-2">Game Mode</label>
+                <select id="gameMode" class="custom-input w-full px-4 py-3 rounded-xl text-sm">
+                    <option value="Free For All (1v1 Deathmatch)">⚔️ Free For All (1v1 Deathmatch)</option>
+                    <option value="Arms Race (Weapon Swap)">🚀 Arms Race (Weapon Swap)</option>
+                    <option value="Gem Collector">💎 Gem Collector</option>
+                    <option value="Capture The Flag">🚩 Capture The Flag</option>
+                    <option value="Sudden Death (1 Life)">💀 Sudden Death (1 Life)</option>
+                </select>
+            </div>
+
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                    <label class="block text-xs font-bold uppercase text-slate-300 mb-2">Win Condition</label>
+                    <select id="winCondition" class="custom-input w-full px-4 py-3 rounded-xl text-sm">
+                        <option value="First to 5 Smashes">First to 5 Smashes</option>
+                        <option value="First to 10 Smashes">First to 10 Smashes</option>
+                        <option value="3 Minute Limit">3 Minute Time Limit</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-xs font-bold uppercase text-slate-300 mb-2">Arena Map</label>
+                    <select id="mapSelect" class="custom-input w-full px-4 py-3 rounded-xl text-sm">
+                        <option value="Random Map">🎲 Random Map</option>
+                        <option value="Graveyard">☠️ Graveyard</option>
+                        <option value="Lava Pit">🌋 Lava Pit</option>
+                        <option value="Space Station">🚀 Space Station</option>
+                    </select>
+                </div>
+            </div>
+
+            <button onclick="createLobby()" class="btn-arcade w-full py-4 text-white font-black text-base rounded-2xl uppercase tracking-wider">
+                🚀 Launch Custom 1v1 Room
+            </button>
+
+            <div id="roomDetails" class="hidden p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs text-center">
+                Room Created! Room ID: <span id="displayRoomId" class="font-bold underline"></span>
+            </div>
+        </div>
     </div>
 
-    <!-- Host Screen: Create & Send Link -->
-    <div id="host-box" class="hidden py-4">
-      <h2 class="text-xl font-bold text-yellow-400 mb-2">Match Found! (You are Host)</h2>
-      <p class="text-xs text-gray-400 mb-4">Create a room on Smash Karts and paste the link below:</p>
-      
-      <input type="text" id="room-input" placeholder="https://smashkarts.io/..." 
-             class="w-full bg-[#2a2a2a] text-white px-4 py-3 rounded-lg border border-gray-700 mb-3 focus:outline-none focus:border-[#ff4757] text-sm">
-      
-      <button onclick="sendLink()" 
-              class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg transition">
-        SEND LINK TO OPPONENT
-      </button>
+    <!-- SECTION 3: LEADERBOARD -->
+    <div id="leaderboardTab" class="tab-content hidden max-w-3xl mx-auto px-6 py-12 w-full">
+        <h1 class="text-3xl font-bungee text-yellow-400 mb-6 text-center">🏆 1v1 LEADERBOARD</h1>
+        <div class="glass-panel rounded-2xl overflow-hidden">
+            <table class="w-full text-left">
+                <thead class="bg-slate-900/80 text-slate-400 text-xs uppercase">
+                    <tr><th class="p-4">Rank</th><th class="p-4">Player</th><th class="p-4">Wins</th><th class="p-4">Win Rate</th></tr>
+                </thead>
+                <tbody class="divide-y divide-slate-800 text-sm">
+                    <tr><td class="p-4 font-bold text-yellow-400">#1 🥇</td><td class="p-4 font-bold">SpeedyKart99</td><td class="p-4 text-emerald-400">42</td><td class="p-4">88%</td></tr>
+                    <tr><td class="p-4 font-bold text-slate-300">#2 🥈</td><td class="p-4 font-bold">RedShellPro</td><td class="p-4 text-emerald-400">35</td><td class="p-4">79%</td></tr>
+                    <tr><td class="p-4 font-bold text-amber-600">#3 🥉</td><td class="p-4 font-bold">DriftKing</td><td class="p-4 text-emerald-400">29</td><td class="p-4">71%</td></tr>
+                </tbody>
+            </table>
+        </div>
     </div>
 
-    <!-- Guest Screen: Waiting for Link -->
-    <div id="guest-waiting-box" class="hidden py-4">
-      <div class="inline-block animate-spin rounded-full h-8 w-8 border-4 border-blue-500 border-t-transparent mb-2"></div>
-      <p class="text-md font-semibold text-gray-300">Match Found!</p>
-      <p class="text-xs text-gray-500">Waiting for host to create room link...</p>
+    <!-- SECTION 4: RULES -->
+    <div id="rulesTab" class="tab-content hidden max-w-2xl mx-auto px-6 py-12 w-full">
+        <h1 class="text-3xl font-bungee text-red-500 mb-6 text-center">📜 MATCH RULES</h1>
+        <div class="glass-panel p-6 rounded-2xl space-y-4 text-slate-300 text-sm">
+            <div class="border-b border-slate-800 pb-3">
+                <h3 class="font-bold text-white text-base mb-1">1. Match Setup</h3>
+                <p>Rooms must be set to 2 players max with standard 3-minute round timers.</p>
+            </div>
+            <div>
+                <h3 class="font-bold text-white text-base mb-1">2. Disconnections</h3>
+                <p>If a player disconnects in the first 30 seconds, restart the game.</p>
+            </div>
+        </div>
     </div>
 
-    <!-- Both Players Screen: Join Room -->
-    <div id="join-box" class="hidden py-4">
-      <h2 class="text-2xl font-bold mb-2 text-green-400">Match Ready!</h2>
-      <p class="text-sm text-gray-300 mb-6">Click below to open your Smash Karts game:</p>
-      
-      <button onclick="joinGame()" 
-              class="w-full bg-green-500 hover:bg-green-600 text-white font-extrabold py-4 rounded-xl text-lg transition shadow-lg">
-        JOIN MATCH NOW
-      </button>
-    </div>
+    <!-- FOOTER -->
+    <footer class="bg-slate-950/60 border-t border-slate-900 py-6 text-center text-xs text-slate-600">
+        <p>Fan-made Smash Karts 1v1 Platform • Not affiliated with SmashKarts.io</p>
+    </footer>
 
-  </div>
+    <!-- JS & SOCKETS -->
+    <script>
+        const socket = io();
 
-  <script>
-    const socket = io();
-    let currentMatchId = null;
-    let targetRoomLink = '';
+        function showTab(tabId) {
+            document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
+            document.getElementById(tabId).classList.remove('hidden');
+        }
 
-    function startMatchmaking() {
-      document.getElementById('start-box').classList.add('hidden');
-      document.getElementById('loading-box').classList.remove('hidden');
-      socket.emit('join_queue');
-    }
+        function createLobby() {
+            const playerName = document.getElementById('playerName').value || "Player 1";
+            const smashUrl = document.getElementById('smashUrl').value || "https://smashkarts.io";
+            const gameMode = document.getElementById('gameMode').value;
 
-    socket.on('match_found', (data) => {
-      document.getElementById('loading-box').classList.add('hidden');
-      currentMatchId = data.matchId;
+            socket.emit('create_room', { playerName, smashUrl, gameMode });
+        }
 
-      if (data.role === 'host') {
-        document.getElementById('host-box').classList.remove('hidden');
-      } else {
-        document.getElementById('guest-waiting-box').classList.remove('hidden');
-      }
-    });
+        socket.on('online_count', (count) => {
+            document.getElementById('onlineCount').innerText = count;
+        });
 
-    function sendLink() {
-      const rawInput = document.getElementById('room-input').value.trim();
-      
-      // Automatically extracts only the https:// web address
-      const match = rawInput.match(/https?:\/\/[^\s]+/);
-      
-      if (!match) {
-        alert("Please paste a valid Smash Karts link (must include https://)");
-        return;
-      }
-
-      const cleanLink = match[0];
-      socket.emit('send_room_link', { matchId: currentMatchId, link: cleanLink });
-    }
-
-    socket.on('receive_room_link', (data) => {
-      targetRoomLink = data.link;
-      document.getElementById('host-box').classList.add('hidden');
-      document.getElementById('guest-waiting-box').classList.add('hidden');
-      document.getElementById('join-box').classList.remove('hidden');
-    });
-
-    function joinGame() {
-      if (targetRoomLink) {
-        window.open(targetRoomLink, '_blank');
-      } else {
-        alert("Room link not found!");
-      }
-    }
-  </script>
+        socket.on('room_created', (data) => {
+            document.getElementById('roomDetails').classList.remove('hidden');
+            document.getElementById('displayRoomId').innerText = data.roomId;
+            if (data.lobby.smashUrl.includes('smashkarts.io')) {
+                setTimeout(() => window.open(data.lobby.smashUrl, '_blank'), 1200);
+            }
+        });
+    </script>
 </body>
 </html>
