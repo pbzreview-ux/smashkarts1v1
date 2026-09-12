@@ -1,389 +1,476 @@
-const express = require('express');
-const http = require('http');
-const { Server } = require('socket.io');
-const path = require('path');
+const socket = io();
 
-const app = express();
-const server = http.createServer(app);
-const io = new Server(server, {
-    cors: { origin: "*" }
+// Global State
+let currentMatchMode = '1v1';
+let activeRoomData = null;
+let currentActiveDMUser = null;
+let unreadMessagesCount = 0;
+let chatActivityTimer = null;
+
+const SMASH_KARTS_BASE_URL = "https://smashkarts.io";
+
+// Auth & Session Management
+const AuthSession = {
+    getUser() {
+        const userStr = localStorage.getItem('smash_user');
+        return userStr ? JSON.parse(userStr) : null;
+    },
+    setUser(user) {
+        localStorage.setItem('smash_user', JSON.stringify(user));
+        this.updateUI();
+    },
+    logout() {
+        localStorage.removeItem('smash_user');
+        window.location.reload();
+    },
+    updateUI() {
+        const user = this.getUser();
+        if (user) {
+            document.getElementById('authModal').classList.add('hidden');
+            document.getElementById('userDisplayTag').innerText = user.username;
+            socket.emit('user_online', user.username);
+        } else {
+            document.getElementById('authModal').classList.remove('hidden');
+        }
+    },
+    resetInactivity() {
+        document.getElementById('inactivityModal').classList.add('hidden');
+    }
+};
+
+// Initialization on DOM Content Loaded
+document.addEventListener('DOMContentLoaded', () => {
+    const user = AuthSession.getUser();
+    AuthSession.updateUI();
+    if (user) {
+        socket.emit('request_leaderboard');
+    }
+    
+    // Set default tab
+    showTab('setupTab');
 });
 
-app.use(express.static(path.join(__dirname, '/')));
-
-const connectedPlayers = {}; 
-const activeRoomsMap = new Map(); 
-const playerStats = {}; 
-const directMessageStore = {}; 
-
-function escapeHTML(str) {
-    if (!str) return '';
-    return String(str)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#039;');
+// Toast Notification System
+function showToast(message, icon = "⚡") {
+    const container = document.getElementById('toastContainer');
+    const toast = document.createElement('div');
+    toast.className = "bg-blue-900 border-2 border-yellow-400 text-white px-4 py-3 rounded-2xl shadow-2xl flex items-center gap-3 animate-bounce text-xs font-bold";
+    toast.innerHTML = `<span class="text-lg">${icon}</span> <span>${message}</span>`;
+    container.appendChild(toast);
+    setTimeout(() => {
+        toast.remove();
+    }, 4000);
 }
 
-function sanitizeUsername(name) {
-    if (!name || typeof name !== 'string') return 'Player';
-    const trimmed = name.trim();
-    if (!trimmed || trimmed.toLowerCase() === 'undefined' || trimmed.toLowerCase() === 'null') {
-        return 'Player';
+// Authentication Tabs & Handlers
+function toggleAuthTab(tab) {
+    const loginForm = document.getElementById('loginForm');
+    const registerForm = document.getElementById('registerForm');
+    const loginBtn = document.getElementById('tabLoginBtn');
+    const regBtn = document.getElementById('tabRegisterBtn');
+
+    if (tab === 'login') {
+        loginForm.classList.remove('hidden');
+        registerForm.classList.add('hidden');
+        loginBtn.className = "font-bungee text-lg text-yellow-300 border-b-2 border-yellow-300 pb-1";
+        regBtn.className = "font-bungee text-lg text-white/50 pb-1 hover:text-white";
+    } else {
+        loginForm.classList.add('hidden');
+        registerForm.classList.remove('hidden');
+        regBtn.className = "font-bungee text-lg text-yellow-300 border-b-2 border-yellow-300 pb-1";
+        loginBtn.className = "font-bungee text-lg text-white/50 pb-1 hover:text-white";
     }
-    return escapeHTML(trimmed.slice(0, 20));
 }
 
-function extractSmashUrl(rawInput) {
-    if (!rawInput) return null;
-    let text = String(rawInput).trim();
-    
-    if (text.includes('ttps://')) {
-        text = text.replace('ttps://', 'https://');
+function handleAuthSubmit(event, type) {
+    event.preventDefault();
+    let username, email, password;
+
+    if (type === 'login') {
+        username = document.getElementById('loginUsername').value.trim();
+        email = document.getElementById('loginEmail').value.trim();
+        password = document.getElementById('loginPassword').value.trim();
+    } else {
+        username = document.getElementById('regUsername').value.trim();
+        email = document.getElementById('regEmail').value.trim();
+        password = document.getElementById('regPassword').value.trim();
     }
 
-    const linkMatch = text.match(/https?:\/\/(www\.)?smashkarts\.io\/link\/\?[^\s]+/i);
-    if (linkMatch) {
-        return linkMatch[0];
-    }
-    
-    const roomMatch = text.match(/Room:\s*([A-Za-z0-9]+)/i);
-    if (roomMatch) {
-        return `https://smashkarts.io/link/?room=${encodeURIComponent(roomMatch[1])}`;
+    if (!username || !email || !password) {
+        showToast("Please fill out all fields!", "❌");
+        return;
     }
 
-    if (text.length > 0 && !text.includes(' ') && !text.includes('\n') && !text.includes('/')) {
-        return `https://smashkarts.io/link/?room=${encodeURIComponent(text)}`;
+    socket.emit('auth_user', { type, username, email, password });
+}
+
+socket.on('auth_success', (user) => {
+    AuthSession.setUser(user);
+    showToast(`Welcome back, ${user.username}!`, "🎉");
+    socket.emit('request_leaderboard');
+});
+
+socket.on('auth_error', (msg) => {
+    showToast(msg, "❌");
+});
+
+// Settings & Gameplay Mode
+function openSettingsModal() {
+    document.getElementById('settingsModal').classList.remove('hidden');
+    const modeSelect = document.getElementById('gameplayModeSelect');
+    if (modeSelect) {
+        modeSelect.value = localStorage.getItem('gameplay_mode') || 'popup';
     }
-    
-    return null;
 }
 
-function moderateText(text) {
-    if (!text) return '';
-    const BANNED_WORDS = ['badword1', 'badword2', 'hate', 'spam'];
-    let cleanText = escapeHTML(text);
-    BANNED_WORDS.forEach(word => {
-        const regex = new RegExp(`\\b${word}\\b`, 'gi');
-        cleanText = cleanText.replace(regex, '***');
-    });
-    return cleanText;
+function closeSettingsModal() {
+    document.getElementById('settingsModal').classList.add('hidden');
 }
 
-function getDMKey(u1, u2) {
-    return [u1, u2].sort().join('__DM__');
+function updateGameplayMode(mode) {
+    localStorage.setItem('gameplay_mode', mode);
+    showToast(`Gameplay mode updated to: ${mode === 'popup' ? 'Popup Window' : 'Type in Code'}`, "⚙️");
 }
 
-function findSocketByUsername(username) {
-    return Object.values(connectedPlayers).find(
-        p => p.username.toLowerCase() === username.toLowerCase()
-    );
+function extractRoomCodeClient(url) {
+    if (!url) return 'us674723';
+    const match = url.match(/room=([A-Za-z0-9]+)/i);
+    if (match) return match[1];
+    return url.split('/').pop() || 'us674723';
 }
 
-function broadcastPublicRooms() {
-    const roomsList = Array.from(activeRoomsMap.values());
-    io.emit('public_rooms_update', roomsList);
+function toggleGameHeaderDropdown() {
+    const dropdown = document.getElementById('gameHeaderDropdown');
+    if (dropdown) {
+        dropdown.classList.toggle('hidden');
+    }
 }
 
-io.on('connection', (socket) => {
-    connectedPlayers[socket.id] = { 
-        id: socket.id, 
-        username: "Guest", 
-        email: null,
-        isAuthenticated: false, 
-        isOnline: true,
-        friends: new Set(),
-        friendRequests: new Set()
+function toggleOnlineStatus(isChecked) {
+    showToast(isChecked ? "You are now online" : "You are now offline", "🟢");
+}
+
+// Edit Username
+function promptEditUsername() {
+    document.getElementById('editUsernameModal').classList.remove('hidden');
+}
+
+function closeEditUsernameModal() {
+    document.getElementById('editUsernameModal').classList.add('hidden');
+}
+
+function saveNewUsername() {
+    const newName = document.getElementById('newUsernameInput').value.trim();
+    if (!newName) {
+        showToast("Please enter a valid username", "❌");
+        return;
+    }
+    const user = AuthSession.getUser();
+    if (user) {
+        user.username = newName;
+        AuthSession.setUser(user);
+        socket.emit('update_username', { email: user.email, newUsername: newName });
+        closeEditUsernameModal();
+        showToast("Username updated successfully!", "✅");
+    }
+}
+
+// Navigation & Tabs
+function showTab(tabId) {
+    document.querySelectorAll('.tab-content').forEach(tab => tab.classList.add('hidden'));
+    document.getElementById(tabId).classList.remove('hidden');
+}
+
+function switchMatchMode(mode) {
+    currentMatchMode = mode;
+    document.getElementById('arenaTitle').innerText = `${mode} MATCHMAKING`;
+    document.getElementById('btnNav1v1').classList.toggle('active', mode === '1v1');
+    document.getElementById('btnNav2v2').classList.toggle('active', mode === '2v2');
+    showTab('setupTab');
+}
+
+function showMessagesTab() {
+    showTab('messagesTab');
+    socket.emit('request_online_users');
+}
+
+// Matchmaking & Lobbies
+function createLobby() {
+    const url = document.getElementById('smashUrl').value.trim() || SMASH_KARTS_BASE_URL;
+    const winCond = document.getElementById('winCondition').value;
+    const user = AuthSession.getUser();
+
+    activeRoomData = {
+        mode: currentMatchMode,
+        smashUrl: url,
+        winCondition: winCond,
+        host: user ? user.username : 'Player',
+        players: [user ? user.username : 'Player']
     };
 
-    socket.on('set_user_session', (userData) => {
-        if (!userData || !userData.username) return;
-        const uname = sanitizeUsername(userData.username);
-        
-        const player = connectedPlayers[socket.id];
-        if (player) {
-            player.username = uname;
-            player.email = userData.email || null;
-            player.isAuthenticated = true;
-            socket.emit('friend_requests_update', Array.from(player.friendRequests));
-        }
-        
-        if (!playerStats[uname]) {
-            playerStats[uname] = 0;
-        }
-        
-        broadcastOnlineUsers();
-        broadcastLeaderboard();
-    });
+    socket.emit('create_lobby', activeRoomData);
+}
 
-    socket.on('toggle_online_status', (isOnline) => {
-        if (connectedPlayers[socket.id]) {
-            connectedPlayers[socket.id].isOnline = !!isOnline;
-            broadcastOnlineUsers();
-        }
-    });
-
-    socket.on('send_friend_request', ({ targetSocketId }) => {
-        const sender = connectedPlayers[socket.id];
-        const target = connectedPlayers[targetSocketId];
-
-        if (sender && target && sender.isAuthenticated && target.isAuthenticated) {
-            target.friendRequests.add(sender.username);
-            io.to(targetSocketId).emit('receive_friend_request', {
-                fromSocketId: socket.id,
-                fromUsername: sender.username
-            });
-            io.to(targetSocketId).emit('friend_requests_update', Array.from(target.friendRequests));
-        }
-    });
-
-    socket.on('decline_friend_request', ({ challengerUsername }) => {
-        const user = connectedPlayers[socket.id];
-        if (!user || !user.isAuthenticated) return;
-
-        user.friendRequests.delete(challengerUsername);
-        socket.emit('friend_requests_update', Array.from(user.friendRequests));
-    });
-
-    socket.on('accept_friend_request', ({ challengerUsername }) => {
-        const user = connectedPlayers[socket.id];
-        if (!user || !user.isAuthenticated) return;
-
-        user.friends.add(challengerUsername);
-        user.friendRequests.delete(challengerUsername);
-
-        const challenger = findSocketByUsername(challengerUsername);
-        if (challenger) {
-            challenger.friends.add(user.username);
-            io.to(challenger.id).emit('friend_request_accepted', { username: user.username });
-        }
-
-        socket.emit('friend_requests_update', Array.from(user.friendRequests));
-        socket.emit('friend_request_accepted', { username: challengerUsername });
-        broadcastOnlineUsers();
-    });
-
-    socket.on('send_direct_message', ({ targetUsername, message }) => {
-        const sender = connectedPlayers[socket.id];
-        if (!sender || !sender.isAuthenticated || !message || !message.trim()) return;
-
-        const cleanTarget = sanitizeUsername(targetUsername);
-        const targetPlayer = findSocketByUsername(cleanTarget);
-
-        if (!sender.friends.has(cleanTarget)) {
-            return socket.emit('dm_error', { message: 'You can only message users on your friends list.' });
-        }
-
-        const cleanMsg = moderateText(message.trim());
-        const dmKey = getDMKey(sender.username, cleanTarget);
-
-        if (!directMessageStore[dmKey]) directMessageStore[dmKey] = [];
-        
-        const msgObj = { senderUsername: sender.username, message: cleanMsg, timestamp: Date.now() };
-        directMessageStore[dmKey].push(msgObj);
-        
-        if (directMessageStore[dmKey].length > 10) {
-            directMessageStore[dmKey] = directMessageStore[dmKey].slice(-10);
-        }
-
-        if (targetPlayer) {
-            io.to(targetPlayer.id).emit('receive_direct_message', {
-                senderSocketId: socket.id,
-                senderUsername: sender.username,
-                message: cleanMsg,
-                history: directMessageStore[dmKey]
-            });
-        }
-
-        socket.emit('dm_sent_success', {
-            targetUsername: cleanTarget,
-            history: directMessageStore[dmKey]
-        });
-    });
-
-    socket.on('get_dm_history', ({ targetUsername }) => {
-        const sender = connectedPlayers[socket.id];
-        if (!sender) return;
-        const cleanTarget = sanitizeUsername(targetUsername);
-        const dmKey = getDMKey(sender.username, cleanTarget);
-        socket.emit('load_dm_history', {
-            targetUsername: cleanTarget,
-            history: directMessageStore[dmKey] || []
-        });
-    });
-
-    socket.on('record_match_played', (rawUsername) => {
-        const uname = sanitizeUsername(rawUsername);
-        if (uname && uname !== 'Player' && uname !== 'Guest') {
-            playerStats[uname] = (playerStats[uname] || 0) + 1;
-            broadcastLeaderboard();
-        }
-    });
-
-    socket.on('send_match_challenge', ({ targetSocketId, targetUsername, fromUsername, mode, smashUrl }) => {
-        const sender = connectedPlayers[socket.id];
-        const target = targetSocketId ? connectedPlayers[targetSocketId] : findSocketByUsername(targetUsername);
-
-        if (!sender || !target) return;
-        if (!sender.friends.has(target.username)) return;
-
-        const cleanUrl = extractSmashUrl(smashUrl);
-        if (!cleanUrl) {
-            socket.emit('room_error', { message: 'A valid Smash Karts room link or code is required!' });
-            return;
-        }
-
-        const senderName = sanitizeUsername(fromUsername);
-        io.to(target.id).emit('receive_match_challenge', {
-            challengerSocketId: socket.id,
-            fromUsername: senderName,
-            mode: mode || '1v1',
-            smashUrl: cleanUrl
-        });
-    });
-
-    socket.on('accept_match_challenge', ({ challengerSocketId, targetUsername, smashUrl }) => {
-        const cleanUrl = extractSmashUrl(smashUrl);
-        if (!cleanUrl) {
-            socket.emit('room_error', { message: 'A valid Smash Karts room link or code is required!' });
-            return;
-        }
-
-        const acceptName = sanitizeUsername(targetUsername);
-        const challenger = connectedPlayers[challengerSocketId];
-        const challengerName = challenger ? challenger.username : 'Challenger';
-        const roomId = Math.random().toString(36).substring(2, 8).toUpperCase();
-        
-        const room = {
-            roomId,
-            hostName: challengerName,
-            smashUrl: cleanUrl,
-            winCondition: 'First to 3',
-            mode: '1v1',
-            maxPlayers: 2,
-            players: [
-                { id: socket.id, name: acceptName },
-                { id: challengerSocketId, name: challengerName }
-            ],
-            exitedPlayers: [],
-            messages: []
-        };
-
-        activeRoomsMap.set(roomId, room);
-
-        socket.join(roomId);
-        const challengerSocket = io.sockets.sockets.get(challengerSocketId);
-        if (challengerSocket) challengerSocket.join(roomId);
-
-        io.to(roomId).emit('challenge_game_start', room);
-        broadcastPublicRooms();
-    });
-
-    socket.on('create_room', (data) => {
-        const cleanUrl = extractSmashUrl(data.smashUrl);
-        if (!cleanUrl) {
-            socket.emit('room_error', { message: 'Error: You must provide a valid Smash Karts room link or code to join/create!' });
-            return;
-        }
-
-        const roomId = Math.random().toString(36).substring(2, 8).toUpperCase();
-        const mode = data.mode === '2v2' ? '2v2' : '1v1';
-        const hostName = sanitizeUsername(data.playerName);
-        
-        const newRoom = {
-            roomId,
-            hostName,
-            smashUrl: cleanUrl,
-            winCondition: escapeHTML(data.winCondition || 'First to 3'),
-            mode,
-            maxPlayers: mode === '2v2' ? 4 : 2,
-            players: [{ id: socket.id, name: hostName }],
-            exitedPlayers: [],
-            messages: []
-        };
-
-        activeRoomsMap.set(roomId, newRoom);
-
-        socket.join(roomId);
-        socket.emit('room_created', newRoom);
-        broadcastPublicRooms();
-    });
-
-    socket.on('get_public_rooms', () => {
-        broadcastPublicRooms();
-    });
-
-    socket.on('leave_match', ({ roomId }) => {
-        const room = activeRoomsMap.get(roomId);
-        if (!room) return;
-
-        if (!room.exitedPlayers.includes(socket.id)) {
-            room.exitedPlayers.push(socket.id);
-        }
-
-        if (room.exitedPlayers.length >= room.players.length) {
-            activeRoomsMap.delete(roomId);
-            broadcastPublicRooms();
-        }
-    });
-
-    socket.on('send_match_chat', ({ roomId, message, senderName }) => {
-        const room = activeRoomsMap.get(roomId);
-        if (message && message.trim()) {
-            const cleanMsg = moderateText(message.trim());
-            const cleanSender = sanitizeUsername(senderName);
-            const msgObj = { senderName: cleanSender, message: cleanMsg };
-            
-            if (room) {
-                room.messages.push(msgObj);
-                if (room.messages.length > 10) room.messages = room.messages.slice(-10);
-            }
-            io.to(roomId).emit('receive_match_chat', msgObj);
-        }
-    });
-
-    socket.on('disconnect', () => {
-        delete connectedPlayers[socket.id];
-        
-        for (const [roomId, room] of activeRoomsMap.entries()) {
-            const isParticipant = room.players.some(p => p.id === socket.id);
-            if (isParticipant) {
-                if (!room.exitedPlayers.includes(socket.id)) {
-                    room.exitedPlayers.push(socket.id);
-                }
-                if (room.exitedPlayers.length >= room.players.length) {
-                    activeRoomsMap.delete(roomId);
-                }
-            }
-        }
-
-        broadcastOnlineUsers();
-        broadcastPublicRooms();
-    });
+socket.on('lobby_created', (lobbyData) => {
+    activeRoomData = lobbyData;
+    openPreGameLobbyModal();
+    updatePreGameLobbyUI();
 });
 
-function broadcastOnlineUsers() {
-    const playerList = Object.values(connectedPlayers)
-        .filter(p => p.isAuthenticated && p.isOnline)
-        .map(p => ({
-            id: p.id,
-            username: p.username,
-            friends: Array.from(p.friends)
-        }));
-
-    io.emit('online_users_update', { count: playerList.length, users: playerList });
+function openPreGameLobbyModal() {
+    document.getElementById('preGameLobbyModal').classList.remove('hidden');
 }
 
-function broadcastLeaderboard() {
-    const topPlayers = Object.entries(playerStats)
-        .map(([username, matches]) => ({ username, matches }))
-        .filter(p => p.username !== 'Player' && p.username !== 'Guest')
-        .sort((a, b) => b.matches - a.matches)
-        .slice(0, 5);
-
-    io.emit('leaderboard_update', topPlayers);
+function closePreGameLobbyModal() {
+    document.getElementById('preGameLobbyModal').classList.add('hidden');
 }
 
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`Smashkarts1v1s Arena running on port ${PORT}`));
+function updatePreGameLobbyUI() {
+    if (!activeRoomData) return;
+    const playerList = document.getElementById('preGamePlayerList');
+    playerList.innerHTML = activeRoomData.players.map(p => `<div class="bg-blue-900 p-2 rounded-xl text-white font-bold">🏎️ ${p}</div>`).join('');
+}
+
+function sendPreGameChatMessage() {
+    const input = document.getElementById('preGameChatInput');
+    const msg = input.value.trim();
+    if (!msg) return;
+    const user = AuthSession.getUser();
+    socket.emit('pregame_chat_message', { sender: user ? user.username : 'Player', message: msg });
+    input.value = '';
+}
+
+socket.on('pregame_chat_broadcast', (data) => {
+    const container = document.getElementById('preGameChatMessages');
+    container.innerHTML += `<div><strong class="text-yellow-300">${data.sender}:</strong> ${data.message}</div>`;
+    container.scrollTop = container.scrollHeight;
+});
+
+function enterGameFromLobby() {
+    if (!activeRoomData || !activeRoomData.smashUrl) {
+        showToast("Error: No valid Smash Karts launch room URL found!", "❌");
+        return;
+    }
+    
+    closePreGameLobbyModal();
+
+    const user = AuthSession.getUser();
+    if (user) {
+        socket.emit('record_match_played', user.username);
+    }
+
+    const mode = localStorage.getItem('gameplay_mode') || 'popup';
+    const gameScreen = document.getElementById('gameScreen');
+    const smashFrame = document.getElementById('smashFrame');
+    const codeContainer = document.getElementById('gameRoomCodeContainer');
+    const codeDisplay = document.getElementById('gameRoomCodeDisplay');
+    const roomCode = extractRoomCodeClient(activeRoomData.smashUrl);
+
+    if (mode === 'embed') {
+        smashFrame.src = activeRoomData.smashUrl;
+        codeDisplay.innerText = roomCode;
+        codeContainer.classList.remove('hidden');
+        codeContainer.classList.add('flex');
+    } else {
+        smashFrame.src = '';
+        codeContainer.classList.remove('flex');
+        codeContainer.classList.add('hidden');
+        window.open(activeRoomData.smashUrl, 'SmashKarts1v1Match', 'width=1100,height=750,resizable=yes,scrollbars=yes');
+    }
+    
+    gameScreen.classList.remove('game-fade-exit', 'hidden');
+    document.getElementById('gameModeBadge').innerText = activeRoomData.mode;
+    triggerChatActivityTimer();
+}
+
+function leaveEmbeddedGame() {
+    document.getElementById('gameScreen').classList.add('hidden');
+    document.getElementById('smashFrame').src = '';
+    showToast("Exited match arena", "🏁");
+}
+
+// In-Game Overlay Chat
+function toggleOverlayChat() {
+    const overlay = document.getElementById('chatOverlay');
+    const label = document.getElementById('toggleChatBtnLabel');
+    overlay.classList.toggle('hidden-overlay');
+    label.innerText = overlay.classList.contains('hidden-overlay') ? 'Show Chat' : 'Hide Chat';
+}
+
+function sendMatchChatMessage() {
+    const input = document.getElementById('matchChatInput');
+    const msg = input.value.trim();
+    if (!msg) return;
+    const user = AuthSession.getUser();
+    socket.emit('match_chat_message', { sender: user ? user.username : 'Player', message: msg });
+    input.value = '';
+}
+
+socket.on('match_chat_broadcast', (data) => {
+    const container = document.getElementById('matchChatMessages');
+    container.innerHTML += `<div><strong class="text-yellow-300">${data.sender}:</strong> ${data.message}</div>`;
+    container.scrollTop = container.scrollHeight;
+});
+
+function triggerChatActivityTimer() {
+    if (chatActivityTimer) clearInterval(chatActivityTimer);
+    chatActivityTimer = setInterval(() => {
+        // Keeps chat alive or handles periodic checks
+    }, 10000);
+}
+
+// Make Code & Lobbies Modal Helpers
+function openMakeCodeModal() {
+    document.getElementById('makeCodeModal').classList.remove('hidden');
+    document.getElementById('makeCodeIframe').src = SMASH_KARTS_BASE_URL;
+}
+
+function closeMakeCodeModal() {
+    document.getElementById('makeCodeModal').classList.add('hidden');
+    document.getElementById('makeCodeIframe').src = '';
+}
+
+function copyAndPlay() {
+    const code = document.getElementById('copyCodeInput').value.trim();
+    if (!code) {
+        showToast("Please enter or paste a valid room code/link first!", "❌");
+        return;
+    }
+    document.getElementById('smashUrl').value = code;
+    closeMakeCodeModal();
+    showToast("Room code loaded successfully!", "✅");
+}
+
+function openFindGameModal() {
+    document.getElementById('findGameModal').classList.remove('hidden');
+    socket.emit('request_public_rooms');
+}
+
+function closeFindGameModal() {
+    document.getElementById('findGameModal').classList.add('hidden');
+}
+
+socket.on('public_rooms_list', (rooms) => {
+    const list = document.getElementById('publicRoomsList');
+    if (!rooms || rooms.length === 0) {
+        list.innerHTML = `<div class="text-xs text-blue-200 text-center py-4">No active public lobbies right now. Create one!</div>`;
+        return;
+    }
+    list.innerHTML = rooms.map(r => `
+        <div class="bg-blue-950 p-3 rounded-2xl border border-white/10 flex justify-between items-center">
+            <div>
+                <span class="block font-bold text-yellow-300 text-xs">${r.mode} Match (${r.winCondition})</span>
+                <span class="text-[10px] text-blue-200">Host: ${r.host}</span>
+            </div>
+            <button onclick='joinPublicRoom(${JSON.stringify(r)})' class="btn-smash px-3 py-1.5 rounded-xl font-bungee text-[10px] text-white">JOIN</button>
+        </div>
+    `).join('');
+});
+
+function joinPublicRoom(room) {
+    activeRoomData = room;
+    closeFindGameModal();
+    openPreGameLobbyModal();
+    updatePreGameLobbyUI();
+}
+
+// Online Users & Direct Messaging
+function openOnlineModal() {
+    document.getElementById('onlineUsersModal').classList.remove('hidden');
+    socket.emit('request_online_users');
+}
+
+function closeOnlineModal() {
+    document.getElementById('onlineUsersModal').classList.add('hidden');
+}
+
+socket.on('online_users_list', (users) => {
+    document.getElementById('onlineCountBadge').innerText = `${users.length} Online`;
+    
+    // Populate Online Users Modal
+    const modalList = document.getElementById('onlineUsersList');
+    modalList.innerHTML = users.map(u => `
+        <div class="bg-blue-950 p-2.5 rounded-xl flex justify-between items-center text-xs text-white">
+            <div class="flex items-center gap-2">
+                <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+                <span class="font-bold">${u}</span>
+            </div>
+            <button onclick="openDMWithUser('${u}')" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 font-black px-3 py-1 rounded-lg text-[10px] uppercase">Message</button>
+        </div>
+    `).join('');
+
+    // Populate Friends Tab List
+    const friendsList = document.getElementById('friendsTabList');
+    friendsList.innerHTML = users.map(u => `
+        <div onclick="openDMWithUser('${u}')" class="bg-blue-950/80 hover:bg-blue-950 p-2.5 rounded-xl cursor-pointer flex items-center justify-between text-xs text-white border border-white/5">
+            <div class="flex items-center gap-2">
+                <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+                <span class="font-bold">${u}</span>
+            </div>
+            <span class="text-[10px] text-yellow-300">Chat ➔</span>
+        </div>
+    `).join('');
+});
+
+function openDMWithUser(username) {
+    currentActiveDMUser = username;
+    closeOnlineModal();
+    showMessagesTab();
+    document.getElementById('activeDMChatHeader').innerText = `CHAT WITH ${username.toUpperCase()}`;
+    socket.emit('request_dm_history', { recipient: username });
+}
+
+function sendTabDM() {
+    const input = document.getElementById('tabDMInput');
+    const text = input.value.trim();
+    if (!text || !currentActiveDMUser) return;
+    const user = AuthSession.getUser();
+    socket.emit('send_dm', { sender: user ? user.username : 'Player', recipient: currentActiveDMUser, message: text });
+    
+    const container = document.getElementById('tabDMMessages');
+    container.innerHTML += `<div><strong class="text-yellow-300">You:</strong> ${text}</div>`;
+    container.scrollTop = container.scrollHeight;
+    input.value = '';
+}
+
+socket.on('receive_dm', (data) => {
+    if (currentActiveDMUser === data.sender) {
+        const container = document.getElementById('tabDMMessages');
+        container.innerHTML += `<div><strong class="text-emerald-300">${data.sender}:</strong> ${data.message}</div>`;
+        container.scrollTop = container.scrollHeight;
+    } else {
+        unreadMessagesCount++;
+        const badge = document.getElementById('messagesBadge');
+        badge.innerText = unreadMessagesCount;
+        badge.classList.remove('hidden');
+        showToast(`New message from ${data.sender}`, "💬");
+    }
+});
+
+socket.on('dm_history', (messages) => {
+    const container = document.getElementById('tabDMMessages');
+    const user = AuthSession.getUser();
+    const currentName = user ? user.username : 'Player';
+    container.innerHTML = messages.map(m => `
+        <div><strong class="${m.sender === currentName ? 'text-yellow-300' : 'text-emerald-300'}">${m.sender}:</strong> ${m.message}</div>
+    `).join('');
+    container.scrollTop = container.scrollHeight;
+});
+
+// Leaderboard
+socket.on('leaderboard_data', (leaders) => {
+    const list = document.getElementById('leaderboardList');
+    if (!leaders || leaders.length === 0) {
+        list.innerHTML = `<div class="text-xs text-blue-200 text-center py-4">No leaderboard records yet. Play a match!</div>`;
+        return;
+    }
+    list.innerHTML = leaders.map((l, index) => `
+        <div class="bg-blue-950 p-3 rounded-2xl border border-white/10 flex justify-between items-center text-xs">
+            <div class="flex items-center gap-3">
+                <span class="font-bungee text-yellow-300 text-sm">#${index + 1}</span>
+                <span class="font-bold text-white">${l.username}</span>
+            </div>
+            <span class="font-bungee text-emerald-300">${l.gamesPlayed || 0} Games Played</span>
+        </div>
+    `).join('');
+});

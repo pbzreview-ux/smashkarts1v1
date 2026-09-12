@@ -36,6 +36,18 @@
                     </label>
                 </div>
 
+                <!-- GAMEPLAY MODE SETTING -->
+                <div class="flex justify-between items-center bg-blue-950/80 p-3.5 rounded-2xl border border-white/10">
+                    <div>
+                        <span class="block text-xs font-bold text-white">Gameplay Mode</span>
+                        <span class="text-[10px] text-blue-200">Popup window or type-in-code embed</span>
+                    </div>
+                    <select id="gameplayModeSelect" onchange="updateGameplayMode(this.value)" class="smash-input px-3 py-1.5 rounded-xl text-xs font-bold text-yellow-300 bg-blue-900 border border-yellow-400/50">
+                        <option value="popup">Popup Window</option>
+                        <option value="embed">Type in Code</option>
+                    </select>
+                </div>
+
                 <button onclick="promptEditUsername(); closeSettingsModal();" class="w-full bg-blue-800 hover:bg-blue-700 text-white font-bold py-3 rounded-2xl text-xs flex items-center justify-center gap-2">
                     ✏️ Edit Username
                 </button>
@@ -157,12 +169,27 @@
                 <span id="gameModeBadge" class="bg-yellow-400 text-blue-950 font-black text-xs px-2.5 py-0.5 rounded-full uppercase">1v1</span>
             </div>
             <div class="flex items-center gap-2">
+                <!-- Code Badge for Type in Code mode -->
+                <div id="gameRoomCodeContainer" class="hidden items-center gap-1 bg-yellow-400/20 border border-yellow-400 text-yellow-300 font-mono font-bold text-xs px-2.5 py-1.5 rounded-xl">
+                    <span>Code:</span>
+                    <span id="gameRoomCodeDisplay">us674723</span>
+                </div>
+
                 <button onclick="toggleOverlayChat()" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 font-black px-3 py-1.5 rounded-xl text-xs uppercase shadow-md">
                     💬 <span id="toggleChatBtnLabel">Show Chat</span>
                 </button>
-                <button onclick="leaveEmbeddedGame()" class="bg-red-600 hover:bg-red-500 text-white font-black px-4 py-1.5 rounded-xl text-xs uppercase shadow-md">
-                    ✕ Exit Game
-                </button>
+
+                <!-- DROPDOWN MENU FOR CONTROLS -->
+                <div class="relative">
+                    <button onclick="toggleGameHeaderDropdown()" class="bg-blue-800 hover:bg-blue-700 text-yellow-300 font-bungee px-3 py-1.5 rounded-xl text-xs uppercase flex items-center gap-1 border border-yellow-400/40 shadow-md">
+                        <span>⚙️ Options ▾</span>
+                    </button>
+                    <div id="gameHeaderDropdown" class="hidden absolute right-0 mt-2 w-40 bg-blue-900 border-2 border-yellow-400 rounded-2xl p-2 shadow-2xl z-50 flex flex-col gap-1.5">
+                        <button onclick="leaveEmbeddedGame()" class="w-full text-left bg-red-600 hover:bg-red-500 text-white font-black px-3 py-2 rounded-xl text-xs uppercase shadow-md">
+                            ✕ Exit Game
+                        </button>
+                    </div>
+                </div>
             </div>
         </div>
 
