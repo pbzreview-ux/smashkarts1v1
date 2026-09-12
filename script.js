@@ -69,6 +69,54 @@ function toggleOnlineStatus(isOnline) {
     showToast(isOnline ? "You are now VISIBLE online." : "You are now HIDDEN (Invisible).", isOnline ? "🟢" : "👻");
 }
 
+/* ================== MEMORY FUNCTIONS ================== */
+// Functions to remember friends and leaderboards across reloads
+
+function getLocalFriends(username) {
+    return JSON.parse(localStorage.getItem(`friends_${username}`)) || [];
+}
+
+function saveLocalFriends(username, friendsArray) {
+    localStorage.setItem(`friends_${username}`, JSON.stringify(friendsArray));
+}
+
+function isUserFriend(targetUsername) {
+    const currentUser = AuthSession.getUser();
+    if (!currentUser) return false;
+    
+    // Check local memory first
+    let localFriends = getLocalFriends(currentUser.username);
+    if (localFriends.includes(targetUsername)) return true;
+
+    // Fallback to server online status
+    const myUserObj = onlineUsersCache.find(u => u.username === currentUser.username);
+    if (myUserObj && myUserObj.friends && myUserObj.friends.includes(targetUsername)) {
+        localFriends.push(targetUsername);
+        saveLocalFriends(currentUser.username, localFriends);
+        return true;
+    }
+    return false;
+}
+
+function renderLeaderboard(topPlayers) {
+    const list = document.getElementById('leaderboardList');
+    if (!list) return;
+    list.innerHTML = topPlayers.length === 0 ? `<p class="text-xs text-blue-200">No matches recorded yet.</p>` : '';
+    topPlayers.forEach((p, idx) => {
+        const item = document.createElement('div');
+        item.className = 'flex justify-between items-center bg-blue-900/60 border border-white/10 p-3 rounded-2xl';
+        item.innerHTML = `
+            <div class="flex items-center gap-3">
+                <span class="font-bungee text-sm ${idx===0 ? 'text-yellow-300' : 'text-white'}">#${idx + 1}</span>
+                <span class="font-bold text-xs text-white">👤 ${escapeHTML(p.username)}</span>
+            </div>
+            <span class="font-black text-xs text-yellow-300">${p.matches} Games Played</span>
+        `;
+        list.appendChild(item);
+    });
+}
+/* ======================================================= */
+
 const AuthSession = {
     INACTIVITY_LIMIT_MS: 30 * 60 * 1000,
     WARNING_WINDOW_MS: 60 * 1000,
@@ -107,6 +155,11 @@ const AuthSession = {
         document.getElementById("authModal").classList.add("hidden");
         this.startTracker();
         updateUserUI();
+        
+        // Load memory on login
+        renderLeaderboard(JSON.parse(localStorage.getItem('saved_leaderboard')) || []);
+        updateFriendsTabList();
+        
         showToast(`Welcome back, ${cleanUser}!`, "🎮");
     },
 
@@ -130,7 +183,6 @@ const AuthSession = {
     },
 
     startTracker() {
-        // Disabled inactivity tracking so you never get automatically logged out
         this.lastActivity = Date.now();
     },
 
@@ -282,7 +334,7 @@ function renderOnlineUsersList(users) {
     users.forEach(u => {
         if (u.id === socket.id || u.username === myUsername) return;
 
-        const isFriend = u.friends && u.friends.includes(myUsername);
+        const isFriend = isUserFriend(u.username);
         const row = document.createElement('div');
         row.className = 'flex justify-between items-center bg-blue-950/80 p-3 rounded-2xl border border-white/10';
         
@@ -320,6 +372,17 @@ socket.on('friend_requests_update', (requests) => {
 function acceptFriendRequestByName(username) {
     socket.emit('accept_friend_request', { challengerUsername: username });
     showToast(`Accepted friend request from ${username}!`, "🤝");
+    
+    // Memory Update
+    const user = AuthSession.getUser();
+    if (user) {
+        let friends = getLocalFriends(user.username);
+        if (!friends.includes(username)) {
+            friends.push(username);
+            saveLocalFriends(user.username, friends);
+        }
+    }
+    updateFriendsTabList();
 }
 
 function declineFriendRequestByName(username) {
@@ -329,6 +392,15 @@ function declineFriendRequestByName(username) {
 
 socket.on('friend_request_accepted', (data) => {
     showToast(`You and ${data.username} are now friends!`, "🤝");
+    // Memory Update
+    const user = AuthSession.getUser();
+    if (user) {
+        let friends = getLocalFriends(user.username);
+        if (!friends.includes(data.username)) {
+            friends.push(data.username);
+            saveLocalFriends(user.username, friends);
+        }
+    }
     updateFriendsTabList();
 });
 
@@ -419,8 +491,17 @@ function updateFriendsTabList() {
     const currentUser = AuthSession.getUser();
     if (!currentUser) return;
 
+    // Load ALL friends from memory
+    let friendNames = getLocalFriends(currentUser.username);
+    
+    // Make sure server-synced friends are safely stored in memory
     const myUserObj = onlineUsersCache.find(u => u.username === currentUser.username);
-    const friendNames = myUserObj ? myUserObj.friends : [];
+    if (myUserObj && myUserObj.friends) {
+        myUserObj.friends.forEach(f => {
+            if (!friendNames.includes(f)) friendNames.push(f);
+        });
+        saveLocalFriends(currentUser.username, friendNames);
+    }
 
     if (pendingFriendRequests && pendingFriendRequests.length > 0) {
         const pendingHeader = document.createElement('div');
@@ -539,21 +620,9 @@ function renderDMMessages(history) {
 }
 
 socket.on('leaderboard_update', (topPlayers) => {
-    const list = document.getElementById('leaderboardList');
-    if (!list) return;
-    list.innerHTML = topPlayers.length === 0 ? `<p class="text-xs text-blue-200">No matches recorded yet.</p>` : '';
-    topPlayers.forEach((p, idx) => {
-        const item = document.createElement('div');
-        item.className = 'flex justify-between items-center bg-blue-900/60 border border-white/10 p-3 rounded-2xl';
-        item.innerHTML = `
-            <div class="flex items-center gap-3">
-                <span class="font-bungee text-sm ${idx===0 ? 'text-yellow-300' : 'text-white'}">#${idx + 1}</span>
-                <span class="font-bold text-xs text-white">👤 ${escapeHTML(p.username)}</span>
-            </div>
-            <span class="font-black text-xs text-yellow-300">${p.matches} Games Played</span>
-        `;
-        list.appendChild(item);
-    });
+    // Save to memory so it loads instantly next time
+    localStorage.setItem('saved_leaderboard', JSON.stringify(topPlayers));
+    renderLeaderboard(topPlayers);
 });
 
 function triggerChatActivityTimer() {
@@ -583,7 +652,6 @@ function toggleOverlayChat() {
 
 document.getElementById('matchChatInput')?.addEventListener('input', triggerChatActivityTimer);
 
-// Toggle the in-game options menu
 function toggleGameHeaderDropdown() {
     const dropdown = document.getElementById('gameHeaderDropdown');
     if (dropdown) {
@@ -718,6 +786,19 @@ function enterGameFromLobby() {
     const user = AuthSession.getUser();
     if (user) {
         socket.emit('record_match_played', user.username);
+        
+        // --- LEADERBOARD MEMORY UPDATE ---
+        // Instantly increment their score in local memory before server catches up
+        let localLeaderboard = JSON.parse(localStorage.getItem('saved_leaderboard')) || [];
+        let pIndex = localLeaderboard.findIndex(p => p.username === user.username);
+        if (pIndex >= 0) {
+            localLeaderboard[pIndex].matches = (localLeaderboard[pIndex].matches || 0) + 1;
+        } else {
+            localLeaderboard.push({ username: user.username, matches: 1 });
+        }
+        localLeaderboard.sort((a, b) => b.matches - a.matches); // Sort by highest games
+        localStorage.setItem('saved_leaderboard', JSON.stringify(localLeaderboard));
+        renderLeaderboard(localLeaderboard); // Immediately update UI
     }
 
     const gameScreen = document.getElementById('gameScreen');
@@ -725,19 +806,36 @@ function enterGameFromLobby() {
     const codeContainer = document.getElementById('gameRoomCodeContainer');
     const codeDisplay = document.getElementById('gameRoomCodeDisplay');
     
+    // Create the Popup Overlay text box if it doesn't exist
+    let popupMsg = document.getElementById('popupModeMessage');
+    if (!popupMsg && smashFrame && smashFrame.parentNode) {
+        smashFrame.parentNode.style.position = 'relative'; // Ensure parent can hold absolute element
+        popupMsg = document.createElement('div');
+        popupMsg.id = 'popupModeMessage';
+        // Beautiful styling matching your theme
+        popupMsg.className = 'absolute inset-0 flex flex-col items-center justify-center bg-blue-950 text-yellow-300 font-bungee text-3xl z-10 rounded-xl hidden border-2 border-yellow-400 shadow-[0_0_20px_rgba(250,204,21,0.3)]';
+        popupMsg.innerHTML = '<span>JOIN POPUP BROWSER :)</span><p class="text-white text-sm font-sans mt-4">Look for the newly opened window to play!</p>';
+        smashFrame.parentNode.appendChild(popupMsg);
+    }
+
     // Check which setting the user chose
     if (currentGameplayMode === 'popup') {
-        // 1. POPUP MODE: Open in a new window and hide the embed iframe
+        // 1. POPUP MODE: Open in a new window, hide iframe, and show our special message overlay
         window.open(activeRoomData.smashUrl, '_blank', 'width=1000,height=700');
-        if (smashFrame) smashFrame.src = "";
-        if (codeContainer) codeContainer.classList.add('hidden'); // Hide the code container
+        if (smashFrame) smashFrame.classList.add('hidden');
+        if (popupMsg) popupMsg.classList.remove('hidden');
+        if (codeContainer) codeContainer.classList.add('hidden'); 
     } else {
         // 2. EMBED / TYPE IN CODE MODE: Put game in iframe and show code
-        if (smashFrame) smashFrame.src = activeRoomData.smashUrl || "https://smashkarts.io";
+        if (smashFrame) {
+            smashFrame.classList.remove('hidden');
+            smashFrame.src = activeRoomData.smashUrl || "https://smashkarts.io";
+        }
+        if (popupMsg) popupMsg.classList.add('hidden'); // Ensure popup text is hidden
         
         if (codeContainer) {
-            codeContainer.classList.remove('hidden'); // Show the code text
-            if (codeDisplay) codeDisplay.innerText = "(us643345)"; // Display your custom code
+            codeContainer.classList.remove('hidden'); 
+            if (codeDisplay) codeDisplay.innerText = "(us643345)"; 
         }
     }
     
@@ -758,9 +856,7 @@ function leaveEmbeddedGame() {
         smashFrame.src = '';
     }
 
-    // Hide dropdown so it resets for the next game
     document.getElementById('gameHeaderDropdown').classList.add('hidden');
-
     gameScreen.classList.add('game-fade-exit');
 
     setTimeout(() => {
@@ -840,11 +936,9 @@ socket.on('public_rooms_update', (rooms) => {
     });
 });
 
-// NEW FUNCTION: Copies the room code shown on screen to clipboard
 function copyRoomCode() {
     const codeDisplay = document.getElementById('gameRoomCodeDisplay');
     if (codeDisplay && codeDisplay.innerText) {
-        // Gets the text and removes the parentheses so it's a clean "us643345" paste
         let textToCopy = codeDisplay.innerText.trim().replace(/[()]/g, '');
 
         if (navigator.clipboard) {
@@ -862,6 +956,10 @@ document.addEventListener("DOMContentLoaded", () => {
         document.getElementById("authModal").classList.add("hidden");
         AuthSession.startTracker();
         updateUserUI();
+        
+        // INSTANTLY Load Memory visuals immediately on page load
+        renderLeaderboard(JSON.parse(localStorage.getItem('saved_leaderboard')) || []);
+        updateFriendsTabList();
     } else {
         document.getElementById("authModal").classList.remove("hidden");
     }
