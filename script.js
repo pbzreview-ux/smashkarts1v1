@@ -70,8 +70,6 @@ function toggleOnlineStatus(isOnline) {
 }
 
 /* ================== MEMORY FUNCTIONS ================== */
-// Functions to remember friends and leaderboards across reloads
-
 function getLocalFriends(username) {
     return JSON.parse(localStorage.getItem(`friends_${username}`)) || [];
 }
@@ -84,11 +82,9 @@ function isUserFriend(targetUsername) {
     const currentUser = AuthSession.getUser();
     if (!currentUser) return false;
     
-    // Check local memory first
     let localFriends = getLocalFriends(currentUser.username);
     if (localFriends.includes(targetUsername)) return true;
 
-    // Fallback to server online status
     const myUserObj = onlineUsersCache.find(u => u.username === currentUser.username);
     if (myUserObj && myUserObj.friends && myUserObj.friends.includes(targetUsername)) {
         localFriends.push(targetUsername);
@@ -156,7 +152,6 @@ const AuthSession = {
         this.startTracker();
         updateUserUI();
         
-        // Load memory on login
         renderLeaderboard(JSON.parse(localStorage.getItem('saved_leaderboard')) || []);
         updateFriendsTabList();
         
@@ -373,7 +368,6 @@ function acceptFriendRequestByName(username) {
     socket.emit('accept_friend_request', { challengerUsername: username });
     showToast(`Accepted friend request from ${username}!`, "🤝");
     
-    // Memory Update
     const user = AuthSession.getUser();
     if (user) {
         let friends = getLocalFriends(user.username);
@@ -392,7 +386,6 @@ function declineFriendRequestByName(username) {
 
 socket.on('friend_request_accepted', (data) => {
     showToast(`You and ${data.username} are now friends!`, "🤝");
-    // Memory Update
     const user = AuthSession.getUser();
     if (user) {
         let friends = getLocalFriends(user.username);
@@ -491,10 +484,8 @@ function updateFriendsTabList() {
     const currentUser = AuthSession.getUser();
     if (!currentUser) return;
 
-    // Load ALL friends from memory
     let friendNames = getLocalFriends(currentUser.username);
     
-    // Make sure server-synced friends are safely stored in memory
     const myUserObj = onlineUsersCache.find(u => u.username === currentUser.username);
     if (myUserObj && myUserObj.friends) {
         myUserObj.friends.forEach(f => {
@@ -620,7 +611,6 @@ function renderDMMessages(history) {
 }
 
 socket.on('leaderboard_update', (topPlayers) => {
-    // Save to memory so it loads instantly next time
     localStorage.setItem('saved_leaderboard', JSON.stringify(topPlayers));
     renderLeaderboard(topPlayers);
 });
@@ -787,8 +777,6 @@ function enterGameFromLobby() {
     if (user) {
         socket.emit('record_match_played', user.username);
         
-        // --- LEADERBOARD MEMORY UPDATE ---
-        // Instantly increment their score in local memory before server catches up
         let localLeaderboard = JSON.parse(localStorage.getItem('saved_leaderboard')) || [];
         let pIndex = localLeaderboard.findIndex(p => p.username === user.username);
         if (pIndex >= 0) {
@@ -796,53 +784,68 @@ function enterGameFromLobby() {
         } else {
             localLeaderboard.push({ username: user.username, matches: 1 });
         }
-        localLeaderboard.sort((a, b) => b.matches - a.matches); // Sort by highest games
+        localLeaderboard.sort((a, b) => b.matches - a.matches);
         localStorage.setItem('saved_leaderboard', JSON.stringify(localLeaderboard));
-        renderLeaderboard(localLeaderboard); // Immediately update UI
+        renderLeaderboard(localLeaderboard);
     }
 
     const gameScreen = document.getElementById('gameScreen');
     const smashFrame = document.getElementById('smashFrame');
     const codeContainer = document.getElementById('gameRoomCodeContainer');
-    const codeDisplay = document.getElementById('gameRoomCodeDisplay');
     
-    // Create the Popup Overlay text box if it doesn't exist
     let popupMsg = document.getElementById('popupModeMessage');
     if (!popupMsg && smashFrame && smashFrame.parentNode) {
-        smashFrame.parentNode.style.position = 'relative'; // Ensure parent can hold absolute element
+        smashFrame.parentNode.style.position = 'relative';
         popupMsg = document.createElement('div');
         popupMsg.id = 'popupModeMessage';
-        // Beautiful styling matching your theme
         popupMsg.className = 'absolute inset-0 flex flex-col items-center justify-center bg-blue-950 text-yellow-300 font-bungee text-3xl z-10 rounded-xl hidden border-2 border-yellow-400 shadow-[0_0_20px_rgba(250,204,21,0.3)]';
         popupMsg.innerHTML = '<span>JOIN POPUP BROWSER :)</span><p class="text-white text-sm font-sans mt-4">Look for the newly opened window to play!</p>';
         smashFrame.parentNode.appendChild(popupMsg);
     }
 
-    // Check which setting the user chose
+    // Extract actual room code from the active smashUrl
+    let roomCode = "us643345";
+    if (activeRoomData && activeRoomData.smashUrl) {
+        const match = activeRoomData.smashUrl.match(/room=([A-Za-z0-9]+)/i);
+        if (match) roomCode = match[1];
+    }
+
+    // Transform code container into an actual clickable copy button
+    if (codeContainer) {
+        codeContainer.classList.remove('hidden'); 
+        codeContainer.innerHTML = `
+            <button onclick="copyActiveRoomCode('${roomCode}')" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 font-bungee text-xs px-3.5 py-1.5 rounded-xl shadow-[0_0_10px_rgba(250,204,21,0.5)] flex items-center gap-2 transition-all transform hover:scale-105 cursor-pointer">
+                <span>📋 Code: (${roomCode})</span>
+                <span class="bg-blue-950 text-yellow-300 text-[10px] px-2 py-0.5 rounded-lg">COPY</span>
+            </button>
+        `;
+    }
+
     if (currentGameplayMode === 'popup') {
-        // 1. POPUP MODE: Open in a new window, hide iframe, and show our special message overlay
         window.open(activeRoomData.smashUrl, '_blank', 'width=1000,height=700');
         if (smashFrame) smashFrame.classList.add('hidden');
         if (popupMsg) popupMsg.classList.remove('hidden');
-        if (codeContainer) codeContainer.classList.add('hidden'); 
     } else {
-        // 2. EMBED / TYPE IN CODE MODE: Put game in iframe and show code
         if (smashFrame) {
             smashFrame.classList.remove('hidden');
             smashFrame.src = activeRoomData.smashUrl || "https://smashkarts.io";
         }
-        if (popupMsg) popupMsg.classList.add('hidden'); // Ensure popup text is hidden
-        
-        if (codeContainer) {
-            codeContainer.classList.remove('hidden'); 
-            if (codeDisplay) codeDisplay.innerText = "(us643345)"; 
-        }
+        if (popupMsg) popupMsg.classList.add('hidden');
     }
     
-    // Show the game screen (for chat and UI)
     gameScreen.classList.remove('game-fade-exit', 'hidden');
     document.getElementById('gameModeBadge').innerText = activeRoomData.mode;
     triggerChatActivityTimer();
+}
+
+function copyActiveRoomCode(code) {
+    if (navigator.clipboard) {
+        navigator.clipboard.writeText(code).then(() => {
+            showToast(`Room code (${code}) copied to clipboard!`, "📋");
+        }).catch(() => {
+            showToast("Failed to copy code.", "❌");
+        });
+    }
 }
 
 function leaveEmbeddedGame() {
@@ -936,28 +939,12 @@ socket.on('public_rooms_update', (rooms) => {
     });
 });
 
-function copyRoomCode() {
-    const codeDisplay = document.getElementById('gameRoomCodeDisplay');
-    if (codeDisplay && codeDisplay.innerText) {
-        let textToCopy = codeDisplay.innerText.trim().replace(/[()]/g, '');
-
-        if (navigator.clipboard) {
-            navigator.clipboard.writeText(textToCopy).then(() => {
-                showToast("Code copied to clipboard!", "📋");
-            }).catch(err => {
-                showToast("Failed to copy code.", "❌");
-            });
-        }
-    }
-}
-
 document.addEventListener("DOMContentLoaded", () => {
     if (AuthSession.isLoggedIn()) {
         document.getElementById("authModal").classList.add("hidden");
         AuthSession.startTracker();
         updateUserUI();
         
-        // INSTANTLY Load Memory visuals immediately on page load
         renderLeaderboard(JSON.parse(localStorage.getItem('saved_leaderboard')) || []);
         updateFriendsTabList();
     } else {
