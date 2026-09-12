@@ -82,12 +82,10 @@ function broadcastPublicRooms() {
     io.emit('public_rooms_update', roomsList);
 }
 
-// Periodically clean up stale/unused active matches every 2 minutes
 setInterval(() => {
     const now = Date.now();
     let cleaned = false;
     for (const [roomId, room] of activeRoomsMap.entries()) {
-        // Delete rooms older than 15 minutes or where all participants are no longer connected
         if (now - room.createdAt > 15 * 60 * 1000) {
             activeRoomsMap.delete(roomId);
             cleaned = true;
