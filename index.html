@@ -1,182 +1,132 @@
-<!-- Floating Overlay Container Script -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <style>
+    .blue-card {
+      width: 360px;
+      background-color: #0284c7;
+      color: #ffffff;
+      border-radius: 8px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      overflow: hidden;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    }
+
+    .card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 16px;
+      background-color: #0369a1;
+      cursor: pointer;
+      user-select: none;
+      font-weight: 600;
+    }
+
+    .arrow {
+      transition: transform 0.3s ease;
+      display: inline-block;
+      font-size: 12px;
+    }
+
+    .arrow.open {
+      transform: rotate(180deg);
+    }
+
+    .card-content {
+      display: none;
+      padding: 16px;
+      background-color: #0284c7;
+    }
+
+    .card-content.show {
+      display: block;
+    }
+
+    .code-box {
+      background-color: #0c4a6e;
+      color: #7dd3fc;
+      padding: 10px 12px;
+      border-radius: 6px;
+      font-family: "Courier New", Courier, monospace;
+      font-size: 13px;
+      margin-bottom: 12px;
+      word-break: break-all;
+    }
+
+    .options-group {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .btn {
+      padding: 8px 14px;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 600;
+      transition: background-color 0.2s ease;
+    }
+
+    .btn-option {
+      background-color: #e0f2fe;
+      color: #0369a1;
+      flex: 1;
+    }
+
+    .btn-option:hover {
+      background-color: #bae6fd;
+    }
+
+    .btn-exit {
+      background-color: #ef4444;
+      color: #ffffff;
+      width: 100%;
+    }
+
+    .btn-exit:hover {
+      background-color: #dc2626;
+    }
+  </style>
+</head>
+<body>
+
+<div class="blue-card" id="codeCard">
+  <div class="card-header" onclick="toggleDropdown()">
+    <span>Code Message & Options</span>
+    <span class="arrow" id="dropdownArrow">▼</span>
+  </div>
+  
+  <div class="card-content" id="dropdownContent">
+    <div class="code-box">
+      <code>STATUS_OK: Message processed successfully.</code>
+    </div>
+    
+    <div class="options-group">
+      <button class="btn btn-option">Option 1</button>
+      <button class="btn btn-option">Option 2</button>
+    </div>
+    
+    <button class="btn btn-exit" onclick="exitCard()">Exit</button>
+  </div>
+</div>
+
 <script>
-(function() {
-  // Prevent duplicate overlays
-  if (document.getElementById('game-overlay-root')) return;
+  function toggleDropdown() {
+    const content = document.getElementById('dropdownContent');
+    const arrow = document.getElementById('dropdownArrow');
+    
+    content.classList.toggle('show');
+    arrow.classList.toggle('open');
+  }
 
-  // Create Root Container
-  const root = document.createElement('div');
-  root.id = 'game-overlay-root';
-  root.innerHTML = `
-    <style>
-      #game-overlay-root {
-        position: fixed;
-        top: 20px;
-        left: 20px;
-        z-index: 999999;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-        user-select: none;
-      }
-
-      /* Floating Arrow Trigger Button */
-      .overlay-arrow-btn {
-        width: 40px;
-        height: 40px;
-        background: #0284c7;
-        color: #ffffff;
-        border: 2px solid #38bdf8;
-        border-radius: 50%;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        cursor: pointer;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
-        transition: transform 0.25s ease, background-color 0.2s ease;
-      }
-
-      .overlay-arrow-btn:hover {
-        background: #0369a1;
-        transform: scale(1.08);
-      }
-
-      .overlay-arrow-btn .arrow-icon {
-        font-size: 14px;
-        transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-      }
-
-      .overlay-arrow-btn.active .arrow-icon {
-        transform: rotate(180deg);
-      }
-
-      /* Dropdown Card Container */
-      .overlay-card {
-        display: none;
-        width: 320px;
-        background: #0284c7;
-        color: #ffffff;
-        border-radius: 10px;
-        margin-top: 10px;
-        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
-        border: 1px solid #38bdf8;
-        overflow: hidden;
-        animation: dropdownSlide 0.25s ease-out forwards;
-      }
-
-      .overlay-card.show {
-        display: block;
-      }
-
-      @keyframes dropdownSlide {
-        from {
-          opacity: 0;
-          transform: translateY(-12px);
-        }
-        to {
-          opacity: 1;
-          transform: translateY(0);
-        }
-      }
-
-      .card-header {
-        padding: 10px 14px;
-        background: #0369a1;
-        font-weight: bold;
-        font-size: 13px;
-        letter-spacing: 0.5px;
-        border-bottom: 1px solid #0284c7;
-      }
-
-      .card-body {
-        padding: 14px;
-      }
-
-      /* Code Box */
-      .code-container {
-        background: #0c4a6e;
-        color: #7dd3fc;
-        padding: 10px;
-        border-radius: 6px;
-        font-family: "Courier New", Courier, monospace;
-        font-size: 12px;
-        margin-bottom: 12px;
-        word-break: break-all;
-        border: 1px solid #0284c7;
-      }
-
-      /* Options & Exit Buttons */
-      .btn-row {
-        display: flex;
-        gap: 8px;
-        margin-bottom: 10px;
-      }
-
-      .overlay-btn {
-        flex: 1;
-        padding: 8px;
-        border: none;
-        border-radius: 6px;
-        font-size: 12px;
-        font-weight: 600;
-        cursor: pointer;
-        transition: background 0.2s ease;
-      }
-
-      .btn-option {
-        background: #e0f2fe;
-        color: #0369a1;
-      }
-
-      .btn-option:hover {
-        background: #bae6fd;
-      }
-
-      .btn-exit {
-        width: 100%;
-        background: #ef4444;
-        color: #ffffff;
-      }
-
-      .btn-exit:hover {
-        background: #dc2626;
-      }
-    </style>
-
-    <!-- Arrow Button Overlay -->
-    <div class="overlay-arrow-btn" id="overlayArrow">
-      <span class="arrow-icon">▼</span>
-    </div>
-
-    <!-- Dropdown Menu -->
-    <div class="overlay-card" id="overlayCard">
-      <div class="card-header">Code Controls</div>
-      <div class="card-body">
-        <div class="code-container">
-          <code>[SYSTEM]: Script initialized successfully.</code>
-        </div>
-        <div class="btn-row">
-          <button class="overlay-btn btn-option">Option 1</button>
-          <button class="overlay-btn btn-option">Option 2</button>
-        </div>
-        <button class="overlay-btn btn-exit" id="overlayExit">Exit Overlay</button>
-      </div>
-    </div>
-  `;
-
-  document.body.appendChild(root);
-
-  const arrowBtn = document.getElementById('overlayArrow');
-  const card = document.getElementById('overlayCard');
-  const exitBtn = document.getElementById('overlayExit');
-
-  // Toggle dropdown on arrow click
-  arrowBtn.addEventListener('click', () => {
-    const isVisible = card.classList.toggle('show');
-    arrowBtn.classList.toggle('active', isVisible);
-  });
-
-  // Remove entire overlay on exit click
-  exitBtn.addEventListener('click', () => {
-    root.remove();
-  });
-})();
+  function exitCard() {
+    const card = document.getElementById('codeCard');
+    card.style.display = 'none';
+  }
 </script>
+
+</body>
+</html>
