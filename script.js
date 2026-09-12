@@ -622,20 +622,22 @@ function triggerChatActivityTimer() {
     clearTimeout(chatInactivityTimer);
     chatInactivityTimer = setTimeout(() => {
         overlay.classList.add('hidden-overlay');
-        document.getElementById('toggleChatBtnLabel').innerText = 'Show Chat';
+        const label = document.getElementById('toggleChatBtnLabel');
+        if (label) label.innerText = 'Show Chat';
     }, 5005);
 }
 
 function toggleOverlayChat() {
     const overlay = document.getElementById('chatOverlay');
     const label = document.getElementById('toggleChatBtnLabel');
+    if (!overlay) return;
     if (overlay.classList.contains('hidden-overlay')) {
         overlay.classList.remove('hidden-overlay');
-        label.innerText = 'Hide Chat';
+        if (label) label.innerText = 'Hide Chat';
         triggerChatActivityTimer();
     } else {
         overlay.classList.add('hidden-overlay');
-        label.innerText = 'Show Chat';
+        if (label) label.innerText = 'Show Chat';
         clearTimeout(chatInactivityTimer);
     }
 }
@@ -667,12 +669,20 @@ function extractSmashUrlClient(rawInput) {
         text = text.replace('ttps://', 'https://');
     }
 
-    const linkMatch = text.match(/https?:\/\/(www\.)?smashkarts\.io\/link\/\?[^\s]+/i);
+    // Clean quotation marks or accidental extra wrappers
+    text = text.replace(/['"]+/g, '');
+
+    // Match full smashkarts link with /link/? or standard query parameters (?room=...)
+    const linkMatch = text.match(/https?:\/\/(www\.)?smashkarts\.io(\/link\/)?\?[^\s]+/i);
     if (linkMatch) {
-        return linkMatch[0];
+        let matchedUrl = linkMatch[0];
+        if (!matchedUrl.includes('/link/')) {
+            matchedUrl = matchedUrl.replace('smashkarts.io/?', 'smashkarts.io/link/?');
+        }
+        return matchedUrl;
     }
     
-    const roomMatch = text.match(/Room:\s*([A-Za-z0-9]+)/i);
+    const roomMatch = text.match(/Room:\s*([A-Za-z0-9]+)/i) || text.match(/room=([A-Za-z0-9]+)/i);
     if (roomMatch) {
         return `https://smashkarts.io/link/?room=${encodeURIComponent(roomMatch[1])}`;
     }
@@ -799,20 +809,23 @@ function enterGameFromLobby() {
         if (match) roomCode = match[1];
     }
 
+    // Convert the entire blue space / header options into a collapsible dropdown toolbar for full screen
     if (codeContainer) {
         codeContainer.classList.remove('hidden'); 
+        codeContainer.className = 'absolute top-3 left-3 z-30 flex flex-col items-start gap-1';
         codeContainer.innerHTML = `
-            <button onclick="copyActiveRoomCode('${roomCode}')" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 font-bungee text-sm px-4 py-2 rounded-xl shadow-[0_0_15px_rgba(250,204,21,0.7)] flex items-center gap-3 transition-all transform hover:scale-105 cursor-pointer">
-                <span>📋 ROOM: ${roomCode}</span>
-                <span class="bg-blue-950 text-yellow-300 text-xs px-2.5 py-1 rounded-lg font-bold">COPY CODE</span>
+            <button onclick="toggleGameHeaderDropdown()" class="bg-blue-950/90 border border-yellow-400/50 text-yellow-300 font-bungee text-xs px-3 py-2 rounded-xl shadow-lg flex items-center gap-2 cursor-pointer hover:bg-blue-900 transition-all">
+                <span>⚙️ OPTIONS / ROOM (${roomCode}) ▾</span>
             </button>
-        `;
-    }
-
-    const dropdown = document.getElementById('gameHeaderDropdown');
-    if (dropdown) {
-        dropdown.innerHTML = `
-            <div class="flex flex-col gap-2 p-2">
+            <div id="gameHeaderDropdown" class="hidden flex flex-col gap-2 p-3 bg-blue-950/95 border border-yellow-400/50 rounded-2xl shadow-2xl backdrop-blur-md min-w-[220px]">
+                <button onclick="copyActiveRoomCode('${roomCode}')" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 font-bungee text-xs px-3 py-2 rounded-xl shadow flex items-center justify-between cursor-pointer">
+                    <span>📋 ROOM: ${roomCode}</span>
+                    <span class="bg-blue-950 text-yellow-300 text-[10px] px-2 py-0.5 rounded font-bold">COPY</span>
+                </button>
+                <button onclick="toggleOverlayChat()" class="bg-blue-900 hover:bg-blue-800 text-white font-bungee text-xs px-3 py-2 rounded-xl text-left flex items-center justify-between cursor-pointer border border-white/10">
+                    <span id="toggleChatBtnLabel">Show Chat</span>
+                    <span>💬</span>
+                </button>
                 <button onclick="leaveEmbeddedGame()" class="bg-red-600 hover:bg-red-500 text-white font-bungee text-xs px-3 py-2 rounded-xl text-left flex items-center justify-between cursor-pointer">
                     <span>🚪 Exit Game</span>
                 </button>
@@ -844,7 +857,8 @@ function enterGameFromLobby() {
     }
     
     gameScreen.classList.remove('game-fade-exit', 'hidden');
-    document.getElementById('gameModeBadge').innerText = activeRoomData.mode;
+    const badge = document.getElementById('gameModeBadge');
+    if (badge) badge.innerText = activeRoomData.mode;
     triggerChatActivityTimer();
 }
 
@@ -872,7 +886,8 @@ function leaveEmbeddedGame() {
     const popupMsgDiv = document.getElementById('popupMessageOverlay');
     if (popupMsgDiv) popupMsgDiv.classList.add('hidden');
 
-    document.getElementById('gameHeaderDropdown').classList.add('hidden');
+    const dropdown = document.getElementById('gameHeaderDropdown');
+    if (dropdown) dropdown.classList.add('hidden');
     gameScreen.classList.add('game-fade-exit');
 
     setTimeout(() => {
