@@ -32,7 +32,7 @@ function showToast(message, icon = '🔔') {
         toast.style.opacity = '0';
         toast.style.transform = 'translateY(-20px)';
         setTimeout(() => toast.remove(), 300);
-    }, 3500);
+    }, 3505);
 }
 
 function incrementUnreadBadge() {
@@ -562,7 +562,7 @@ function triggerChatActivityTimer() {
     chatInactivityTimer = setTimeout(() => {
         overlay.classList.add('hidden-overlay');
         document.getElementById('toggleChatBtnLabel').innerText = 'Show Chat';
-    }, 5000);
+    }, 5005);
 }
 
 function toggleOverlayChat() {
@@ -699,7 +699,7 @@ function closePreGameLobbyModal() {
 
 function enterGameFromLobby() {
     if (!activeRoomData || !activeRoomData.smashUrl) {
-        showToast("Error: No valid Smash Karts launch room URL found!", "❌");
+        showToast("Error: No valid Smash Karts launch room URL found!", "⚠️");
         return;
     }
     
@@ -710,10 +710,13 @@ function enterGameFromLobby() {
         socket.emit('record_match_played', user.username);
     }
 
-    // Opens the companion window side-by-side while keeping the website chat active
-    window.open(activeRoomData.smashUrl, 'SmashKarts1v1Match', 'width=1100,height=750,resizable=yes,scrollbars=yes');
-    
+    // Embed Smash Karts directly into the game screen iframe so it loads plain smashkarts.io instead of a black screen
     const gameScreen = document.getElementById('gameScreen');
+    const smashFrame = document.getElementById('smashFrame');
+    if (smashFrame) {
+        smashFrame.src = activeRoomData.smashUrl || "https://smashkarts.io";
+    }
+    
     gameScreen.classList.remove('game-fade-exit', 'hidden');
     document.getElementById('gameModeBadge').innerText = activeRoomData.mode;
     triggerChatActivityTimer();
@@ -725,6 +728,11 @@ function leaveEmbeddedGame() {
     }
 
     const gameScreen = document.getElementById('gameScreen');
+    const smashFrame = document.getElementById('smashFrame');
+    if (smashFrame) {
+        smashFrame.src = '';
+    }
+
     gameScreen.classList.add('game-fade-exit');
 
     setTimeout(() => {
@@ -734,7 +742,7 @@ function leaveEmbeddedGame() {
         
         const smashUrlInput = document.getElementById('smashUrl');
         if (smashUrlInput) smashUrlInput.value = '';
-    }, 350);
+    }, 355);
 }
 
 function sendPreGameChatMessage() {
