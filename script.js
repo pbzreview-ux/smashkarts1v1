@@ -1,4 +1,4 @@
-\const socket = io();
+const socket = io();
 let currentMode = '1v1';
 let currentGameplayMode = 'popup'; // Default mode
 let activeRoomData = null;
