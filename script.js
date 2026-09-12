@@ -840,10 +840,20 @@ socket.on('public_rooms_update', (rooms) => {
     });
 });
 
-function joinPublicRoomById(roomId) {
-    const room = publicRoomsCache.find(r => r.roomId === roomId);
-    if (room) {
-        openPreGameLobby(room);
+// NEW FUNCTION: Copies the room code shown on screen to clipboard
+function copyRoomCode() {
+    const codeDisplay = document.getElementById('gameRoomCodeDisplay');
+    if (codeDisplay && codeDisplay.innerText) {
+        // Gets the text and removes the parentheses so it's a clean "us643345" paste
+        let textToCopy = codeDisplay.innerText.trim().replace(/[()]/g, '');
+
+        if (navigator.clipboard) {
+            navigator.clipboard.writeText(textToCopy).then(() => {
+                showToast("Code copied to clipboard!", "📋");
+            }).catch(err => {
+                showToast("Failed to copy code.", "❌");
+            });
+        }
     }
 }
 
