@@ -793,24 +793,12 @@ function enterGameFromLobby() {
     const smashFrame = document.getElementById('smashFrame');
     const codeContainer = document.getElementById('gameRoomCodeContainer');
     
-    let popupMsg = document.getElementById('popupModeMessage');
-    if (!popupMsg && smashFrame && smashFrame.parentNode) {
-        smashFrame.parentNode.style.position = 'relative';
-        popupMsg = document.createElement('div');
-        popupMsg.id = 'popupModeMessage';
-        popupMsg.className = 'absolute inset-0 flex flex-col items-center justify-center bg-blue-950 text-yellow-300 font-bungee text-3xl z-10 rounded-xl hidden border-2 border-yellow-400 shadow-[0_0_20px_rgba(250,204,21,0.3)]';
-        popupMsg.innerHTML = '<span>JOIN POPUP BROWSER :)</span><p class="text-white text-sm font-sans mt-4">Look for the newly opened window to play!</p>';
-        smashFrame.parentNode.appendChild(popupMsg);
-    }
-
-    // Extract actual room code from the active smashUrl
     let roomCode = "us643345";
     if (activeRoomData && activeRoomData.smashUrl) {
         const match = activeRoomData.smashUrl.match(/room=([A-Za-z0-9]+)/i);
         if (match) roomCode = match[1];
     }
 
-    // Transform code container into an actual clickable copy button
     if (codeContainer) {
         codeContainer.classList.remove('hidden'); 
         codeContainer.innerHTML = `
@@ -819,6 +807,45 @@ function enterGameFromLobby() {
                 <span class="bg-blue-950 text-yellow-300 text-[10px] px-2 py-0.5 rounded-lg">COPY</span>
             </button>
         `;
+    }
+
+    let popupMsg = document.getElementById('popupModeMessage');
+    if (!popupMsg && smashFrame && smashFrame.parentNode) {
+        smashFrame.parentNode.style.position = 'relative';
+        popupMsg = document.createElement('div');
+        popupMsg.id = 'popupModeMessage';
+        // Styled with a high z-index and a slide-down top control header so it can never be covered or hidden
+        popupMsg.className = 'absolute inset-0 flex flex-col items-center justify-center bg-blue-950 text-yellow-300 font-bungee text-3xl z-10 rounded-xl hidden border-2 border-yellow-400 shadow-[0_0_20px_rgba(250,204,21,0.3)] overflow-hidden';
+        
+        popupMsg.innerHTML = `
+            <div id="slideDownExitBar" class="absolute top-0 left-0 right-0 bg-blue-900/95 border-b-2 border-yellow-400 p-3 flex justify-between items-center z-30 shadow-2xl transition-all">
+                <div class="flex items-center gap-2">
+                    <span class="font-bungee text-xs text-yellow-300">🕹️ POPUP BROWSER MODE ACTIVE</span>
+                </div>
+                <div class="flex items-center gap-3">
+                    <button onclick="copyActiveRoomCode('${roomCode}')" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 font-bungee text-[10px] px-3 py-1.5 rounded-xl shadow">📋 Copy Code (${roomCode})</button>
+                    <button onclick="leaveEmbeddedGame()" class="bg-red-600 hover:bg-red-500 text-white font-bungee text-xs px-4 py-1.5 rounded-xl shadow-lg cursor-pointer transform hover:scale-105 transition-all">🚪 EXIT GAME</button>
+                </div>
+            </div>
+            <div class="flex flex-col items-center justify-center h-full pt-12">
+                <span>JOIN POPUP BROWSER :)</span>
+                <p class="text-white text-sm font-sans mt-4">Look for the newly opened window to play!</p>
+            </div>
+        `;
+        smashFrame.parentNode.appendChild(popupMsg);
+    } else if (popupMsg) {
+        const exitBar = popupMsg.querySelector('#slideDownExitBar');
+        if (exitBar) {
+            exitBar.innerHTML = `
+                <div class="flex items-center gap-2">
+                    <span class="font-bungee text-xs text-yellow-300">🕹️ POPUP BROWSER MODE ACTIVE</span>
+                </div>
+                <div class="flex items-center gap-3">
+                    <button onclick="copyActiveRoomCode('${roomCode}')" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 font-bungee text-[10px] px-3 py-1.5 rounded-xl shadow">📋 Copy Code (${roomCode})</button>
+                    <button onclick="leaveEmbeddedGame()" class="bg-red-600 hover:bg-red-500 text-white font-bungee text-xs px-4 py-1.5 rounded-xl shadow-lg cursor-pointer transform hover:scale-105 transition-all">🚪 EXIT GAME</button>
+                </div>
+            `;
+        }
     }
 
     if (currentGameplayMode === 'popup') {
