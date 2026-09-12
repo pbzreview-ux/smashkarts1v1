@@ -10,13 +10,9 @@
 </head>
 <body class="min-h-screen flex flex-col justify-between overflow-x-hidden">
 
-    <!-- FLOATING TOAST NOTIFICATION CONTAINER -->
     <div id="toastContainer"></div>
-
-    <!-- FLOATING SETTINGS BUTTON -->
     <button id="settingsFloatingBtn" onclick="openSettingsModal()" title="Settings">⚙️</button>
 
-    <!-- SETTINGS MODAL -->
     <div id="settingsModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
         <div class="w-full max-w-sm bg-blue-900 border-2 border-yellow-400 rounded-3xl p-6 shadow-2xl">
             <div class="flex justify-between items-center mb-4">
@@ -32,11 +28,10 @@
                     </div>
                     <label class="relative inline-flex items-center cursor-pointer">
                         <input type="checkbox" id="onlineStatusToggle" onchange="toggleOnlineStatus(this.checked)" checked class="sr-only peer">
-                        <div class="w-11 h-6 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500"></div>
+                        <div class="w-11 h-6 bg-gray-750 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500"></div>
                     </label>
                 </div>
 
-                <!-- GAMEPLAY MODE SETTING -->
                 <div class="flex justify-between items-center bg-blue-950/80 p-3.5 rounded-2xl border border-white/10">
                     <div>
                         <span class="block text-xs font-bold text-white">Gameplay Mode</span>
@@ -55,7 +50,6 @@
         </div>
     </div>
 
-    <!-- EDIT USERNAME MODAL -->
     <div id="editUsernameModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
         <div class="w-full max-w-sm bg-blue-900 border-2 border-yellow-400 rounded-3xl p-6 shadow-2xl">
             <h3 class="font-bungee text-lg text-yellow-300 mb-3">✏️ CHANGE USERNAME</h3>
@@ -67,37 +61,6 @@
         </div>
     </div>
 
-    <!-- CHALLENGE RECEIVED MODAL -->
-    <div id="challengeModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
-        <div class="w-full max-w-sm bg-blue-900 border-2 border-yellow-400 rounded-3xl p-6 text-center shadow-2xl">
-            <span class="text-4xl block mb-2">⚔️</span>
-            <h3 id="challengeText" class="font-bungee text-base text-yellow-300 mb-4">Match Challenge Received!</h3>
-            <div class="flex gap-2">
-                <button onclick="declineChallenge()" class="w-1/2 bg-red-600 hover:bg-red-500 text-white font-bold py-3 rounded-xl text-xs">DECLINE</button>
-                <button onclick="acceptChallenge()" class="w-1/2 btn-smash text-white font-bungee py-3 rounded-xl text-xs">ACCEPT & PLAY</button>
-            </div>
-        </div>
-    </div>
-
-    <!-- SEND FRIEND 1v1 CHALLENGE WITH CODE MODAL -->
-    <div id="friendChallengeModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
-        <div class="w-full max-w-2xl bg-blue-900 border-2 border-yellow-400 rounded-3xl p-5 shadow-2xl flex flex-col h-[85vh]">
-            <div class="flex justify-between items-center mb-3">
-                <h3 id="friendChallengeHeader" class="font-bungee text-base text-yellow-300">⚔️ CREATE 1v1 ROOM CODE FOR FRIEND</h3>
-                <button onclick="closeFriendChallengeModal()" class="text-white hover:text-red-400 font-bold text-lg">✕</button>
-            </div>
-            <p class="text-xs text-blue-200 mb-2">Create a private room in Smash Karts below, copy the link/code, and send the invite to your friend!</p>
-            <div class="flex-1 bg-black rounded-2xl overflow-hidden mb-3">
-                <iframe id="friendChallengeIframe" src="" class="w-full h-full border-0"></iframe>
-            </div>
-            <div class="flex gap-2">
-                <input type="text" id="friendChallengeCodeInput" placeholder="Paste created room link or code here..." class="smash-input flex-1 px-3 py-2 rounded-xl text-xs font-bold">
-                <button onclick="sendFriendChallengeWithCode()" class="btn-smash px-5 py-2 rounded-xl font-bungee text-xs text-white">🚀 SEND 1v1 INVITE</button>
-            </div>
-        </div>
-    </div>
-
-    <!-- LOGIN / CREATE ACCOUNT MODAL -->
     <div id="authModal" class="fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
         <div class="w-full max-w-md bg-blue-900 border-2 border-yellow-400 rounded-3xl p-6 shadow-2xl">
             <div class="flex border-b border-white/20 mb-6 pb-2 gap-4 justify-center">
@@ -105,7 +68,6 @@
                 <button id="tabRegisterBtn" onclick="toggleAuthTab('register')" class="font-bungee text-lg text-white/50 pb-1 hover:text-white">CREATE ACCOUNT</button>
             </div>
 
-            <!-- Login Form -->
             <form id="loginForm" onsubmit="handleAuthSubmit(event, 'login')" class="space-y-4">
                 <div>
                     <label class="block text-xs font-bold uppercase text-blue-200 mb-1">Username</label>
@@ -122,7 +84,6 @@
                 <button type="submit" class="btn-smash w-full py-3.5 rounded-2xl font-bungee text-lg text-white">LOG IN & PLAY</button>
             </form>
 
-            <!-- Register Form -->
             <form id="registerForm" onsubmit="handleAuthSubmit(event, 'register')" class="space-y-4 hidden">
                 <div>
                     <label class="block text-xs font-bold uppercase text-blue-200 mb-1">Username (Visible to others)</label>
@@ -141,16 +102,6 @@
         </div>
     </div>
 
-    <!-- INACTIVITY WARNING MODAL -->
-    <div id="inactivityModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
-        <div class="w-full max-w-sm bg-blue-900 border-2 border-red-500 rounded-3xl p-6 text-center shadow-2xl">
-            <h3 class="font-bungee text-lg text-red-400 mb-2">⚠️ SESSION EXPIRING</h3>
-            <p class="text-xs text-white mb-4">You have been inactive. Logging out in <strong id="countdownTimer" class="text-yellow-300 text-base">60</strong> seconds.</p>
-            <button onclick="AuthSession.resetInactivity()" class="btn-smash w-full py-3 rounded-xl font-bungee text-sm text-white">STAY LOGGED IN</button>
-        </div>
-    </div>
-
-    <!-- ONLINE USERS MODAL -->
     <div id="onlineUsersModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
         <div class="w-full max-w-md bg-blue-900 border-2 border-emerald-400 rounded-3xl p-6 shadow-2xl">
             <div class="flex justify-between items-center mb-4">
@@ -161,7 +112,6 @@
         </div>
     </div>
 
-    <!-- EMBEDDED GAME SCREEN -->
     <div id="gameScreen" class="hidden fixed inset-0 z-40 bg-black flex flex-col">
         <div class="bg-blue-900 border-b border-white/20 px-4 py-2 flex justify-between items-center z-10">
             <div class="flex items-center gap-3">
@@ -169,7 +119,6 @@
                 <span id="gameModeBadge" class="bg-yellow-400 text-blue-950 font-black text-xs px-2.5 py-0.5 rounded-full uppercase">1v1</span>
             </div>
             <div class="flex items-center gap-2">
-                <!-- Code Badge for Type in Code mode -->
                 <div id="gameRoomCodeContainer" class="hidden items-center gap-1 bg-yellow-400/20 border border-yellow-400 text-yellow-300 font-mono font-bold text-xs px-2.5 py-1.5 rounded-xl">
                     <span>Code:</span>
                     <span id="gameRoomCodeDisplay">us674723</span>
@@ -179,7 +128,6 @@
                     💬 <span id="toggleChatBtnLabel">Show Chat</span>
                 </button>
 
-                <!-- DROPDOWN MENU FOR CONTROLS -->
                 <div class="relative">
                     <button onclick="toggleGameHeaderDropdown()" class="bg-blue-800 hover:bg-blue-700 text-yellow-300 font-bungee px-3 py-1.5 rounded-xl text-xs uppercase flex items-center gap-1 border border-yellow-400/40 shadow-md">
                         <span>⚙️ Options ▾</span>
@@ -196,7 +144,6 @@
         <div class="relative flex-1 w-full h-full">
             <iframe id="smashFrame" src="" class="w-full h-full border-0" allow="autoplay; keyboard; fullscreen"></iframe>
 
-            <!-- FLOATING OVERLAY CHAT -->
             <div id="chatOverlay" class="hidden-overlay bg-blue-900/90 border-2 border-yellow-400 rounded-2xl p-3 shadow-2xl flex flex-col">
                 <div class="flex justify-between items-center mb-2 border-b border-white/10 pb-1">
                     <span class="font-bungee text-xs text-yellow-300">💬 IN-GAME CHAT</span>
@@ -211,7 +158,6 @@
         </div>
     </div>
 
-    <!-- MAIN DASHBOARD -->
     <div id="mainDashboard" class="min-h-screen flex flex-col justify-between">
         <header class="w-full px-6 py-4 flex justify-between items-center">
             <div class="flex items-center gap-3">
@@ -236,7 +182,6 @@
         </header>
 
         <div class="flex flex-1 w-full max-w-7xl mx-auto px-4">
-            <!-- SIDEBAR -->
             <aside class="flex flex-col gap-4 py-6 pr-4 items-center">
                 <button id="btnNavLeaderboard" onclick="showTab('leaderboardTab')" title="Leaderboard" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg">🏆</button>
                 <button id="btnNav1v1" onclick="switchMatchMode('1v1')" title="1v1 Matchmaking" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg active">🎮</button>
@@ -256,22 +201,18 @@
                 </div>
 
                 <div class="w-full max-w-4xl bg-blue-950/40 border-2 border-white/20 backdrop-blur-xl rounded-3xl p-6 shadow-2xl mb-8">
-                    <!-- LEADERBOARD TAB -->
                     <div id="leaderboardTab" class="tab-content hidden space-y-4">
                         <h2 class="font-bungee text-xl text-yellow-300 mb-2">🏆 TOP 5 PLAYERS (MOST GAMES PLAYED)</h2>
                         <div id="leaderboardList" class="space-y-2"></div>
                     </div>
 
-                    <!-- MESSAGES & FRIENDS TAB -->
                     <div id="messagesTab" class="tab-content hidden space-y-4">
                         <h2 class="font-bungee text-xl text-yellow-300 mb-2">💬 FRIENDS & DIRECT MESSAGES</h2>
                         <div class="grid grid-cols-1 md:grid-cols-3 gap-4 h-80">
-                            <!-- Friends List -->
                             <div class="bg-blue-900/60 p-3 rounded-2xl border border-white/10 flex flex-col">
                                 <span class="font-bungee text-xs text-yellow-300 mb-2">YOUR FRIENDS</span>
                                 <div id="friendsTabList" class="flex-1 overflow-y-auto space-y-1.5 pr-1"></div>
                             </div>
-                            <!-- Direct Message Window -->
                             <div class="md:col-span-2 bg-blue-900/60 p-3 rounded-2xl border border-white/10 flex flex-col">
                                 <span id="activeDMChatHeader" class="font-bungee text-xs text-yellow-300 mb-2">SELECT A FRIEND TO MESSAGE</span>
                                 <div id="tabDMMessages" class="flex-1 overflow-y-auto space-y-1.5 pr-1 text-xs mb-3 bg-blue-950/80 p-2.5 rounded-xl border border-white/10"></div>
@@ -283,7 +224,6 @@
                         </div>
                     </div>
 
-                    <!-- MATCHMAKING TAB -->
                     <div id="setupTab" class="tab-content space-y-6">
                         <div class="flex justify-between items-center border-b border-white/10 pb-4">
                             <div>
@@ -318,7 +258,6 @@
         </div>
     </div>
 
-    <!-- PRE-GAME LOBBY MODAL -->
     <div id="preGameLobbyModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
         <div class="w-full max-w-2xl bg-blue-900 border-2 border-yellow-400 rounded-3xl p-6 shadow-2xl relative flex flex-col max-h-[90vh]">
             <div class="flex justify-between items-center border-b border-white/10 pb-3 mb-4">
@@ -345,7 +284,6 @@
         </div>
     </div>
 
-    <!-- MAKE CODE MODAL -->
     <div id="makeCodeModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
         <div class="w-full max-w-3xl bg-blue-900 border-2 border-white/30 rounded-3xl p-5 shadow-2xl flex flex-col h-[85vh]">
             <div class="flex justify-between items-center mb-3">
@@ -362,7 +300,6 @@
         </div>
     </div>
 
-    <!-- PUBLIC ROOMS MODAL -->
     <div id="findGameModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
         <div class="w-full max-w-md bg-blue-900 border-2 border-white/30 rounded-3xl p-6 shadow-2xl relative">
             <div class="flex justify-between items-center mb-4">
