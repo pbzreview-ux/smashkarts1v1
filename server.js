@@ -37,21 +37,24 @@ function sanitizeUsername(name) {
 
 function extractSmashUrl(rawInput) {
     if (!rawInput) return null;
-    const trimmed = String(rawInput).trim();
+    let text = String(rawInput).trim();
     
-    // Match full URLs containing smashkarts.io (like your full room link example)
-    const match = trimmed.match(/https?:\/\/[^\s]+/i);
-    if (match) {
-        return match[0];
+    if (text.startsWith('ttps://')) {
+        text = 'h' + text;
     }
     
-    if (trimmed.toLowerCase().includes('smashkarts.io')) {
-        return 'https://' + trimmed.replace(/^https?:\/\//i, '');
+    const linkMatch = text.match(/(https?:\/\/)?(www\.)?smashkarts\.io\/link\/\?[^\s]+/i);
+    
+    if (linkMatch) {
+        let url = linkMatch[0];
+        if (!url.startsWith('http')) {
+            url = 'https://' + url;
+        }
+        return url;
     }
     
-    // If user enters just a raw room code (e.g. usw341745 or us367571), convert it into the official room link format
-    if (trimmed.length > 0 && !trimmed.includes(' ')) {
-        return `https://smashkarts.io/link/?room=${encodeURIComponent(trimmed)}`;
+    if (text.length > 0 && !text.includes(' ') && !text.includes('/')) {
+        return `https://smashkarts.io/link/?room=${encodeURIComponent(text)}`;
     }
     
     return null;

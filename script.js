@@ -589,6 +589,22 @@ function closeMakeCodeModal() {
     document.getElementById('makeCodeModal').classList.add('hidden');
 }
 
+function extractSmashUrlClient(rawInput) {
+    if (!rawInput) return "";
+    let text = String(rawInput).trim();
+    if (text.startsWith('ttps://')) text = 'h' + text;
+    const linkMatch = text.match(/(https?:\/\/)?(www\.)?smashkarts\.io\/link\/\?[^\s]+/i);
+    if (linkMatch) {
+        let url = linkMatch[0];
+        if (!url.startsWith('http')) url = 'https://' + url;
+        return url;
+    }
+    if (text.length > 0 && !text.includes(' ') && !text.includes('/')) {
+        return `https://smashkarts.io/link/?room=${encodeURIComponent(text)}`;
+    }
+    return text;
+}
+
 function copyAndPlay() {
     const codeInput = document.getElementById('copyCodeInput').value.trim();
     if (!codeInput) {
@@ -596,7 +612,10 @@ function copyAndPlay() {
         return;
     }
     
-    document.getElementById('smashUrl').value = codeInput;
+    // Clean out all the extra garbage text before using the URL
+    const cleanLink = extractSmashUrlClient(codeInput);
+    
+    document.getElementById('smashUrl').value = cleanLink;
     closeMakeCodeModal();
     createLobby();
 }
