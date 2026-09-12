@@ -13,7 +13,7 @@ app.use(express.static(path.join(__dirname, '/')));
 
 // Socket Data Storage
 const connectedPlayers = {}; // socketId -> { id, username, email, isAuthenticated, isOnline, friends: Set, friendRequests: Set }
-const activeRooms = []; // Array of room objects
+const activeRoomsMap = new Map(); // roomId -> room object
 const playerStats = {}; // username -> matches count
 const directMessageStore = {}; // 'user1__DM__user2' -> [ { senderUsername, message, timestamp } ]
 
@@ -61,6 +61,11 @@ function findSocketByUsername(username) {
     return Object.values(connectedPlayers).find(
         p => p.username.toLowerCase() === username.toLowerCase()
     );
+}
+
+function broadcastPublicRooms() {
+    const roomsList = Array.from(activeRoomsMap.values());
+    io.emit('public_rooms_update', roomsList);
 }
 
 io.on('connection', (socket) => {
@@ -193,10 +198,16 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Match Challenges
-    socket.on('send_match_challenge', ({ targetSocketId, fromUsername, mode, smashUrl }) => {
+    // Match Challenges (Friends Only)
+    socket.on('send_match_challenge', ({ targetSocketId, targetUsername, fromUsername, mode, smashUrl }) => {
+        const sender = connectedPlayers[socket.id];
+        const target = targetSocketId ? connectedPlayers[targetSocketId] : findSocketByUsername(targetUsername);
+
+        if (!sender || !target) return;
+        if (!sender.friends.has(target.username)) return;
+
         const senderName = sanitizeUsername(fromUsername);
-        io.to(targetSocketId).emit('receive_match_challenge', {
+        io.to(target.id).emit('receive_match_challenge', {
             challengerSocketId: socket.id,
             fromUsername: senderName,
             mode: mode || '1v1',
@@ -204,7 +215,7 @@ io.on('connection', (socket) => {
         });
     });
 
-    socket.on('accept_match_challenge', ({ challengerSocketId, targetUsername }) => {
+    socket.on('accept_match_challenge', ({ challengerSocketId, targetUsername, smashUrl }) => {
         const acceptName = sanitizeUsername(targetUsername);
         const challenger = connectedPlayers[challengerSocketId];
         const challengerName = challenger ? challenger.username : 'Challenger';
@@ -212,8 +223,8 @@ io.on('connection', (socket) => {
         
         const room = {
             roomId,
-            hostName: acceptName,
-            smashUrl: 'https://smashkarts.io',
+            hostName: challengerName,
+            smashUrl: extractSmashUrl(smashUrl),
             winCondition: 'First to 3',
             mode: '1v1',
             maxPlayers: 2,
@@ -221,19 +232,21 @@ io.on('connection', (socket) => {
                 { id: socket.id, name: acceptName },
                 { id: challengerSocketId, name: challengerName }
             ],
+            exitedPlayers: [],
             messages: []
         };
-        activeRooms.push(room);
+
+        activeRoomsMap.set(roomId, room);
 
         socket.join(roomId);
         const challengerSocket = io.sockets.sockets.get(challengerSocketId);
         if (challengerSocket) challengerSocket.join(roomId);
 
         io.to(roomId).emit('challenge_game_start', room);
-        io.emit('public_rooms_update', activeRooms);
+        broadcastPublicRooms();
     });
 
-    // Room Management
+    // Room Creation & Joining
     socket.on('create_room', (data) => {
         const cleanUrl = extractSmashUrl(data.smashUrl);
         const roomId = Math.random().toString(36).substring(2, 8).toUpperCase();
@@ -248,23 +261,39 @@ io.on('connection', (socket) => {
             mode,
             maxPlayers: mode === '2v2' ? 4 : 2,
             players: [{ id: socket.id, name: hostName }],
+            exitedPlayers: [],
             messages: []
         };
 
-        activeRooms.push(newRoom);
-        if (activeRooms.length > 30) activeRooms.shift();
+        activeRoomsMap.set(roomId, newRoom);
 
         socket.join(roomId);
         socket.emit('room_created', newRoom);
-        io.emit('public_rooms_update', activeRooms);
+        broadcastPublicRooms();
     });
 
     socket.on('get_public_rooms', () => {
-        socket.emit('public_rooms_update', activeRooms);
+        broadcastPublicRooms();
+    });
+
+    // Leave Match / Delete Lobby when all exit
+    socket.on('leave_match', ({ roomId }) => {
+        const room = activeRoomsMap.get(roomId);
+        if (!room) return;
+
+        if (!room.exitedPlayers.includes(socket.id)) {
+            room.exitedPlayers.push(socket.id);
+        }
+
+        // Delete room once all players have left
+        if (room.exitedPlayers.length >= room.players.length) {
+            activeRoomsMap.delete(roomId);
+            broadcastPublicRooms();
+        }
     });
 
     socket.on('send_match_chat', ({ roomId, message, senderName }) => {
-        const room = activeRooms.find(r => r.roomId === roomId);
+        const room = activeRoomsMap.get(roomId);
         if (message && message.trim()) {
             const cleanMsg = moderateText(message.trim());
             const cleanSender = sanitizeUsername(senderName);
@@ -281,16 +310,21 @@ io.on('connection', (socket) => {
     socket.on('disconnect', () => {
         delete connectedPlayers[socket.id];
         
-        // Clean empty players out of active rooms
-        for (let i = activeRooms.length - 1; i >= 0; i--) {
-            activeRooms[i].players = activeRooms[i].players.filter(p => p.id !== socket.id);
-            if (activeRooms[i].players.length === 0) {
-                activeRooms.splice(i, 1);
+        // Clean up rooms where disconnected player was participating
+        for (const [roomId, room] of activeRoomsMap.entries()) {
+            const isParticipant = room.players.some(p => p.id === socket.id);
+            if (isParticipant) {
+                if (!room.exitedPlayers.includes(socket.id)) {
+                    room.exitedPlayers.push(socket.id);
+                }
+                if (room.exitedPlayers.length >= room.players.length) {
+                    activeRoomsMap.delete(roomId);
+                }
             }
         }
 
         broadcastOnlineUsers();
-        io.emit('public_rooms_update', activeRooms);
+        broadcastPublicRooms();
     });
 });
 
@@ -317,4 +351,4 @@ function broadcastLeaderboard() {
 }
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`Smash Karts Arena running on port ${PORT}`));
+server.listen(PORT, () => console.log(`Smashkarts1v1s Arena running on port ${PORT}`));
