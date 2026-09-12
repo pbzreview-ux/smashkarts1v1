@@ -11,9 +11,8 @@ const io = new Server(server, {
 
 app.use(express.static(path.join(__dirname, '/')));
 
-// Socket Data Storage
 const connectedPlayers = {}; 
-const activeRoomsMap = new Map(); // roomId -> room object
+const activeRoomsMap = new Map(); 
 const playerStats = {}; 
 const directMessageStore = {}; 
 
@@ -50,10 +49,10 @@ function extractSmashUrl(rawInput) {
     }
     
     if (trimmed.length > 0 && trimmed.length < 30 && !trimmed.includes(' ')) {
-        return `https://smashkarts.io/?game=${encodeURIComponent(trimmed)}`;
+        return `https://smashkarts.io/join/${encodeURIComponent(trimmed)}`;
     }
     
-    return "https://smashkarts.io";
+    return `https://smashkarts.io/?game=${encodeURIComponent(trimmed)}`;
 }
 
 function moderateText(text) {

@@ -574,7 +574,6 @@ function expandSmashBox() {
     const container = document.getElementById('generatorContainer');
     const exitBtn = document.getElementById('exitFullscreenBtn');
     
-    // Transform container into a fixed fullscreen view without reloading iframe
     container.style.position = 'fixed';
     container.style.top = '0';
     container.style.left = '0';
@@ -597,7 +596,6 @@ function collapseSmashBox() {
     const container = document.getElementById('generatorContainer');
     const exitBtn = document.getElementById('exitFullscreenBtn');
     
-    // Restore back to original dashboard grid position without destroying the iframe session
     container.style.position = '';
     container.style.top = '';
     container.style.left = '';
@@ -616,7 +614,19 @@ function pasteAndPlayTransition() {
     const iframe = document.getElementById('makeCodeIframe');
     
     if (codeInput.trim()) {
-        const targetUrl = codeInput.includes('http') ? codeInput : `https://smashkarts.io/?game=${encodeURIComponent(codeInput)}`;
+        const trimmed = codeInput.trim();
+        let targetUrl = "https://smashkarts.io";
+        
+        if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+            targetUrl = trimmed;
+        } else if (trimmed.toLowerCase().includes('smashkarts.io')) {
+            targetUrl = 'https://' + trimmed.replace(/^https?:\/\//, '');
+        } else if (trimmed.length > 0 && trimmed.length < 30 && !trimmed.includes(' ')) {
+            targetUrl = `https://smashkarts.io/join/${encodeURIComponent(trimmed)}`;
+        } else {
+            targetUrl = `https://smashkarts.io/?game=${encodeURIComponent(trimmed)}`;
+        }
+        
         iframe.src = targetUrl;
     }
 
@@ -630,7 +640,6 @@ function switchMatchMode(mode) {
     document.getElementById('btnNav1v1').classList.toggle('active', mode === '1v1');
     document.getElementById('btnNav2v2').classList.toggle('active', mode === '2v2');
     document.getElementById('arenaTitle').innerText = `${mode.toUpperCase()} MATCHMAKING`;
-    document.getElementById('arenaSubtitle', mode === '2v2' ? 'Start or join a 2v2 match' : 'Create your room on the right, expand it to play, and keep your session alive!');
 }
 
 function showTab(tabId) {

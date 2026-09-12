@@ -76,7 +76,7 @@
             </div>
             <p class="text-xs text-blue-200 mb-2">Create a private room in Smash Karts below, copy the link/code, and send the invite to your friend!</p>
             <div class="flex-1 bg-black rounded-2xl overflow-hidden mb-3">
-                <iframe id="friendChallengeIframe" src="" class="w-full h-full border-0"></iframe>
+                <iframe id="friendChallengeIframe" src="" class="w-full h-full border-0" allow="autoplay; keyboard; fullscreen"></iframe>
             </div>
             <div class="flex gap-2">
                 <input type="text" id="friendChallengeCodeInput" placeholder="Paste created room link or code here..." class="smash-input flex-1 px-3 py-2 rounded-xl text-xs font-bold">
@@ -146,41 +146,6 @@
                 <button onclick="closeOnlineModal()" class="text-white hover:text-red-400 font-bold text-lg">✕</button>
             </div>
             <div id="onlineUsersList" class="max-h-80 overflow-y-auto space-y-2"></div>
-        </div>
-    </div>
-
-    <!-- EMBEDDED GAME SCREEN -->
-    <div id="gameScreen" class="hidden fixed inset-0 z-40 bg-black flex flex-col">
-        <div class="bg-blue-900 border-b border-white/20 px-4 py-2 flex justify-between items-center z-10">
-            <div class="flex items-center gap-3">
-                <span class="font-bungee text-yellow-300 text-lg">🎮 SMASH KARTS</span>
-                <span id="gameModeBadge" class="bg-yellow-400 text-blue-950 font-black text-xs px-2.5 py-0.5 rounded-full uppercase">1v1</span>
-            </div>
-            <div class="flex items-center gap-2">
-                <button onclick="toggleOverlayChat()" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 font-black px-3 py-1.5 rounded-xl text-xs uppercase shadow-md">
-                    💬 <span id="toggleChatBtnLabel">Show Chat</span>
-                </button>
-                <button onclick="leaveEmbeddedGame()" class="bg-red-600 hover:bg-red-500 text-white font-black px-4 py-1.5 rounded-xl text-xs uppercase shadow-md">
-                    ✕ Exit Game
-                </button>
-            </div>
-        </div>
-
-        <div class="relative flex-1 w-full h-full">
-            <iframe id="smashFrame" src="" class="w-full h-full border-0" allow="autoplay; keyboard; fullscreen"></iframe>
-
-            <!-- FLOATING OVERLAY CHAT -->
-            <div id="chatOverlay" class="hidden-overlay bg-blue-900/90 border-2 border-yellow-400 rounded-2xl p-3 shadow-2xl flex flex-col">
-                <div class="flex justify-between items-center mb-2 border-b border-white/10 pb-1">
-                    <span class="font-bungee text-xs text-yellow-300">💬 IN-GAME CHAT</span>
-                    <button onclick="toggleOverlayChat()" class="text-white hover:text-red-400 font-bold text-xs">✕</button>
-                </div>
-                <div id="matchChatMessages" class="h-36 overflow-y-auto space-y-1.5 text-xs mb-2 pr-1"></div>
-                <div class="flex gap-1.5">
-                    <input type="text" id="matchChatInput" placeholder="Type..." onkeydown="if(event.key==='Enter') sendMatchChatMessage()" class="smash-input flex-1 px-2.5 py-1.5 rounded-xl text-xs">
-                    <button onclick="sendMatchChatMessage()" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 font-black px-3 py-1.5 rounded-xl text-xs">Send</button>
-                </div>
-            </div>
         </div>
     </div>
 
@@ -261,7 +226,7 @@
                         <div class="flex justify-between items-center border-b border-white/10 pb-4">
                             <div>
                                 <h2 id="arenaTitle" class="font-bungee text-2xl text-white">1v1 MATCHMAKING</h2>
-                                <p id="arenaSubtitle" class="text-xs text-blue-200">Create your room on the right, then paste & play or create lobby!</p>
+                                <p id="arenaSubtitle" class="text-xs text-blue-200">Create your room on the right, expand it to play, and keep your session alive!</p>
                             </div>
                             <button onclick="openFindGameModal()" class="text-xs bg-emerald-500 hover:bg-emerald-400 text-white font-black px-5 py-2.5 rounded-xl uppercase">🔍 Public Lobbies</button>
                         </div>
@@ -287,18 +252,21 @@
                                 <button onclick="createLobby()" class="btn-smash w-full py-4 rounded-2xl font-bungee text-lg text-white">+ CREATE LOBBY & PRE-CHAT</button>
                             </div>
 
-                            <!-- Right Side: Small Smash Karts Box Generator -->
-                            <div class="bg-blue-900/60 p-4 rounded-3xl border border-white/10 flex flex-col h-[420px] lg:h-auto relative">
+                            <!-- Right Side: Expanding Smash Karts Box Generator -->
+                            <div id="generatorContainer" class="bg-blue-900/60 p-4 rounded-3xl border border-white/10 flex flex-col h-[420px] lg:h-auto relative transition-all duration-300">
                                 <div class="flex justify-between items-center mb-2">
                                     <span class="font-bungee text-xs text-yellow-300">⚡ ROOM CODE GENERATOR</span>
-                                    <button onclick="copyCodeFromBox()" class="text-[10px] bg-yellow-400 text-blue-950 font-black px-2.5 py-1 rounded-lg">📋 Copy Code</button>
+                                    <div class="flex gap-2">
+                                        <button id="exitFullscreenBtn" onclick="collapseSmashBox()" class="hidden text-[10px] bg-red-600 text-white font-black px-3 py-1 rounded-lg">✕ Exit Fullscreen</button>
+                                        <button onclick="copyCodeFromBox()" class="text-[10px] bg-yellow-400 text-blue-950 font-black px-2.5 py-1 rounded-lg">📋 Copy Code</button>
+                                    </div>
                                 </div>
                                 <div id="smashBoxWrapper" class="flex-1 bg-black rounded-2xl overflow-hidden relative transition-all duration-300 ease-in-out">
                                     <iframe id="makeCodeIframe" src="https://smashkarts.io" class="w-full h-full border-0" allow="autoplay; keyboard; fullscreen"></iframe>
                                 </div>
                                 <div class="mt-3 flex gap-2">
                                     <input type="text" id="quickCodeInput" placeholder="Paste created link/code here..." class="smash-input flex-1 px-3 py-2 rounded-xl text-xs font-bold">
-                                    <button onclick="pasteAndPlayTransition()" class="btn-smash px-4 py-2 rounded-xl font-bungee text-xs text-white">🚀 PASTE & PLAY</button>
+                                    <button onclick="pasteAndPlayTransition()" class="btn-smash px-4 py-2 rounded-xl font-bungee text-xs text-white">🚀 EXPAND & JOIN</button>
                                 </div>
                             </div>
                         </div>
@@ -321,7 +289,7 @@
                         <h4 class="font-bungee text-xs text-yellow-300 mb-2">PLAYERS</h4>
                         <div id="preGamePlayerList" class="space-y-2 text-xs"></div>
                     </div>
-                    <button onclick="enterGameFromLobby()" class="btn-smash w-full py-3 rounded-xl font-bungee text-sm text-white">🚀 JOIN GAME</button>
+                    <button onclick="enterGameFromLobby()" class="btn-smash w-full py-3 rounded-xl font-bungee text-sm text-white">🚀 EXPAND & JOIN</button>
                 </div>
                 <div class="md:col-span-2 bg-blue-950/80 rounded-2xl p-3 border border-white/10 flex flex-col">
                     <h4 class="font-bungee text-xs text-yellow-300 mb-2">💬 PRE-MATCH CHAT</h4>
