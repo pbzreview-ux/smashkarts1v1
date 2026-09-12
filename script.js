@@ -346,8 +346,6 @@ function closeFriendChallengeModal() {
 
 function sendFriendChallengeWithCode() {
     let codeInput = document.getElementById('friendChallengeCodeInput').value.trim();
-    
-    // Automatically parse the link even if they pasted the entire multi-line text block
     codeInput = extractSmashUrlClient(codeInput);
 
     if (!codeInput) {
@@ -593,43 +591,33 @@ function closeMakeCodeModal() {
     document.getElementById('makeCodeModal').classList.add('hidden');
 }
 
-// -------------------------------------------------------------
-// UPDATED EXTRACTOR: Gracefully handles multiline text blocks 
-// -------------------------------------------------------------
 function extractSmashUrlClient(rawInput) {
     if (!rawInput) return "";
     let text = String(rawInput).trim();
     
-    // Fix chopped 'h' when partially copying
     if (text.includes('ttps://')) {
         text = text.replace('ttps://', 'https://');
     }
 
-    // 1. Scans the entire text block to find the exact https link inside it
     const linkMatch = text.match(/https?:\/\/(www\.)?smashkarts\.io\/link\/\?[^\s]+/i);
     if (linkMatch) {
         return linkMatch[0];
     }
     
-    // 2. Scans the entire text block to see if they just pasted "Room: 123456"
     const roomMatch = text.match(/Room:\s*([A-Za-z0-9]+)/i);
     if (roomMatch) {
         return `https://smashkarts.io/link/?room=${encodeURIComponent(roomMatch[1])}`;
     }
 
-    // 3. Fallback: if they just typed a pure room code string with no spaces/newlines
     if (text.length > 0 && !text.includes(' ') && !text.includes('\n') && !text.includes('/')) {
         return `https://smashkarts.io/link/?room=${encodeURIComponent(text)}`;
     }
 
-    // Return empty if we couldn't find a match so error handling kicks in
     return "";
 }
 
 function copyAndPlay() {
     const codeInput = document.getElementById('copyCodeInput').value.trim();
-    
-    // Automatically parse the link even if they pasted the entire multi-line text block
     const cleanLink = extractSmashUrlClient(codeInput);
     
     if (!cleanLink) {
@@ -669,8 +657,6 @@ function createLobby() {
     const playerName = user ? user.username : "Player";
     
     let smashUrlInput = document.getElementById('smashUrl').value.trim();
-    
-    // Automatically parse the link even if they pasted the entire multi-line text block manually
     smashUrlInput = extractSmashUrlClient(smashUrlInput);
 
     if (!smashUrlInput) {
@@ -724,11 +710,17 @@ function enterGameFromLobby() {
         socket.emit('record_match_played', user.username);
     }
 
+    // Launch the exact room link in a new tab because Smash Karts' security script 
+    // forces iframes to redirect back to the main smashkarts.io homepage.
+    window.open(activeRoomData.smashUrl, '_blank');
+
     const gameScreen = document.getElementById('gameScreen');
     gameScreen.classList.remove('game-fade-exit', 'hidden');
     
-    // LOAD THE EXACT LAUNCH URL DIRECTLY INTO THE IFRAME
-    document.getElementById('smashFrame').src = activeRoomData.smashUrl;
+    const frame = document.getElementById('smashFrame');
+    if (frame) {
+        frame.src = activeRoomData.smashUrl;
+    }
     
     document.getElementById('gameModeBadge').innerText = activeRoomData.mode;
     document.getElementById('mainDashboard').classList.add('hidden');

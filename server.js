@@ -35,35 +35,28 @@ function sanitizeUsername(name) {
     return escapeHTML(trimmed.slice(0, 20));
 }
 
-// -------------------------------------------------------------
-// UPDATED EXTRACTOR: Gracefully handles multiline text blocks 
-// -------------------------------------------------------------
 function extractSmashUrl(rawInput) {
     if (!rawInput) return null;
     let text = String(rawInput).trim();
     
-    // Fix chopped 'h' when partially copying
     if (text.includes('ttps://')) {
         text = text.replace('ttps://', 'https://');
     }
 
-    // 1. Scans the entire text block to find the exact https link inside it
     const linkMatch = text.match(/https?:\/\/(www\.)?smashkarts\.io\/link\/\?[^\s]+/i);
     if (linkMatch) {
         return linkMatch[0];
     }
     
-    // 2. Scans the entire text block to see if they just pasted "Room: 123456"
     const roomMatch = text.match(/Room:\s*([A-Za-z0-9]+)/i);
     if (roomMatch) {
         return `https://smashkarts.io/link/?room=${encodeURIComponent(roomMatch[1])}`;
     }
 
-    // 3. Fallback: if they just typed a pure room code string with no spaces/newlines
     if (text.length > 0 && !text.includes(' ') && !text.includes('\n') && !text.includes('/')) {
         return `https://smashkarts.io/link/?room=${encodeURIComponent(text)}`;
     }
-
+    
     return null;
 }
 
