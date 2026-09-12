@@ -46,17 +46,14 @@ function extractSmashUrl(rawInput) {
         return match[0];
     }
     
-    // Check if it's a domain snippet
+    // Check if domain snippet is given
     if (trimmed.toLowerCase().includes('smashkarts.io')) {
         return 'https://' + trimmed.replace(/^https?:\/\//, '');
     }
     
-    // Check if it's a room code or join slug (e.g., 462xe, us941546)
+    // If it's a raw room code or slug (e.g., 462xe), route via query parameter game code
     if (trimmed.length > 0 && trimmed.length < 30 && !trimmed.includes(' ')) {
-        if (trimmed.startsWith('join/')) {
-            return `https://smashkarts.io/${trimmed}`;
-        }
-        return `https://smashkarts.io/join/${trimmed}`;
+        return `https://smashkarts.io/?game=${encodeURIComponent(trimmed)}`;
     }
     
     return "https://smashkarts.io";

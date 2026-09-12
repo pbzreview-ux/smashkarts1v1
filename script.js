@@ -487,7 +487,7 @@ function updateFriendsTabList() {
 function openTabDMWith(username) {
     activeDMTargetUser = username;
     showMessagesTab();
-    closeOnlineModal();
+    clearUnreadBadge();
     document.getElementById('activeDMChatHeader').innerText = `💬 MESSAGE WITH ${username.toUpperCase()}`;
     socket.emit('get_dm_history', { targetUsername: username });
 }
@@ -699,6 +699,10 @@ function leaveEmbeddedGame() {
         gameScreen.classList.add('hidden');
         document.getElementById('mainDashboard').classList.remove('hidden');
         activeRoomData = null;
+        
+        // Clear the Smash Karts input box so old code is reset on exit
+        const smashUrlInput = document.getElementById('smashUrl');
+        if (smashUrlInput) smashUrlInput.value = '';
     }, 350);
 }
 
