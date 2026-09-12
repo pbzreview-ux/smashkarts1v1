@@ -1,4 +1,4 @@
-const socket = io();
+\const socket = io();
 let currentMode = '1v1';
 let currentGameplayMode = 'popup'; // Default mode
 let activeRoomData = null;
@@ -10,6 +10,7 @@ let friendChallengeTargetUser = null;
 let onlineUsersCache = [];
 let publicRoomsCache = [];
 let pendingFriendRequests = [];
+let currentRoomCode = '';
 
 function updateGameplayMode(mode) {
     currentGameplayMode = mode;
@@ -644,10 +645,17 @@ function toggleOverlayChat() {
 
 document.getElementById('matchChatInput')?.addEventListener('input', triggerChatActivityTimer);
 
-function toggleGameHeaderDropdown() {
-    const dropdown = document.getElementById('gameHeaderDropdown');
-    if (dropdown) {
-        dropdown.classList.toggle('hidden');
+function toggleGameTopBar() {
+    const topBar = document.getElementById('gameTopBar');
+    const icon = document.getElementById('topBarTabIcon');
+    if (!topBar) return;
+
+    if (topBar.classList.contains('translate-y-0')) {
+        topBar.classList.remove('translate-y-0');
+        if (icon) icon.innerText = '▼';
+    } else {
+        topBar.classList.add('translate-y-0');
+        if (icon) icon.innerText = '▲';
     }
 }
 
@@ -669,10 +677,8 @@ function extractSmashUrlClient(rawInput) {
         text = text.replace('ttps://', 'https://');
     }
 
-    // Clean quotation marks or accidental extra wrappers
     text = text.replace(/['"]+/g, '');
 
-    // Match full smashkarts link with /link/? or standard query parameters (?room=...)
     const linkMatch = text.match(/https?:\/\/(www\.)?smashkarts\.io(\/link\/)?\?[^\s]+/i);
     if (linkMatch) {
         let matchedUrl = linkMatch[0];
@@ -801,7 +807,7 @@ function enterGameFromLobby() {
 
     const gameScreen = document.getElementById('gameScreen');
     const smashFrame = document.getElementById('smashFrame');
-    const codeContainer = document.getElementById('gameRoomCodeContainer');
+    const gameRoomCodeDisplay = document.getElementById('gameRoomCodeDisplay');
     
     let roomCode = "us643345";
     if (activeRoomData && activeRoomData.smashUrl) {
@@ -809,28 +815,9 @@ function enterGameFromLobby() {
         if (match) roomCode = match[1];
     }
 
-    // Convert the entire blue space / header options into a collapsible dropdown toolbar for full screen
-    if (codeContainer) {
-        codeContainer.classList.remove('hidden'); 
-        codeContainer.className = 'absolute top-3 left-3 z-30 flex flex-col items-start gap-1';
-        codeContainer.innerHTML = `
-            <button onclick="toggleGameHeaderDropdown()" class="bg-blue-950/90 border border-yellow-400/50 text-yellow-300 font-bungee text-xs px-3 py-2 rounded-xl shadow-lg flex items-center gap-2 cursor-pointer hover:bg-blue-900 transition-all">
-                <span>⚙️ OPTIONS / ROOM (${roomCode}) ▾</span>
-            </button>
-            <div id="gameHeaderDropdown" class="hidden flex flex-col gap-2 p-3 bg-blue-950/95 border border-yellow-400/50 rounded-2xl shadow-2xl backdrop-blur-md min-w-[220px]">
-                <button onclick="copyActiveRoomCode('${roomCode}')" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 font-bungee text-xs px-3 py-2 rounded-xl shadow flex items-center justify-between cursor-pointer">
-                    <span>📋 ROOM: ${roomCode}</span>
-                    <span class="bg-blue-950 text-yellow-300 text-[10px] px-2 py-0.5 rounded font-bold">COPY</span>
-                </button>
-                <button onclick="toggleOverlayChat()" class="bg-blue-900 hover:bg-blue-800 text-white font-bungee text-xs px-3 py-2 rounded-xl text-left flex items-center justify-between cursor-pointer border border-white/10">
-                    <span id="toggleChatBtnLabel">Show Chat</span>
-                    <span>💬</span>
-                </button>
-                <button onclick="leaveEmbeddedGame()" class="bg-red-600 hover:bg-red-500 text-white font-bungee text-xs px-3 py-2 rounded-xl text-left flex items-center justify-between cursor-pointer">
-                    <span>🚪 Exit Game</span>
-                </button>
-            </div>
-        `;
+    currentRoomCode = roomCode;
+    if (gameRoomCodeDisplay) {
+        gameRoomCodeDisplay.innerText = roomCode;
     }
 
     let popupMsgDiv = document.getElementById('popupMessageOverlay');
@@ -863,9 +850,10 @@ function enterGameFromLobby() {
 }
 
 function copyActiveRoomCode(code) {
-    if (navigator.clipboard) {
-        navigator.clipboard.writeText(code).then(() => {
-            showToast(`Room code (${code}) copied to clipboard!`, "📋");
+    const codeToCopy = code || currentRoomCode;
+    if (navigator.clipboard && codeToCopy) {
+        navigator.clipboard.writeText(codeToCopy).then(() => {
+            showToast(`Room code (${codeToCopy}) copied to clipboard!`, "📋");
         }).catch(() => {
             showToast("Failed to copy code.", "❌");
         });
@@ -886,8 +874,9 @@ function leaveEmbeddedGame() {
     const popupMsgDiv = document.getElementById('popupMessageOverlay');
     if (popupMsgDiv) popupMsgDiv.classList.add('hidden');
 
-    const dropdown = document.getElementById('gameHeaderDropdown');
-    if (dropdown) dropdown.classList.add('hidden');
+    const topBar = document.getElementById('gameTopBar');
+    if (topBar) topBar.classList.remove('translate-y-0');
+
     gameScreen.classList.add('game-fade-exit');
 
     setTimeout(() => {
