@@ -710,17 +710,12 @@ function enterGameFromLobby() {
         socket.emit('record_match_played', user.username);
     }
 
-    // Loads the room directly inside the website's iframe without opening a new browser tab
+    // Opens the companion window side-by-side while keeping the website chat active
+    window.open(activeRoomData.smashUrl, 'SmashKarts1v1Match', 'width=1100,height=750,resizable=yes,scrollbars=yes');
+    
     const gameScreen = document.getElementById('gameScreen');
     gameScreen.classList.remove('game-fade-exit', 'hidden');
-    
-    const frame = document.getElementById('smashFrame');
-    if (frame) {
-        frame.src = activeRoomData.smashUrl;
-    }
-    
     document.getElementById('gameModeBadge').innerText = activeRoomData.mode;
-    document.getElementById('mainDashboard').classList.add('hidden');
     triggerChatActivityTimer();
 }
 
@@ -733,7 +728,6 @@ function leaveEmbeddedGame() {
     gameScreen.classList.add('game-fade-exit');
 
     setTimeout(() => {
-        document.getElementById('smashFrame').src = '';
         gameScreen.classList.add('hidden');
         document.getElementById('mainDashboard').classList.remove('hidden');
         activeRoomData = null;
