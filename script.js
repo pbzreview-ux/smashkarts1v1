@@ -10,6 +10,7 @@ let friendChallengeTargetUser = null;
 let onlineUsersCache = [];
 let publicRoomsCache = [];
 let pendingFriendRequests = [];
+let isTopBarHidden = false;
 
 function updateGameplayMode(mode) {
     currentGameplayMode = mode;
@@ -809,27 +810,39 @@ function enterGameFromLobby() {
         if (match) roomCode = match[1];
     }
 
-    // Convert the entire blue space / header options into a collapsible dropdown toolbar for full screen
+    // Restore original top blue bar layout as an absolute floating overlay with collapsible slide up/down toggle
     if (codeContainer) {
         codeContainer.classList.remove('hidden'); 
-        codeContainer.className = 'absolute top-3 left-3 z-30 flex flex-col items-start gap-1';
+        codeContainer.className = 'absolute top-0 left-0 right-0 z-30 flex flex-col items-center pointer-events-none';
         codeContainer.innerHTML = `
-            <button onclick="toggleGameHeaderDropdown()" class="bg-blue-950/90 border border-yellow-400/50 text-yellow-300 font-bungee text-xs px-3 py-2 rounded-xl shadow-lg flex items-center gap-2 cursor-pointer hover:bg-blue-900 transition-all">
-                <span>⚙️ OPTIONS / ROOM (${roomCode}) ▾</span>
-            </button>
-            <div id="gameHeaderDropdown" class="hidden flex flex-col gap-2 p-3 bg-blue-950/95 border border-yellow-400/50 rounded-2xl shadow-2xl backdrop-blur-md min-w-[220px]">
-                <button onclick="copyActiveRoomCode('${roomCode}')" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 font-bungee text-xs px-3 py-2 rounded-xl shadow flex items-center justify-between cursor-pointer">
-                    <span>📋 ROOM: ${roomCode}</span>
-                    <span class="bg-blue-950 text-yellow-300 text-[10px] px-2 py-0.5 rounded font-bold">COPY</span>
-                </button>
-                <button onclick="toggleOverlayChat()" class="bg-blue-900 hover:bg-blue-800 text-white font-bungee text-xs px-3 py-2 rounded-xl text-left flex items-center justify-between cursor-pointer border border-white/10">
-                    <span id="toggleChatBtnLabel">Show Chat</span>
-                    <span>💬</span>
-                </button>
-                <button onclick="leaveEmbeddedGame()" class="bg-red-600 hover:bg-red-500 text-white font-bungee text-xs px-3 py-2 rounded-xl text-left flex items-center justify-between cursor-pointer">
-                    <span>🚪 Exit Game</span>
-                </button>
+            <div id="floatingGameBar" class="w-full bg-blue-950/95 border-b border-yellow-400/50 px-6 py-2.5 flex items-center justify-between shadow-2xl backdrop-blur-md pointer-events-auto transition-transform duration-300">
+                <div class="flex items-center gap-3">
+                    <button onclick="copyActiveRoomCode('${roomCode}')" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 font-bungee text-xs px-3.5 py-2 rounded-xl shadow-[0_0_10px_rgba(250,204,21,0.5)] flex items-center gap-3 transition-all transform hover:scale-105 cursor-pointer">
+                        <span>📋 ROOM: ${roomCode}</span>
+                        <span class="bg-blue-950 text-yellow-300 text-[10px] px-2.5 py-1 rounded-lg font-bold">COPY CODE</span>
+                    </button>
+                </div>
+                <div class="flex items-center gap-3">
+                    <button onclick="toggleOverlayChat()" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 font-bungee text-xs px-4 py-2 rounded-xl shadow flex items-center gap-2 cursor-pointer transition-all">
+                        <span class="w-2 h-2 rounded-full bg-emerald-500 inline-block"></span>
+                        <span id="toggleChatBtnLabel">Show Chat</span>
+                    </button>
+                    <div class="relative">
+                        <button onclick="toggleGameHeaderDropdown()" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 font-bungee text-xs px-4 py-2 rounded-xl shadow flex items-center gap-1 cursor-pointer transition-all">
+                            <span>OPTIONS ▾</span>
+                        </button>
+                        <div id="gameHeaderDropdown" class="hidden absolute right-0 mt-2 flex flex-col gap-2 p-3 bg-blue-950/95 border border-yellow-400/50 rounded-2xl shadow-2xl backdrop-blur-md min-w-[160px] z-40">
+                            <button onclick="leaveEmbeddedGame()" class="bg-red-600 hover:bg-red-500 text-white font-bungee text-xs px-3 py-2 rounded-xl text-left flex items-center justify-between cursor-pointer">
+                                <span>🚪 Exit Game</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
             </div>
+            <!-- Small toggle tab/handle attached to the bottom edge of the top bar -->
+            <button onclick="toggleGameTopBar()" id="barToggleBtn" class="pointer-events-auto bg-blue-950/90 border-x border-b border-yellow-400/50 text-yellow-300 px-4 py-1 rounded-b-xl text-[10px] font-bungee shadow-lg cursor-pointer hover:bg-blue-900 transition-all">
+                ▲ HIDE BAR
+            </button>
         `;
     }
 
@@ -860,6 +873,19 @@ function enterGameFromLobby() {
     const badge = document.getElementById('gameModeBadge');
     if (badge) badge.innerText = activeRoomData.mode;
     triggerChatActivityTimer();
+}
+
+function toggleGameTopBar() {
+    const bar = document.getElementById('floatingGameBar');
+    const btn = document.getElementById('barToggleBtn');
+    isTopBarHidden = !isTopBarHidden;
+    if (isTopBarHidden) {
+        bar.style.transform = 'translateY(-100%)';
+        btn.innerHTML = '▼ SHOW BAR';
+    } else {
+        bar.style.transform = 'translateY(0)';
+        btn.innerHTML = '▲ HIDE BAR';
+    }
 }
 
 function copyActiveRoomCode(code) {
