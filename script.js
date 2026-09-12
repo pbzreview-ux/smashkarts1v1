@@ -710,10 +710,7 @@ function enterGameFromLobby() {
         socket.emit('record_match_played', user.username);
     }
 
-    // Launch the exact room link in a new tab because Smash Karts' security script 
-    // forces iframes to redirect back to the main smashkarts.io homepage.
-    window.open(activeRoomData.smashUrl, '_blank');
-
+    // Loads the room directly inside the website's iframe without opening a new browser tab
     const gameScreen = document.getElementById('gameScreen');
     gameScreen.classList.remove('game-fade-exit', 'hidden');
     
