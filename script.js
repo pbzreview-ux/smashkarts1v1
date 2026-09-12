@@ -669,10 +669,8 @@ function extractSmashUrlClient(rawInput) {
         text = text.replace('ttps://', 'https://');
     }
 
-    // Clean quotation marks or accidental extra wrappers
     text = text.replace(/['"]+/g, '');
 
-    // Match full smashkarts link with /link/? or standard query parameters (?room=...)
     const linkMatch = text.match(/https?:\/\/(www\.)?smashkarts\.io(\/link\/)?\?[^\s]+/i);
     if (linkMatch) {
         let matchedUrl = linkMatch[0];
@@ -809,8 +807,27 @@ function enterGameFromLobby() {
         if (match) roomCode = match[1];
     }
 
-    // Completely remove the long blue top bar so Smash Karts is 100% full screen.
-    // Use a clean floating button in the top-right corner to access options and chat.
+    // Force gameScreen to take up 100% of the viewport and hide any legacy headers or blue bars
+    if (gameScreen) {
+        gameScreen.style.position = 'fixed';
+        gameScreen.style.inset = '0';
+        gameScreen.style.width = '100vw';
+        gameScreen.style.height = '100vh';
+        gameScreen.style.zIndex = '9999';
+        gameScreen.style.margin = '0';
+        gameScreen.style.padding = '0';
+        gameScreen.style.background = '#000';
+
+        // Hide any leftover header elements or title bars inside gameScreen
+        const legacyHeaders = gameScreen.querySelectorAll('.bg-blue-900, header, .game-header, [id*="header"]');
+        legacyHeaders.forEach(el => {
+            if (el !== codeContainer && !el.contains(codeContainer)) {
+                el.style.display = 'none';
+            }
+        });
+    }
+
+    // Completely position the floating menu button in the top-right corner
     if (codeContainer) {
         codeContainer.classList.remove('hidden'); 
         codeContainer.className = 'absolute top-3 right-3 z-30 flex flex-col items-end pointer-events-none';
@@ -834,9 +851,14 @@ function enterGameFromLobby() {
         `;
     }
 
-    // Make iframe fill the entire screen absolutely without any squishing bars
+    // Force iframe to fill 100% width and height without any margins or padding
     if (smashFrame) {
-        smashFrame.className = 'absolute inset-0 w-full h-full border-0';
+        smashFrame.className = 'absolute inset-0 w-full h-full border-0 m-0 p-0';
+        smashFrame.style.position = 'absolute';
+        smashFrame.style.inset = '0';
+        smashFrame.style.width = '100%';
+        smashFrame.style.height = '100%';
+        smashFrame.style.border = '0';
     }
 
     let popupMsgDiv = document.getElementById('popupMessageOverlay');
