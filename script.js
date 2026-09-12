@@ -809,55 +809,30 @@ function enterGameFromLobby() {
         `;
     }
 
-    let popupMsg = document.getElementById('popupModeMessage');
-    if (!popupMsg && smashFrame && smashFrame.parentNode) {
-        smashFrame.parentNode.style.position = 'relative';
-        popupMsg = document.createElement('div');
-        popupMsg.id = 'popupModeMessage';
-        // Styled with a high z-index and a slide-down top control header so it can never be covered or hidden
-        popupMsg.className = 'absolute inset-0 flex flex-col items-center justify-center bg-blue-950 text-yellow-300 font-bungee text-3xl z-10 rounded-xl hidden border-2 border-yellow-400 shadow-[0_0_20px_rgba(250,204,21,0.3)] overflow-hidden';
-        
-        popupMsg.innerHTML = `
-            <div id="slideDownExitBar" class="absolute top-0 left-0 right-0 bg-blue-900/95 border-b-2 border-yellow-400 p-3 flex justify-between items-center z-30 shadow-2xl transition-all">
-                <div class="flex items-center gap-2">
-                    <span class="font-bungee text-xs text-yellow-300">🕹️ POPUP BROWSER MODE ACTIVE</span>
-                </div>
-                <div class="flex items-center gap-3">
-                    <button onclick="copyActiveRoomCode('${roomCode}')" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 font-bungee text-[10px] px-3 py-1.5 rounded-xl shadow">📋 Copy Code (${roomCode})</button>
-                    <button onclick="leaveEmbeddedGame()" class="bg-red-600 hover:bg-red-500 text-white font-bungee text-xs px-4 py-1.5 rounded-xl shadow-lg cursor-pointer transform hover:scale-105 transition-all">🚪 EXIT GAME</button>
-                </div>
-            </div>
-            <div class="flex flex-col items-center justify-center h-full pt-12">
-                <span>JOIN POPUP BROWSER :)</span>
-                <p class="text-white text-sm font-sans mt-4">Look for the newly opened window to play!</p>
+    // Integrated options dropdown with Exit button and Copy Code instead of creating a giant blue banner bar
+    const dropdown = document.getElementById('gameHeaderDropdown');
+    if (dropdown) {
+        dropdown.innerHTML = `
+            <div class="flex flex-col gap-2 p-2">
+                <button onclick="copyActiveRoomCode('${roomCode}')" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 font-bungee text-xs px-3 py-2 rounded-xl text-left flex items-center justify-between cursor-pointer">
+                    <span>📋 Copy Code</span>
+                    <span class="text-[10px] bg-blue-950 text-yellow-300 px-1.5 py-0.5 rounded">${roomCode}</span>
+                </button>
+                <button onclick="leaveEmbeddedGame()" class="bg-red-600 hover:bg-red-500 text-white font-bungee text-xs px-3 py-2 rounded-xl text-left flex items-center justify-between cursor-pointer">
+                    <span>🚪 Exit Game</span>
+                </button>
             </div>
         `;
-        smashFrame.parentNode.appendChild(popupMsg);
-    } else if (popupMsg) {
-        const exitBar = popupMsg.querySelector('#slideDownExitBar');
-        if (exitBar) {
-            exitBar.innerHTML = `
-                <div class="flex items-center gap-2">
-                    <span class="font-bungee text-xs text-yellow-300">🕹️ POPUP BROWSER MODE ACTIVE</span>
-                </div>
-                <div class="flex items-center gap-3">
-                    <button onclick="copyActiveRoomCode('${roomCode}')" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 font-bungee text-[10px] px-3 py-1.5 rounded-xl shadow">📋 Copy Code (${roomCode})</button>
-                    <button onclick="leaveEmbeddedGame()" class="bg-red-600 hover:bg-red-500 text-white font-bungee text-xs px-4 py-1.5 rounded-xl shadow-lg cursor-pointer transform hover:scale-105 transition-all">🚪 EXIT GAME</button>
-                </div>
-            `;
-        }
     }
 
     if (currentGameplayMode === 'popup') {
         window.open(activeRoomData.smashUrl, '_blank', 'width=1000,height=700');
         if (smashFrame) smashFrame.classList.add('hidden');
-        if (popupMsg) popupMsg.classList.remove('hidden');
     } else {
         if (smashFrame) {
             smashFrame.classList.remove('hidden');
             smashFrame.src = activeRoomData.smashUrl || "https://smashkarts.io";
         }
-        if (popupMsg) popupMsg.classList.add('hidden');
     }
     
     gameScreen.classList.remove('game-fade-exit', 'hidden');
