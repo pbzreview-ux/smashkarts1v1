@@ -1,105 +1,55 @@
 const socket = io();
-
-let currentMatchMode = '1v1';
+let currentMode = '1v1';
 let activeRoomData = null;
-let currentActiveDMUser = null;
-let unreadMessagesCount = 0;
+let chatInactivityTimer = null;
+let activeDMTargetUser = null;
+let unreadMessageCount = 0;
+let pendingChallengeData = null;
+let friendChallengeTargetUser = null;
+let onlineUsersCache = [];
+let publicRoomsCache = [];
+let pendingFriendRequests = [];
 
-const SMASH_KARTS_BASE_URL = "https://smashkarts.io";
+function escapeHTML(str) {
+    if (!str) return '';
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
 
-const AuthSession = {
-    getUser() {
-        const userStr = localStorage.getItem('smash_user');
-        return userStr ? JSON.parse(userStr) : null;
-    },
-    setUser(user) {
-        localStorage.setItem('smash_user', JSON.stringify(user));
-        this.updateUI();
-    },
-    logout() {
-        localStorage.removeItem('smash_user');
-        window.location.reload();
-    },
-    updateUI() {
-        const user = this.getUser();
-        if (user) {
-            document.getElementById('authModal').classList.add('hidden');
-            document.getElementById('userDisplayTag').innerText = user.username;
-            socket.emit('user_online', user.username);
-        } else {
-            document.getElementById('authModal').classList.remove('hidden');
-        }
-    }
-};
-
-document.addEventListener('DOMContentLoaded', () => {
-    const user = AuthSession.getUser();
-    AuthSession.updateUI();
-    if (user) {
-        socket.emit('request_leaderboard');
-    }
-    showTab('setupTab');
-});
-
-function showToast(message, icon = "⚡") {
+function showToast(message, icon = '🔔') {
     const container = document.getElementById('toastContainer');
+    if (!container) return;
     const toast = document.createElement('div');
-    toast.className = "bg-blue-900 border-2 border-yellow-400 text-white px-4 py-3 rounded-2xl shadow-2xl flex items-center gap-3 animate-bounce text-xs font-bold";
-    toast.innerHTML = `<span class="text-lg">${icon}</span> <span>${message}</span>`;
+    toast.className = 'toast-msg';
+    toast.innerHTML = `<span>${icon}</span> <span>${escapeHTML(message)}</span>`;
     container.appendChild(toast);
-    setTimeout(() => { toast.remove(); }, 4000);
+
+    setTimeout(() => {
+        toast.style.opacity = '0';
+        toast.style.transform = 'translateY(-20px)';
+        setTimeout(() => toast.remove(), 300);
+    }, 3500);
 }
 
-function toggleAuthTab(tab) {
-    const loginForm = document.getElementById('loginForm');
-    const registerForm = document.getElementById('registerForm');
-    const loginBtn = document.getElementById('tabLoginBtn');
-    const regBtn = document.getElementById('tabRegisterBtn');
-
-    if (tab === 'login') {
-        loginForm.classList.remove('hidden');
-        registerForm.classList.add('hidden');
-        loginBtn.className = "font-bungee text-lg text-yellow-300 border-b-2 border-yellow-300 pb-1";
-        regBtn.className = "font-bungee text-lg text-white/50 pb-1 hover:text-white";
-    } else {
-        loginForm.classList.add('hidden');
-        registerForm.classList.remove('hidden');
-        regBtn.className = "font-bungee text-lg text-yellow-300 border-b-2 border-yellow-300 pb-1";
-        loginBtn.className = "font-bungee text-lg text-white/50 pb-1 hover:text-white";
-    }
+function incrementUnreadBadge() {
+    unreadMessageCount++;
+    const badge = document.getElementById('messagesBadge');
+    if (!badge) return;
+    badge.innerText = unreadMessageCount;
+    badge.classList.remove('hidden');
 }
 
-function handleAuthSubmit(event, type) {
-    event.preventDefault();
-    let username, email, password;
-
-    if (type === 'login') {
-        username = document.getElementById('loginUsername').value.trim();
-        email = document.getElementById('loginEmail').value.trim();
-        password = document.getElementById('loginPassword').value.trim();
-    } else {
-        username = document.getElementById('regUsername').value.trim();
-        email = document.getElementById('regEmail').value.trim();
-        password = document.getElementById('regPassword').value.trim();
-    }
-
-    if (!username || !email || !password) {
-        showToast("Please fill out all fields!", "❌");
-        return;
-    }
-
-    socket.emit('auth_user', { type, username, email, password });
+function clearUnreadBadge() {
+    unreadMessageCount = 0;
+    const badge = document.getElementById('messagesBadge');
+    if (!badge) return;
+    badge.innerText = '0';
+    badge.classList.add('hidden');
 }
-
-socket.on('auth_success', (user) => {
-    AuthSession.setUser(user);
-    showToast(`Welcome back, ${user.username}!`, "🎉");
-    socket.emit('request_leaderboard');
-});
-
-socket.on('auth_error', (msg) => {
-    showToast(msg, "❌");
-});
 
 function openSettingsModal() {
     document.getElementById('settingsModal').classList.remove('hidden');
@@ -109,118 +59,647 @@ function closeSettingsModal() {
     document.getElementById('settingsModal').classList.add('hidden');
 }
 
-function extractRoomCodeClient(url) {
-    if (!url) return 'us674723';
-    const match = url.match(/room=([A-Za-z0-9]+)/i);
-    if (match) return match[1];
-    return url.split('/').pop() || 'us674723';
+function toggleOnlineStatus(isOnline) {
+    socket.emit('toggle_online_status', isOnline);
+    showToast(isOnline ? "You are now VISIBLE online." : "You are now HIDDEN (Invisible).", isOnline ? "🟢" : "👻");
 }
 
-function toggleGameHeaderDropdown() {
-    const dropdown = document.getElementById('gameHeaderDropdown');
-    if (dropdown) dropdown.classList.toggle('hidden');
+const AuthSession = {
+    INACTIVITY_LIMIT_MS: 30 * 60 * 1000,
+    WARNING_WINDOW_MS: 60 * 1000,
+    THROTTLE_MS: 5000,
+    lastActivity: Date.now(),
+    isWarningShown: false,
+
+    getRegisteredUsers() {
+        try {
+            return JSON.parse(localStorage.getItem("registered_users")) || [];
+        } catch(e) {
+            return [];
+        }
+    },
+
+    saveRegisteredUser(userObj) {
+        const users = this.getRegisteredUsers();
+        users.push(userObj);
+        localStorage.setItem("registered_users", JSON.stringify(users));
+    },
+
+    findUser(email, password) {
+        const users = this.getRegisteredUsers();
+        return users.find(u => u.email.toLowerCase() === email.toLowerCase() && u.password === password);
+    },
+
+    userExists(email) {
+        const users = this.getRegisteredUsers();
+        return users.some(u => u.email.toLowerCase() === email.toLowerCase());
+    },
+
+    login(email, username) {
+        const cleanUser = (username && username.trim() !== '') ? username.trim() : "Player";
+        const session = { email, username: cleanUser, token: "token_" + Date.now() };
+        localStorage.setItem("user_session", JSON.stringify(session));
+        document.getElementById("authModal").classList.add("hidden");
+        this.startTracker();
+        updateUserUI();
+        showToast(`Welcome back, ${cleanUser}!`, "🎮");
+    },
+
+    getUser() {
+        const sessionStr = localStorage.getItem("user_session");
+        if (!sessionStr) return null;
+        try {
+            return JSON.parse(sessionStr);
+        } catch(e) {
+            return null;
+        }
+    },
+
+    isLoggedIn() {
+        return this.getUser() !== null;
+    },
+
+    logout() {
+        localStorage.removeItem("user_session");
+        window.location.reload();
+    },
+
+    startTracker() {
+        this.lastActivity = Date.now();
+        ["click", "mousemove", "keydown", "scroll", "touchstart"].forEach((event) => {
+            window.addEventListener(event, () => this.handleActivity());
+        });
+        setInterval(() => this.checkInactivity(), 1000);
+    },
+
+    handleActivity() {
+        if (this.isWarningShown) return;
+        const now = Date.now();
+        if (now - this.lastActivity > this.THROTTLE_MS) {
+            this.lastActivity = now;
+        }
+    },
+
+    resetInactivity() {
+        this.lastActivity = Date.now();
+        this.hideWarning();
+    },
+
+    checkInactivity() {
+        if (!this.isLoggedIn()) return;
+        const timeIdle = Date.now() - this.lastActivity;
+        const timeRemaining = this.INACTIVITY_LIMIT_MS - timeIdle;
+
+        if (timeRemaining <= 0) {
+            this.logout();
+        } else if (timeRemaining <= this.WARNING_WINDOW_MS) {
+            this.showWarning(Math.ceil(timeRemaining / 1000));
+        } else {
+            if (this.isWarningShown) this.hideWarning();
+        }
+    },
+
+    showWarning(secondsLeft) {
+        this.isWarningShown = true;
+        document.getElementById("inactivityModal").classList.remove("hidden");
+        document.getElementById("countdownTimer").textContent = secondsLeft;
+    },
+
+    hideWarning() {
+        this.isWarningShown = false;
+        document.getElementById("inactivityModal").classList.add("hidden");
+    }
+};
+
+function toggleAuthTab(type) {
+    const loginForm = document.getElementById("loginForm");
+    const regForm = document.getElementById("registerForm");
+    const tabLogin = document.getElementById("tabLoginBtn");
+    const tabReg = document.getElementById("tabRegisterBtn");
+
+    if (type === 'login') {
+        loginForm.classList.remove("hidden");
+        regForm.classList.add("hidden");
+        tabLogin.className = "font-bungee text-lg text-yellow-300 border-b-2 border-yellow-300 pb-1";
+        tabReg.className = "font-bungee text-lg text-white/50 pb-1 hover:text-white";
+    } else {
+        loginForm.classList.add("hidden");
+        regForm.classList.remove("hidden");
+        tabReg.className = "font-bungee text-lg text-yellow-300 border-b-2 border-yellow-300 pb-1";
+        tabLogin.className = "font-bungee text-lg text-white/50 pb-1 hover:text-white";
+    }
 }
 
-function toggleOnlineStatus(isChecked) {
-    showToast(isChecked ? "You are now online" : "You are now offline", "🟢");
+function handleAuthSubmit(e, type) {
+    e.preventDefault();
+    if (type === 'register') {
+        const username = document.getElementById('regUsername').value.trim();
+        const email = document.getElementById('regEmail').value.trim();
+        const password = document.getElementById('regPassword').value.trim();
+
+        if (AuthSession.userExists(email)) {
+            showToast("An account with this email already exists! Please log in.", "⚠️");
+            toggleAuthTab('login');
+            return;
+        }
+
+        AuthSession.saveRegisteredUser({ username, email, password });
+        showToast("Account successfully created! Please log in.", "🎉");
+        toggleAuthTab('login');
+        document.getElementById('regUsername').value = '';
+        document.getElementById('regEmail').value = '';
+        document.getElementById('regPassword').value = '';
+    } else {
+        const email = document.getElementById('loginEmail').value.trim();
+        const password = document.getElementById('loginPassword').value.trim();
+
+        const foundUser = AuthSession.findUser(email, password);
+        if (!foundUser) {
+            showToast("Account not found! Please sign up first.", "❌");
+            return;
+        }
+
+        AuthSession.login(foundUser.email, foundUser.username);
+    }
 }
 
 function promptEditUsername() {
-    document.getElementById('editUsernameModal').classList.remove('hidden');
+    const user = AuthSession.getUser();
+    document.getElementById("newUsernameInput").value = user ? user.username : "";
+    document.getElementById("editUsernameModal").classList.remove("hidden");
 }
 
 function closeEditUsernameModal() {
-    document.getElementById('editUsernameModal').classList.add('hidden');
+    document.getElementById("editUsernameModal").classList.add("hidden");
 }
 
 function saveNewUsername() {
-    const newName = document.getElementById('newUsernameInput').value.trim();
-    if (!newName) {
-        showToast("Please enter a valid username", "❌");
-        return;
+    const newUname = document.getElementById("newUsernameInput").value;
+    const user = AuthSession.getUser();
+    if (newUname && newUname.trim() !== '') {
+        AuthSession.login(user ? user.email : 'player@example.com', newUname.trim());
+        closeEditUsernameModal();
     }
+}
+
+function updateUserUI() {
     const user = AuthSession.getUser();
     if (user) {
-        user.username = newName;
-        AuthSession.setUser(user);
-        socket.emit('update_username', { email: user.email, newUsername: newName });
-        closeEditUsernameModal();
-        showToast("Username updated successfully!", "✅");
+        document.getElementById("userDisplayTag").innerText = user.username;
+        socket.emit("set_user_session", user);
     }
 }
 
-function showTab(tabId) {
-    document.querySelectorAll('.tab-content').forEach(tab => tab.classList.add('hidden'));
-    document.getElementById(tabId).classList.remove('hidden');
+function openOnlineModal() {
+    if (!AuthSession.isLoggedIn()) {
+        showToast("Please log in to view online players!", "⚠️");
+        return;
+    }
+    document.getElementById('onlineUsersModal').classList.remove('hidden');
 }
 
-function switchMatchMode(mode) {
-    currentMatchMode = mode;
-    document.getElementById('arenaTitle').innerText = `${mode} MATCHMAKING`;
-    document.getElementById('btnNav1v1').classList.toggle('active', mode === '1v1');
-    document.getElementById('btnNav2v2').classList.toggle('active', mode === '2v2');
-    showTab('setupTab');
+function closeOnlineModal() {
+    document.getElementById('onlineUsersModal').classList.add('hidden');
 }
+
+socket.on('online_users_update', ({ count, users }) => {
+    onlineUsersCache = users;
+    document.getElementById('onlineCountBadge').innerText = `${count} Online`;
+    renderOnlineUsersList(users);
+    updateFriendsTabList();
+});
+
+function renderOnlineUsersList(users) {
+    const container = document.getElementById('onlineUsersList');
+    if (!container) return;
+    container.innerHTML = '';
+
+    const currentUser = AuthSession.getUser();
+    const myUsername = currentUser ? currentUser.username : '';
+
+    users.forEach(u => {
+        if (u.id === socket.id || u.username === myUsername) return;
+
+        const isFriend = u.friends && u.friends.includes(myUsername);
+        const row = document.createElement('div');
+        row.className = 'flex justify-between items-center bg-blue-950/80 p-3 rounded-2xl border border-white/10';
+        
+        row.innerHTML = `
+            <span class="font-bold text-xs text-white">👤 ${escapeHTML(u.username)}</span>
+            <div class="flex gap-2">
+                ${isFriend 
+                    ? `<button onclick="openTabDMWith('${escapeHTML(u.username)}')" class="bg-blue-600 hover:bg-blue-500 text-white text-[10px] font-bold px-2.5 py-1.5 rounded-lg">💬 Message</button>`
+                    : `<button onclick="sendFriendRequest('${u.id}', '${escapeHTML(u.username)}')" class="bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold px-2.5 py-1.5 rounded-lg">➕ Add Friend</button>`
+                }
+            </div>
+        `;
+        container.appendChild(row);
+    });
+}
+
+function sendFriendRequest(targetSocketId, username) {
+    socket.emit('send_friend_request', { targetSocketId });
+    showToast(`Friend request sent to ${username}!`, "➕");
+}
+
+socket.on('receive_friend_request', (data) => {
+    incrementUnreadBadge();
+    showToast(`New Friend Request from ${data.fromUsername}! Check Messages tab.`, "👋");
+});
+
+socket.on('friend_requests_update', (requests) => {
+    pendingFriendRequests = requests;
+    if (requests && requests.length > 0) {
+        incrementUnreadBadge();
+    }
+    updateFriendsTabList();
+});
+
+function acceptFriendRequestByName(username) {
+    socket.emit('accept_friend_request', { challengerUsername: username });
+    showToast(`Accepted friend request from ${username}!`, "🤝");
+}
+
+function declineFriendRequestByName(username) {
+    socket.emit('decline_friend_request', { challengerUsername: username });
+    showToast(`Declined friend request from ${username}.`, "✕");
+}
+
+socket.on('friend_request_accepted', (data) => {
+    showToast(`You and ${data.username} are now friends!`, "🤝");
+    updateFriendsTabList();
+});
+
+function initiateFriend1v1(friendUsername) {
+    friendChallengeTargetUser = friendUsername;
+    document.getElementById('friendChallengeHeader').innerText = `⚔️ CREATE 1v1 ROOM LINK FOR ${friendUsername.toUpperCase()}`;
+    document.getElementById('friendChallengeIframe').src = "https://smashkarts.io";
+    document.getElementById('friendChallengeCodeInput').value = '';
+    document.getElementById('friendChallengeModal').classList.remove('hidden');
+}
+
+function closeFriendChallengeModal() {
+    document.getElementById('friendChallengeIframe').src = "";
+    document.getElementById('friendChallengeModal').classList.add('hidden');
+    friendChallengeTargetUser = null;
+}
+
+function sendFriendChallengeWithCode() {
+    let codeInput = document.getElementById('friendChallengeCodeInput').value.trim();
+    codeInput = extractSmashUrlClient(codeInput);
+
+    if (!codeInput) {
+        showToast("Error: You must paste a valid Smash Karts room link or code!", "⚠️");
+        return;
+    }
+
+    const user = AuthSession.getUser();
+    const targetUserObj = onlineUsersCache.find(u => u.username === friendChallengeTargetUser);
+
+    if (!targetUserObj) {
+        showToast(`${friendChallengeTargetUser} is not currently online!`, "⚠️");
+        closeFriendChallengeModal();
+        return;
+    }
+
+    socket.emit('send_match_challenge', {
+        targetSocketId: targetUserObj.id,
+        targetUsername: friendChallengeTargetUser,
+        fromUsername: user ? user.username : 'Player',
+        mode: '1v1',
+        smashUrl: codeInput
+    });
+
+    showToast(`1v1 match challenge sent to ${friendChallengeTargetUser}!`, "⚔️");
+    closeFriendChallengeModal();
+}
+
+socket.on('receive_match_challenge', (data) => {
+    pendingChallengeData = data;
+    document.getElementById('challengeText').innerText = `${data.fromUsername} challenged you to a 1v1 match!`;
+    document.getElementById('challengeModal').classList.remove('hidden');
+});
+
+function acceptChallenge() {
+    if (pendingChallengeData) {
+        const user = AuthSession.getUser();
+        socket.emit('accept_match_challenge', {
+            challengerSocketId: pendingChallengeData.challengerSocketId,
+            targetUsername: user ? user.username : 'Player',
+            smashUrl: pendingChallengeData.smashUrl
+        });
+    }
+    document.getElementById('challengeModal').classList.add('hidden');
+}
+
+function declineChallenge() {
+    pendingChallengeData = null;
+    document.getElementById('challengeModal').classList.add('hidden');
+    showToast("Challenge declined.", "✕");
+}
+
+socket.on('challenge_game_start', (room) => {
+    activeRoomData = room;
+    enterGameFromLobby();
+});
 
 function showMessagesTab() {
     showTab('messagesTab');
-    socket.emit('request_online_users');
+    clearUnreadBadge();
+    updateFriendsTabList();
+}
+
+function updateFriendsTabList() {
+    const container = document.getElementById('friendsTabList');
+    if (!container) return;
+    container.innerHTML = '';
+    
+    const currentUser = AuthSession.getUser();
+    if (!currentUser) return;
+
+    const myUserObj = onlineUsersCache.find(u => u.username === currentUser.username);
+    const friendNames = myUserObj ? myUserObj.friends : [];
+
+    if (pendingFriendRequests && pendingFriendRequests.length > 0) {
+        const pendingHeader = document.createElement('div');
+        pendingHeader.className = 'font-bungee text-[10px] text-yellow-300 mb-1 mt-1';
+        pendingHeader.innerText = 'PENDING REQUESTS';
+        container.appendChild(pendingHeader);
+
+        pendingFriendRequests.forEach(reqName => {
+            const reqRow = document.createElement('div');
+            reqRow.className = 'bg-yellow-500/20 border border-yellow-400/50 p-2 rounded-xl flex items-center justify-between mb-2';
+            reqRow.innerHTML = `
+                <span class="font-bold text-xs text-white">👤 ${escapeHTML(reqName)}</span>
+                <div class="flex gap-1">
+                    <button onclick="acceptFriendRequestByName('${escapeHTML(reqName)}')" class="bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold px-2.5 py-1 rounded-lg">✔ Accept</button>
+                    <button onclick="declineFriendRequestByName('${escapeHTML(reqName)}')" class="bg-red-600 hover:bg-red-500 text-white text-[10px] font-bold px-2.5 py-1 rounded-lg">✕</button>
+                </div>
+            `;
+            container.appendChild(reqRow);
+        });
+    }
+
+    const friendsHeader = document.createElement('div');
+    friendsHeader.className = 'font-bungee text-[10px] text-yellow-300 mb-1 mt-2';
+    friendsHeader.innerText = 'YOUR FRIENDS';
+    container.appendChild(friendsHeader);
+
+    if (friendNames.length === 0) {
+        const emptyMsg = document.createElement('p');
+        emptyMsg.className = 'text-xs text-blue-200 mt-1';
+        emptyMsg.innerText = 'No friends added yet. Open "Online Players" to add friends!';
+        container.appendChild(emptyMsg);
+        return;
+    }
+
+    friendNames.forEach(name => {
+        const targetOnlineObj = onlineUsersCache.find(u => u.username === name);
+        const isOnline = !!targetOnlineObj;
+
+        const wrapper = document.createElement('div');
+        wrapper.className = `p-2 rounded-xl flex flex-col gap-1 transition-all mb-1.5 ${activeDMTargetUser === name ? 'bg-yellow-400/30 border border-yellow-400' : 'bg-blue-950/60 hover:bg-blue-800/60'}`;
+        
+        wrapper.innerHTML = `
+            <div class="flex items-center justify-between">
+                <span class="font-bold text-xs text-white">👤 ${escapeHTML(name)}</span>
+                <span class="w-2 h-2 rounded-full ${isOnline ? 'bg-emerald-400' : 'bg-gray-500'}" title="${isOnline ? 'Online' : 'Offline'}"></span>
+            </div>
+            <div class="flex gap-1 mt-1">
+                <button onclick="openTabDMWith('${escapeHTML(name)}')" class="bg-blue-600 hover:bg-blue-500 text-white text-[10px] font-bold px-2 py-1 rounded-lg flex-1">💬 DM</button>
+                ${isOnline 
+                    ? `<button onclick="initiateFriend1v1('${escapeHTML(name)}')" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 text-[10px] font-black px-2 py-1 rounded-lg uppercase flex-1">⚔️ 1v1</button>`
+                    : `<button disabled class="bg-gray-600 text-gray-400 text-[10px] font-bold px-2 py-1 rounded-lg flex-1 cursor-not-allowed">Offline</button>`
+                }
+            </div>
+        `;
+        container.appendChild(wrapper);
+    });
+}
+
+function openTabDMWith(username) {
+    activeDMTargetUser = username;
+    showMessagesTab();
+    clearUnreadBadge();
+    document.getElementById('activeDMChatHeader').innerText = `💬 MESSAGE WITH ${username.toUpperCase()}`;
+    socket.emit('get_dm_history', { targetUsername: username });
+}
+
+function sendTabDM() {
+    const input = document.getElementById('tabDMInput');
+    const user = AuthSession.getUser();
+    if (input.value.trim() && activeDMTargetUser) {
+        socket.emit('send_direct_message', {
+            targetUsername: activeDMTargetUser,
+            message: input.value.trim(),
+            senderUsername: user ? user.username : 'Player'
+        });
+        input.value = '';
+    }
+}
+
+socket.on('dm_error', (data) => {
+    showToast(data.message, "⚠️");
+});
+
+socket.on('receive_direct_message', (data) => {
+    incrementUnreadBadge();
+    showToast(`New message from ${data.senderUsername}`, "💬");
+    if (activeDMTargetUser === data.senderUsername) {
+        renderDMMessages(data.history);
+    }
+});
+
+socket.on('dm_sent_success', (data) => {
+    renderDMMessages(data.history);
+});
+
+socket.on('load_dm_history', (data) => {
+    renderDMMessages(data.history);
+});
+
+function renderDMMessages(history) {
+    const container = document.getElementById('tabDMMessages');
+    if (!container) return;
+    container.innerHTML = '';
+    const user = AuthSession.getUser();
+    const myUname = user ? user.username : 'Player';
+
+    const capped = history.slice(-10);
+    capped.forEach(msg => {
+        const isMe = msg.senderUsername === myUname;
+        const div = document.createElement('div');
+        div.className = isMe ? 'text-right' : 'text-left';
+        div.innerHTML = `<span class="${isMe ? 'bg-yellow-400 text-blue-950' : 'bg-blue-800 text-white'} font-bold px-2.5 py-1 rounded-xl inline-block text-[11px] mb-1">${isMe ? 'Me' : escapeHTML(msg.senderUsername)}: ${escapeHTML(msg.message)}</span>`;
+        container.appendChild(div);
+    });
+    container.scrollTop = container.scrollHeight;
+}
+
+socket.on('leaderboard_update', (topPlayers) => {
+    const list = document.getElementById('leaderboardList');
+    if (!list) return;
+    list.innerHTML = topPlayers.length === 0 ? `<p class="text-xs text-blue-200">No matches recorded yet.</p>` : '';
+    topPlayers.forEach((p, idx) => {
+        const item = document.createElement('div');
+        item.className = 'flex justify-between items-center bg-blue-900/60 border border-white/10 p-3 rounded-2xl';
+        item.innerHTML = `
+            <div class="flex items-center gap-3">
+                <span class="font-bungee text-sm ${idx===0 ? 'text-yellow-300' : 'text-white'}">#${idx + 1}</span>
+                <span class="font-bold text-xs text-white">👤 ${escapeHTML(p.username)}</span>
+            </div>
+            <span class="font-black text-xs text-yellow-300">${p.matches} Games Played</span>
+        `;
+        list.appendChild(item);
+    });
+});
+
+function triggerChatActivityTimer() {
+    const overlay = document.getElementById('chatOverlay');
+    if (!overlay) return;
+    overlay.classList.remove('hidden-overlay');
+    clearTimeout(chatInactivityTimer);
+    chatInactivityTimer = setTimeout(() => {
+        overlay.classList.add('hidden-overlay');
+        document.getElementById('toggleChatBtnLabel').innerText = 'Show Chat';
+    }, 5000);
+}
+
+function toggleOverlayChat() {
+    const overlay = document.getElementById('chatOverlay');
+    const label = document.getElementById('toggleChatBtnLabel');
+    if (overlay.classList.contains('hidden-overlay')) {
+        overlay.classList.remove('hidden-overlay');
+        label.innerText = 'Hide Chat';
+        triggerChatActivityTimer();
+    } else {
+        overlay.classList.add('hidden-overlay');
+        label.innerText = 'Show Chat';
+        clearTimeout(chatInactivityTimer);
+    }
+}
+
+document.getElementById('matchChatInput')?.addEventListener('input', triggerChatActivityTimer);
+
+function openMakeCodeModal() {
+    document.getElementById('makeCodeIframe').src = "https://smashkarts.io";
+    document.getElementById('makeCodeModal').classList.remove('hidden');
+}
+
+function closeMakeCodeModal() {
+    document.getElementById('makeCodeIframe').src = "";
+    document.getElementById('makeCodeModal').classList.add('hidden');
+}
+
+function extractSmashUrlClient(rawInput) {
+    if (!rawInput) return "";
+    let text = String(rawInput).trim();
+    
+    if (text.includes('ttps://')) {
+        text = text.replace('ttps://', 'https://');
+    }
+
+    const linkMatch = text.match(/https?:\/\/(www\.)?smashkarts\.io\/link\/\?[^\s]+/i);
+    if (linkMatch) {
+        return linkMatch[0];
+    }
+    
+    const roomMatch = text.match(/Room:\s*([A-Za-z0-9]+)/i);
+    if (roomMatch) {
+        return `https://smashkarts.io/link/?room=${encodeURIComponent(roomMatch[1])}`;
+    }
+
+    if (text.length > 0 && !text.includes(' ') && !text.includes('\n') && !text.includes('/')) {
+        return `https://smashkarts.io/link/?room=${encodeURIComponent(text)}`;
+    }
+
+    return "";
+}
+
+function copyAndPlay() {
+    const codeInput = document.getElementById('copyCodeInput').value.trim();
+    const cleanLink = extractSmashUrlClient(codeInput);
+    
+    if (!cleanLink) {
+        showToast("Error: You must paste the Smash Karts room link or code first!", "⚠️");
+        return;
+    }
+    
+    document.getElementById('smashUrl').value = cleanLink;
+    closeMakeCodeModal();
+    createLobby();
+}
+
+function switchMatchMode(mode) {
+    currentMode = mode;
+    showTab('setupTab');
+    document.getElementById('btnNav1v1').classList.toggle('active', mode === '1v1');
+    document.getElementById('btnNav2v2').classList.toggle('active', mode === '2v2');
+    document.getElementById('arenaTitle').innerText = `${mode.toUpperCase()} MATCHMAKING`;
+    document.getElementById('arenaSubtitle').innerText = `Start or join a ${mode} match`;
+}
+
+function showTab(tabId) {
+    document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
+    document.querySelectorAll('.sidebar-btn').forEach(btn => btn.classList.remove('active'));
+    
+    if (tabId === 'leaderboardTab') document.getElementById('btnNavLeaderboard').classList.add('active');
+    if (tabId === 'messagesTab') document.getElementById('btnNavMessages').classList.add('active');
+    if (tabId === 'setupTab') {
+        document.getElementById(currentMode === '2v2' ? 'btnNav2v2' : 'btnNav1v1').classList.add('active');
+    }
+    
+    document.getElementById(tabId).classList.remove('hidden');
 }
 
 function createLobby() {
-    const url = document.getElementById('smashUrl').value.trim() || SMASH_KARTS_BASE_URL;
-    const winCond = document.getElementById('winCondition').value;
     const user = AuthSession.getUser();
+    const playerName = user ? user.username : "Player";
+    
+    let smashUrlInput = document.getElementById('smashUrl').value.trim();
+    smashUrlInput = extractSmashUrlClient(smashUrlInput);
 
-    activeRoomData = {
-        mode: currentMatchMode,
-        smashUrl: url,
-        winCondition: winCond,
-        host: user ? user.username : 'Player',
-        players: [user ? user.username : 'Player']
-    };
+    if (!smashUrlInput) {
+        showToast("Error: A valid Smash Karts room link or code is required!", "⚠️");
+        return;
+    }
 
-    socket.emit('create_lobby', activeRoomData);
+    const winCondition = document.getElementById('winCondition').value;
+    socket.emit('create_room', { playerName, smashUrl: smashUrlInput, winCondition, mode: currentMode });
 }
 
-socket.on('lobby_created', (lobbyData) => {
-    activeRoomData = lobbyData;
-    openPreGameLobbyModal();
-    updatePreGameLobbyUI();
+socket.on('room_error', (data) => {
+    showToast(data.message, "❌");
 });
 
-function openPreGameLobbyModal() {
+socket.on('room_created', (room) => openPreGameLobby(room));
+
+function openPreGameLobby(room) {
+    activeRoomData = room;
+    closeFindGameModal();
     document.getElementById('preGameLobbyModal').classList.remove('hidden');
+    updatePreGameLobbyUI(room);
+}
+
+function updatePreGameLobbyUI(room) {
+    const playerList = document.getElementById('preGamePlayerList');
+    if (!playerList) return;
+    playerList.innerHTML = '';
+    room.players.forEach((p, idx) => {
+        const item = document.createElement('div');
+        item.className = 'bg-blue-900/60 p-2 rounded-xl border border-white/10 flex justify-between';
+        item.innerHTML = `<span class="font-bold text-white">👤 ${escapeHTML(p.name)}</span><span class="text-yellow-300 font-bold text-[10px]">Slot ${idx+1}</span>`;
+        playerList.appendChild(item);
+    });
 }
 
 function closePreGameLobbyModal() {
     document.getElementById('preGameLobbyModal').classList.add('hidden');
 }
 
-function updatePreGameLobbyUI() {
-    if (!activeRoomData) return;
-    const playerList = document.getElementById('preGamePlayerList');
-    playerList.innerHTML = activeRoomData.players.map(p => `<div class="bg-blue-900 p-2 rounded-xl text-white font-bold">🏎️ ${p}</div>`).join('');
-}
-
-function sendPreGameChatMessage() {
-    const input = document.getElementById('preGameChatInput');
-    const msg = input.value.trim();
-    if (!msg) return;
-    const user = AuthSession.getUser();
-    socket.emit('pregame_chat_message', { sender: user ? user.username : 'Player', message: msg });
-    input.value = '';
-}
-
-socket.on('pregame_chat_broadcast', (data) => {
-    const container = document.getElementById('preGameChatMessages');
-    container.innerHTML += `<div><strong class="text-yellow-300">${data.sender}:</strong> ${data.message}</div>`;
-    container.scrollTop = container.scrollHeight;
-});
-
 function enterGameFromLobby() {
-    if (!activeRoomData) {
-        showToast("Error: No room data found!", "❌");
+    if (!activeRoomData || !activeRoomData.smashUrl) {
+        showToast("Error: No valid Smash Karts launch room URL found!", "❌");
         return;
     }
     
@@ -231,211 +710,122 @@ function enterGameFromLobby() {
         socket.emit('record_match_played', user.username);
     }
 
-    let targetUrl = activeRoomData.smashUrl || SMASH_KARTS_BASE_URL;
-    
-    // Automatically format room codes (like us345347) into valid absolute URLs to avoid 404/white error screens
-    if (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://')) {
-        if (targetUrl.length < 15 && !targetUrl.includes('.')) {
-            targetUrl = `https://smashkarts.io/join/${targetUrl}`;
-        } else {
-            targetUrl = `https://${targetUrl}`;
-        }
-    }
+    // Launch the exact room link in a new tab because Smash Karts' security script 
+    // forces iframes to redirect back to the main smashkarts.io homepage.
+    window.open(activeRoomData.smashUrl, '_blank');
 
-    // Open regular Smash Karts safely in a popup window
-    window.open(targetUrl, 'SmashKartsMatch', 'width=1100,height=750,resizable=yes,scrollbars=yes');
-    
     const gameScreen = document.getElementById('gameScreen');
-    const smashFrame = document.getElementById('smashFrame');
-    if (smashFrame) smashFrame.src = ''; // Clear iframe to completely prevent black screens / iframe restrictions
+    gameScreen.classList.remove('game-fade-exit', 'hidden');
     
-    gameScreen.classList.remove('hidden');
+    const frame = document.getElementById('smashFrame');
+    if (frame) {
+        frame.src = activeRoomData.smashUrl;
+    }
+    
     document.getElementById('gameModeBadge').innerText = activeRoomData.mode;
+    document.getElementById('mainDashboard').classList.add('hidden');
+    triggerChatActivityTimer();
 }
 
 function leaveEmbeddedGame() {
-    document.getElementById('gameScreen').classList.add('hidden');
-    const smashFrame = document.getElementById('smashFrame');
-    if (smashFrame) smashFrame.src = '';
-    showToast("Exited match arena", "🏁");
+    if (activeRoomData) {
+        socket.emit('leave_match', { roomId: activeRoomData.roomId });
+    }
+
+    const gameScreen = document.getElementById('gameScreen');
+    gameScreen.classList.add('game-fade-exit');
+
+    setTimeout(() => {
+        document.getElementById('smashFrame').src = '';
+        gameScreen.classList.add('hidden');
+        document.getElementById('mainDashboard').classList.remove('hidden');
+        activeRoomData = null;
+        
+        const smashUrlInput = document.getElementById('smashUrl');
+        if (smashUrlInput) smashUrlInput.value = '';
+    }, 350);
 }
 
-function toggleOverlayChat() {
-    const overlay = document.getElementById('chatOverlay');
-    const label = document.getElementById('toggleChatBtnLabel');
-    overlay.classList.toggle('hidden-overlay');
-    label.innerText = overlay.classList.contains('hidden-overlay') ? 'Show Chat' : 'Hide Chat';
+function sendPreGameChatMessage() {
+    const input = document.getElementById('preGameChatInput');
+    const user = AuthSession.getUser();
+    if (input.value.trim() && activeRoomData) {
+        socket.emit('send_match_chat', { roomId: activeRoomData.roomId, message: input.value.trim(), senderName: user ? user.username : 'Player' });
+        input.value = '';
+    }
 }
 
 function sendMatchChatMessage() {
     const input = document.getElementById('matchChatInput');
-    const msg = input.value.trim();
-    if (!msg) return;
     const user = AuthSession.getUser();
-    socket.emit('match_chat_message', { sender: user ? user.username : 'Player', message: msg });
-    input.value = '';
-}
-
-socket.on('match_chat_broadcast', (data) => {
-    const container = document.getElementById('matchChatMessages');
-    container.innerHTML += `<div><strong class="text-yellow-300">${data.sender}:</strong> ${data.message}</div>`;
-    container.scrollTop = container.scrollHeight;
-});
-
-function openMakeCodeModal() {
-    document.getElementById('makeCodeModal').classList.remove('hidden');
-    const iframe = document.getElementById('makeCodeIframe');
-    if (iframe) iframe.src = ''; // Clear iframe to avoid black screen policy blocks
-}
-
-function launchSmashKartsForCode() {
-    // Opens regular Smash Karts in a new window so the user can easily grab their room code
-    window.open(SMASH_KARTS_BASE_URL, 'SmashKartsGetCode', 'width=1100,height=750,resizable=yes,scrollbars=yes');
-}
-
-function closeMakeCodeModal() {
-    document.getElementById('makeCodeModal').classList.add('hidden');
-    const iframe = document.getElementById('makeCodeIframe');
-    if (iframe) iframe.src = '';
-}
-
-function copyAndPlay() {
-    const code = document.getElementById('copyCodeInput').value.trim();
-    if (!code) {
-        showToast("Please enter or paste a valid room code/link first!", "❌");
-        return;
+    if (input.value.trim() && activeRoomData) {
+        socket.emit('send_match_chat', { roomId: activeRoomData.roomId, message: input.value.trim(), senderName: user ? user.username : 'Player' });
+        input.value = '';
+        triggerChatActivityTimer();
     }
-    document.getElementById('smashUrl').value = code;
-    closeMakeCodeModal();
-    showToast("Room code loaded successfully!", "✅");
 }
+
+socket.on('receive_match_chat', (data) => {
+    const msg = `<div class="bg-blue-950/80 p-1.5 rounded-xl border border-white/10"><strong class="text-yellow-300">${escapeHTML(data.senderName)}:</strong> ${escapeHTML(data.message)}</div>`;
+    
+    const matchChat = document.getElementById('matchChatMessages');
+    const preGameChat = document.getElementById('preGameChatMessages');
+
+    if (matchChat) matchChat.innerHTML += msg;
+    if (preGameChat) preGameChat.innerHTML += msg;
+
+    if (matchChat) {
+        while (matchChat.children.length > 10) matchChat.removeChild(matchChat.firstChild);
+        matchChat.scrollTop = matchChat.scrollHeight;
+    }
+    if (preGameChat) {
+        while (preGameChat.children.length > 10) preGameChat.removeChild(preGameChat.firstChild);
+        preGameChat.scrollTop = preGameChat.scrollHeight;
+    }
+});
 
 function openFindGameModal() {
     document.getElementById('findGameModal').classList.remove('hidden');
-    socket.emit('request_public_rooms');
+    socket.emit('get_public_rooms');
 }
 
 function closeFindGameModal() {
     document.getElementById('findGameModal').classList.add('hidden');
 }
 
-socket.on('public_rooms_list', (rooms) => {
-    const list = document.getElementById('publicRoomsList');
-    if (!rooms || rooms.length === 0) {
-        list.innerHTML = `<div class="text-xs text-blue-200 text-center py-4">No active public lobbies right now. Create one!</div>`;
-        return;
-    }
-    list.innerHTML = rooms.map(r => `
-        <div class="bg-blue-950 p-3 rounded-2xl border border-white/10 flex justify-between items-center">
+socket.on('public_rooms_update', (rooms) => {
+    publicRoomsCache = rooms;
+    const container = document.getElementById('publicRoomsList');
+    if (!container) return;
+    container.innerHTML = rooms.length === 0 ? `<p class="text-center text-xs text-blue-200">No rooms active.</p>` : '';
+    
+    rooms.forEach(room => {
+        const row = document.createElement('div');
+        row.className = 'flex justify-between items-center bg-blue-950/80 p-3 rounded-2xl';
+        row.innerHTML = `
             <div>
-                <span class="block font-bold text-yellow-300 text-xs">${r.mode} Match (${r.winCondition})</span>
-                <span class="text-[10px] text-blue-200">Host: ${r.host}</span>
+                <p class="text-xs text-white font-bold">${escapeHTML(room.hostName)} (${escapeHTML(room.mode)})</p>
+                <p class="text-[10px] text-blue-200">${escapeHTML(room.winCondition)}</p>
             </div>
-            <button onclick='joinPublicRoom(${JSON.stringify(r)})' class="btn-smash px-3 py-1.5 rounded-xl font-bungee text-[10px] text-white">JOIN</button>
-        </div>
-    `).join('');
+            <button onclick="joinPublicRoomById('${room.roomId}')" class="bg-emerald-500 hover:bg-emerald-400 text-white font-black px-3 py-1.5 rounded-xl text-xs uppercase">Join</button>
+        `;
+        container.appendChild(row);
+    });
 });
 
-function joinPublicRoom(room) {
-    activeRoomData = room;
-    closeFindGameModal();
-    openPreGameLobbyModal();
-    updatePreGameLobbyUI();
+function joinPublicRoomById(roomId) {
+    const room = publicRoomsCache.find(r => r.roomId === roomId);
+    if (room) {
+        openPreGameLobby(room);
+    }
 }
 
-function openOnlineModal() {
-    document.getElementById('onlineUsersModal').classList.remove('hidden');
-    socket.emit('request_online_users');
-}
-
-function closeOnlineModal() {
-    document.getElementById('onlineUsersModal').classList.add('hidden');
-}
-
-socket.on('online_users_list', (users) => {
-    document.getElementById('onlineCountBadge').innerText = `${users.length} Online`;
-    
-    const modalList = document.getElementById('onlineUsersList');
-    modalList.innerHTML = users.map(u => `
-        <div class="bg-blue-950 p-2.5 rounded-xl flex justify-between items-center text-xs text-white">
-            <div class="flex items-center gap-2">
-                <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
-                <span class="font-bold">${u}</span>
-            </div>
-            <button onclick="openDMWithUser('${u}')" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 font-black px-3 py-1 rounded-lg text-[10px] uppercase">Message</button>
-        </div>
-    `).join('');
-
-    const friendsList = document.getElementById('friendsTabList');
-    friendsList.innerHTML = users.map(u => `
-        <div onclick="openDMWithUser('${u}')" class="bg-blue-950/80 hover:bg-blue-950 p-2.5 rounded-xl cursor-pointer flex items-center justify-between text-xs text-white border border-white/5">
-            <div class="flex items-center gap-2">
-                <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
-                <span class="font-bold">${u}</span>
-            </div>
-            <span class="text-[10px] text-yellow-300">Chat ➔</span>
-        </div>
-    `).join('');
-});
-
-function openDMWithUser(username) {
-    currentActiveDMUser = username;
-    closeOnlineModal();
-    showMessagesTab();
-    document.getElementById('activeDMChatHeader').innerText = `CHAT WITH ${username.toUpperCase()}`;
-    socket.emit('request_dm_history', { recipient: username });
-}
-
-function sendTabDM() {
-    const input = document.getElementById('tabDMInput');
-    const text = input.value.trim();
-    if (!text || !currentActiveDMUser) return;
-    const user = AuthSession.getUser();
-    socket.emit('send_dm', { sender: user ? user.username : 'Player', recipient: currentActiveDMUser, message: text });
-    
-    const container = document.getElementById('tabDMMessages');
-    container.innerHTML += `<div><strong class="text-yellow-300">You:</strong> ${text}</div>`;
-    container.scrollTop = container.scrollHeight;
-    input.value = '';
-}
-
-socket.on('receive_dm', (data) => {
-    if (currentActiveDMUser === data.sender) {
-        const container = document.getElementById('tabDMMessages');
-        container.innerHTML += `<div><strong class="text-emerald-300">${data.sender}:</strong> ${data.message}</div>`;
-        container.scrollTop = container.scrollHeight;
+document.addEventListener("DOMContentLoaded", () => {
+    if (AuthSession.isLoggedIn()) {
+        document.getElementById("authModal").classList.add("hidden");
+        AuthSession.startTracker();
+        updateUserUI();
     } else {
-        unreadMessagesCount++;
-        const badge = document.getElementById('messagesBadge');
-        badge.innerText = unreadMessagesCount;
-        badge.classList.remove('hidden');
-        showToast(`New message from ${data.sender}`, "💬");
+        document.getElementById("authModal").classList.remove("hidden");
     }
-});
-
-socket.on('dm_history', (messages) => {
-    const container = document.getElementById('tabDMMessages');
-    const user = AuthSession.getUser();
-    const currentName = user ? user.username : 'Player';
-    container.innerHTML = messages.map(m => `
-        <div><strong class="${m.sender === currentName ? 'text-yellow-300' : 'text-emerald-300'}">${m.sender}:</strong> ${m.message}</div>
-    `).join('');
-    container.scrollTop = container.scrollHeight;
-});
-
-socket.on('leaderboard_data', (leaders) => {
-    const list = document.getElementById('leaderboardList');
-    if (!leaders || leaders.length === 0) {
-        list.innerHTML = `<div class="text-xs text-blue-200 text-center py-4">No leaderboard records yet. Play a match!</div>`;
-        return;
-    }
-    list.innerHTML = leaders.map((l, index) => `
-        <div class="bg-blue-950 p-3 rounded-2xl border border-white/10 flex justify-between items-center text-xs">
-            <div class="flex items-center gap-3">
-                <span class="font-bungee text-yellow-300 text-sm">#${index + 1}</span>
-                <span class="font-bold text-white">${l.username}</span>
-            </div>
-            <span class="font-bungee text-emerald-300">${l.gamesPlayed || 0} Games Played</span>
-        </div>
-    `).join('');
 });
