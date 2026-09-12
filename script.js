@@ -219,8 +219,8 @@ socket.on('pregame_chat_broadcast', (data) => {
 });
 
 function enterGameFromLobby() {
-    if (!activeRoomData || !activeRoomData.smashUrl) {
-        showToast("Error: No valid Smash Karts launch room URL found!", "❌");
+    if (!activeRoomData) {
+        showToast("Error: No room data found!", "❌");
         return;
     }
     
@@ -231,12 +231,23 @@ function enterGameFromLobby() {
         socket.emit('record_match_played', user.username);
     }
 
-    // Smash Karts blocks iframes, so we open it cleanly in a popup window
-    window.open(activeRoomData.smashUrl, 'SmashKarts1v1Match', 'width=1100,height=750,resizable=yes,scrollbars=yes');
+    let targetUrl = activeRoomData.smashUrl || SMASH_KARTS_BASE_URL;
+    
+    // Automatically format room codes (like us345347) into valid absolute URLs to avoid 404/white error screens
+    if (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://')) {
+        if (targetUrl.length < 15 && !targetUrl.includes('.')) {
+            targetUrl = `https://smashkarts.io/join/${targetUrl}`;
+        } else {
+            targetUrl = `https://${targetUrl}`;
+        }
+    }
+
+    // Open regular Smash Karts safely in a popup window
+    window.open(targetUrl, 'SmashKartsMatch', 'width=1100,height=750,resizable=yes,scrollbars=yes');
     
     const gameScreen = document.getElementById('gameScreen');
     const smashFrame = document.getElementById('smashFrame');
-    smashFrame.src = ''; // Keep iframe blank to bypass the iframe security block
+    if (smashFrame) smashFrame.src = ''; // Clear iframe to completely prevent black screens / iframe restrictions
     
     gameScreen.classList.remove('hidden');
     document.getElementById('gameModeBadge').innerText = activeRoomData.mode;
@@ -244,7 +255,8 @@ function enterGameFromLobby() {
 
 function leaveEmbeddedGame() {
     document.getElementById('gameScreen').classList.add('hidden');
-    document.getElementById('smashFrame').src = '';
+    const smashFrame = document.getElementById('smashFrame');
+    if (smashFrame) smashFrame.src = '';
     showToast("Exited match arena", "🏁");
 }
 
@@ -272,12 +284,19 @@ socket.on('match_chat_broadcast', (data) => {
 
 function openMakeCodeModal() {
     document.getElementById('makeCodeModal').classList.remove('hidden');
-    document.getElementById('makeCodeIframe').src = SMASH_KARTS_BASE_URL;
+    const iframe = document.getElementById('makeCodeIframe');
+    if (iframe) iframe.src = ''; // Clear iframe to avoid black screen policy blocks
+}
+
+function launchSmashKartsForCode() {
+    // Opens regular Smash Karts in a new window so the user can easily grab their room code
+    window.open(SMASH_KARTS_BASE_URL, 'SmashKartsGetCode', 'width=1100,height=750,resizable=yes,scrollbars=yes');
 }
 
 function closeMakeCodeModal() {
     document.getElementById('makeCodeModal').classList.add('hidden');
-    document.getElementById('makeCodeIframe').src = '';
+    const iframe = document.getElementById('makeCodeIframe');
+    if (iframe) iframe.src = '';
 }
 
 function copyAndPlay() {
