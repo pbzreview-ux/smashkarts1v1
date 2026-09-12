@@ -799,25 +799,22 @@ function enterGameFromLobby() {
         if (match) roomCode = match[1];
     }
 
+    // Made the top code display container larger, bolder, and much easier to read
     if (codeContainer) {
         codeContainer.classList.remove('hidden'); 
         codeContainer.innerHTML = `
-            <button onclick="copyActiveRoomCode('${roomCode}')" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 font-bungee text-xs px-3.5 py-1.5 rounded-xl shadow-[0_0_10px_rgba(250,204,21,0.5)] flex items-center gap-2 transition-all transform hover:scale-105 cursor-pointer">
-                <span>📋 Code: (${roomCode})</span>
-                <span class="bg-blue-950 text-yellow-300 text-[10px] px-2 py-0.5 rounded-lg">COPY</span>
+            <button onclick="copyActiveRoomCode('${roomCode}')" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 font-bungee text-sm px-4 py-2 rounded-xl shadow-[0_0_15px_rgba(250,204,21,0.7)] flex items-center gap-3 transition-all transform hover:scale-105 cursor-pointer">
+                <span>📋 ROOM: ${roomCode}</span>
+                <span class="bg-blue-950 text-yellow-300 text-xs px-2.5 py-1 rounded-lg font-bold">COPY CODE</span>
             </button>
         `;
     }
 
-    // Integrated options dropdown with Exit button and Copy Code instead of creating a giant blue banner bar
+    // Removed the Copy Code button from options dropdown, leaving only the Exit Game button cleanly
     const dropdown = document.getElementById('gameHeaderDropdown');
     if (dropdown) {
         dropdown.innerHTML = `
             <div class="flex flex-col gap-2 p-2">
-                <button onclick="copyActiveRoomCode('${roomCode}')" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 font-bungee text-xs px-3 py-2 rounded-xl text-left flex items-center justify-between cursor-pointer">
-                    <span>📋 Copy Code</span>
-                    <span class="text-[10px] bg-blue-950 text-yellow-300 px-1.5 py-0.5 rounded">${roomCode}</span>
-                </button>
                 <button onclick="leaveEmbeddedGame()" class="bg-red-600 hover:bg-red-500 text-white font-bungee text-xs px-3 py-2 rounded-xl text-left flex items-center justify-between cursor-pointer">
                     <span>🚪 Exit Game</span>
                 </button>
