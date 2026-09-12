@@ -20,7 +20,6 @@ function escapeHTML(str) {
         .replace(/'/g, '&#039;');
 }
 
-/* IN-APP TOAST NOTIFICATION SYSTEM */
 function showToast(message, icon = '🔔') {
     const container = document.getElementById('toastContainer');
     if (!container) return;
@@ -52,7 +51,6 @@ function clearUnreadBadge() {
     badge.classList.add('hidden');
 }
 
-/* SETTINGS & ONLINE VISIBILITY */
 function openSettingsModal() {
     document.getElementById('settingsModal').classList.remove('hidden');
 }
@@ -66,7 +64,6 @@ function toggleOnlineStatus(isOnline) {
     showToast(isOnline ? "You are now VISIBLE online." : "You are now HIDDEN (Invisible).", isOnline ? "🟢" : "👻");
 }
 
-/* AUTH & SESSION MANAGEMENT (WITH STRICT ACCOUNT CHECKING) */
 const AuthSession = {
     INACTIVITY_LIMIT_MS: 30 * 60 * 1000,
     WARNING_WINDOW_MS: 60 * 1000,
@@ -215,11 +212,10 @@ function handleAuthSubmit(e, type) {
     } else {
         const email = document.getElementById('loginEmail').value.trim();
         const password = document.getElementById('loginPassword').value.trim();
-        const usernameInput = document.getElementById('loginUsername').value.trim();
 
         const foundUser = AuthSession.findUser(email, password);
         if (!foundUser) {
-            showToast("Account not found! You do not have an account. Please sign up first.", "❌");
+            showToast("Account not found! Please sign up first.", "❌");
             return;
         }
 
@@ -254,7 +250,6 @@ function updateUserUI() {
     }
 }
 
-/* ONLINE PLAYERS & FRIENDS MATCH REQUESTS */
 function openOnlineModal() {
     if (!AuthSession.isLoggedIn()) {
         showToast("Please log in to view online players!", "⚠️");
@@ -302,7 +297,6 @@ function renderOnlineUsersList(users) {
     });
 }
 
-/* FRIEND REQUEST HANDLERS */
 function sendFriendRequest(targetSocketId, username) {
     socket.emit('send_friend_request', { targetSocketId });
     showToast(`Friend request sent to ${username}!`, "➕");
@@ -336,7 +330,6 @@ socket.on('friend_request_accepted', (data) => {
     updateFriendsTabList();
 });
 
-/* 1v1 FRIEND CHALLENGE CODE FLOW */
 function initiateFriend1v1(friendUsername) {
     friendChallengeTargetUser = friendUsername;
     document.getElementById('friendChallengeHeader').innerText = `⚔️ CREATE 1v1 ROOM CODE FOR ${friendUsername.toUpperCase()}`;
@@ -354,7 +347,7 @@ function closeFriendChallengeModal() {
 function sendFriendChallengeWithCode() {
     const codeInput = document.getElementById('friendChallengeCodeInput').value;
     if (!codeInput || !codeInput.trim()) {
-        showToast("Please make and paste a room code first!", "⚠️");
+        showToast("Please enter a room link or code first!", "⚠️");
         return;
     }
 
@@ -379,7 +372,6 @@ function sendFriendChallengeWithCode() {
     closeFriendChallengeModal();
 }
 
-/* MATCH CHALLENGE RECEIVE / ACCEPT */
 socket.on('receive_match_challenge', (data) => {
     pendingChallengeData = data;
     document.getElementById('challengeText').innerText = `${data.fromUsername} challenged you to a 1v1 match!`;
@@ -409,7 +401,6 @@ socket.on('challenge_game_start', (room) => {
     enterGameFromLobby();
 });
 
-/* DIRECT MESSAGING & MESSAGES TAB */
 function showMessagesTab() {
     showTab('messagesTab');
     clearUnreadBadge();
@@ -543,7 +534,6 @@ function renderDMMessages(history) {
     container.scrollTop = container.scrollHeight;
 }
 
-/* LEADERBOARD UPDATE */
 socket.on('leaderboard_update', (topPlayers) => {
     const list = document.getElementById('leaderboardList');
     if (!list) return;
@@ -562,7 +552,6 @@ socket.on('leaderboard_update', (topPlayers) => {
     });
 });
 
-/* 5-SEC CHAT OVERLAY AUTO-HIDE */
 function triggerChatActivityTimer() {
     const overlay = document.getElementById('chatOverlay');
     if (!overlay) return;
@@ -590,7 +579,6 @@ function toggleOverlayChat() {
 
 document.getElementById('matchChatInput')?.addEventListener('input', triggerChatActivityTimer);
 
-/* MAKE CODE MODAL */
 function openMakeCodeModal() {
     document.getElementById('makeCodeIframe').src = "https://smashkarts.io";
     document.getElementById('makeCodeModal').classList.remove('hidden');
@@ -607,12 +595,12 @@ function copyAndPlay() {
         showToast("Please paste the generated Smash Karts code or link!", "⚠️");
         return;
     }
+    
     document.getElementById('smashUrl').value = codeInput;
     closeMakeCodeModal();
     createLobby();
 }
 
-/* MATCHMAKING & DASHBOARD NAVIGATION */
 function switchMatchMode(mode) {
     currentMode = mode;
     showTab('setupTab');
@@ -638,10 +626,15 @@ function showTab(tabId) {
 function createLobby() {
     const user = AuthSession.getUser();
     const playerName = user ? user.username : "Player";
-    const smashUrl = document.getElementById('smashUrl').value || "https://smashkarts.io";
-    const winCondition = document.getElementById('winCondition').value;
+    
+    let smashUrlInput = document.getElementById('smashUrl').value.trim();
+    if (!smashUrlInput) {
+        showToast("Please enter a room code or link first!", "⚠️");
+        return;
+    }
 
-    socket.emit('create_room', { playerName, smashUrl, winCondition, mode: currentMode });
+    const winCondition = document.getElementById('winCondition').value;
+    socket.emit('create_room', { playerName, smashUrl: smashUrlInput, winCondition, mode: currentMode });
 }
 
 socket.on('room_created', (room) => openPreGameLobby(room));
@@ -671,6 +664,7 @@ function closePreGameLobbyModal() {
 
 function enterGameFromLobby() {
     if (!activeRoomData) return;
+    
     closePreGameLobbyModal();
 
     const user = AuthSession.getUser();
@@ -680,7 +674,10 @@ function enterGameFromLobby() {
 
     const gameScreen = document.getElementById('gameScreen');
     gameScreen.classList.remove('game-fade-exit', 'hidden');
-    document.getElementById('smashFrame').src = activeRoomData.smashUrl;
+    
+    // DIRECTLY LOAD THE CUSTOM ROOM LINK OR GENERATED URL INTO THE IFRAME
+    document.getElementById('smashFrame').src = activeRoomData.smashUrl || "https://smashkarts.io";
+    
     document.getElementById('gameModeBadge').innerText = activeRoomData.mode;
     document.getElementById('mainDashboard').classList.add('hidden');
     triggerChatActivityTimer();
@@ -700,7 +697,6 @@ function leaveEmbeddedGame() {
         document.getElementById('mainDashboard').classList.remove('hidden');
         activeRoomData = null;
         
-        // Clear the Smash Karts input box so old code is reset on exit
         const smashUrlInput = document.getElementById('smashUrl');
         if (smashUrlInput) smashUrlInput.value = '';
     }, 350);

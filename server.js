@@ -11,11 +11,10 @@ const io = new Server(server, {
 
 app.use(express.static(path.join(__dirname, '/')));
 
-// Socket Data Storage
-const connectedPlayers = {}; // socketId -> { id, username, email, isAuthenticated, isOnline, friends: Set, friendRequests: Set }
-const activeRoomsMap = new Map(); // roomId -> room object
-const playerStats = {}; // username -> matches count
-const directMessageStore = {}; // 'user1__DM__user2' -> [ { senderUsername, message, timestamp } ]
+const connectedPlayers = {}; 
+const activeRoomsMap = new Map(); 
+const playerStats = {}; 
+const directMessageStore = {}; 
 
 function escapeHTML(str) {
     if (!str) return '';
@@ -40,20 +39,19 @@ function extractSmashUrl(rawInput) {
     if (!rawInput) return "https://smashkarts.io";
     const trimmed = String(rawInput).trim();
     
-    // Check if full URL is provided
+    // Match full http/https URLs (e.g. https://smashkarts.io/link/?room=usw341745)
     const match = trimmed.match(/https?:\/\/[^\s]+/);
     if (match) {
         return match[0];
     }
     
-    // Check if domain snippet is given
     if (trimmed.toLowerCase().includes('smashkarts.io')) {
         return 'https://' + trimmed.replace(/^https?:\/\//, '');
     }
     
-    // If it's a raw room code or slug (e.g., 462xe), route via query parameter game code
-    if (trimmed.length > 0 && trimmed.length < 30 && !trimmed.includes(' ')) {
-        return `https://smashkarts.io/?game=${encodeURIComponent(trimmed)}`;
+    // If user enters just a raw room code (e.g. usw341745), format it into the official room link structure
+    if (trimmed.length > 0 && !trimmed.includes(' ')) {
+        return `https://smashkarts.io/link/?room=${encodeURIComponent(trimmed)}`;
     }
     
     return "https://smashkarts.io";
@@ -96,7 +94,6 @@ io.on('connection', (socket) => {
         friendRequests: new Set()
     };
 
-    // Set User Session
     socket.on('set_user_session', (userData) => {
         if (!userData || !userData.username) return;
         const uname = sanitizeUsername(userData.username);
@@ -117,7 +114,6 @@ io.on('connection', (socket) => {
         broadcastLeaderboard();
     });
 
-    // Toggle Visibility
     socket.on('toggle_online_status', (isOnline) => {
         if (connectedPlayers[socket.id]) {
             connectedPlayers[socket.id].isOnline = !!isOnline;
@@ -125,7 +121,6 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Friend Requests
     socket.on('send_friend_request', ({ targetSocketId }) => {
         const sender = connectedPlayers[socket.id];
         const target = connectedPlayers[targetSocketId];
@@ -166,7 +161,6 @@ io.on('connection', (socket) => {
         broadcastOnlineUsers();
     });
 
-    // Direct Messages (Friends Only, Max 10 Messages)
     socket.on('send_direct_message', ({ targetUsername, message }) => {
         const sender = connectedPlayers[socket.id];
         if (!sender || !sender.isAuthenticated || !message || !message.trim()) return;
@@ -216,7 +210,6 @@ io.on('connection', (socket) => {
         });
     });
 
-    // Record Match Stats
     socket.on('record_match_played', (rawUsername) => {
         const uname = sanitizeUsername(rawUsername);
         if (uname && uname !== 'Player' && uname !== 'Guest') {
@@ -225,7 +218,6 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Match Challenges (Friends Only)
     socket.on('send_match_challenge', ({ targetSocketId, targetUsername, fromUsername, mode, smashUrl }) => {
         const sender = connectedPlayers[socket.id];
         const target = targetSocketId ? connectedPlayers[targetSocketId] : findSocketByUsername(targetUsername);
@@ -273,7 +265,6 @@ io.on('connection', (socket) => {
         broadcastPublicRooms();
     });
 
-    // Room Creation & Joining
     socket.on('create_room', (data) => {
         const cleanUrl = extractSmashUrl(data.smashUrl);
         const roomId = Math.random().toString(36).substring(2, 8).toUpperCase();
@@ -303,7 +294,6 @@ io.on('connection', (socket) => {
         broadcastPublicRooms();
     });
 
-    // Leave Match / Delete Lobby when all exit
     socket.on('leave_match', ({ roomId }) => {
         const room = activeRoomsMap.get(roomId);
         if (!room) return;
