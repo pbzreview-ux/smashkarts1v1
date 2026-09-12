@@ -1,5 +1,6 @@
 const socket = io();
 let currentMode = '1v1';
+let currentGameplayMode = 'popup'; // Default mode
 let activeRoomData = null;
 let chatInactivityTimer = null;
 let activeDMTargetUser = null;
@@ -9,6 +10,10 @@ let friendChallengeTargetUser = null;
 let onlineUsersCache = [];
 let publicRoomsCache = [];
 let pendingFriendRequests = [];
+
+function updateGameplayMode(mode) {
+    currentGameplayMode = mode;
+}
 
 function escapeHTML(str) {
     if (!str) return '';
@@ -125,11 +130,8 @@ const AuthSession = {
     },
 
     startTracker() {
+        // Disabled inactivity tracking so you never get automatically logged out
         this.lastActivity = Date.now();
-        ["click", "mousemove", "keydown", "scroll", "touchstart"].forEach((event) => {
-            window.addEventListener(event, () => this.handleActivity());
-        });
-        setInterval(() => this.checkInactivity(), 1000);
     },
 
     handleActivity() {
@@ -581,6 +583,14 @@ function toggleOverlayChat() {
 
 document.getElementById('matchChatInput')?.addEventListener('input', triggerChatActivityTimer);
 
+// Toggle the in-game options menu
+function toggleGameHeaderDropdown() {
+    const dropdown = document.getElementById('gameHeaderDropdown');
+    if (dropdown) {
+        dropdown.classList.toggle('hidden');
+    }
+}
+
 function openMakeCodeModal() {
     document.getElementById('makeCodeIframe').src = "https://smashkarts.io";
     document.getElementById('makeCodeModal').classList.remove('hidden');
@@ -710,13 +720,28 @@ function enterGameFromLobby() {
         socket.emit('record_match_played', user.username);
     }
 
-    // Embed Smash Karts directly into the game screen iframe so it loads plain smashkarts.io instead of a black screen
     const gameScreen = document.getElementById('gameScreen');
     const smashFrame = document.getElementById('smashFrame');
-    if (smashFrame) {
-        smashFrame.src = activeRoomData.smashUrl || "https://smashkarts.io";
+    const codeContainer = document.getElementById('gameRoomCodeContainer');
+    const codeDisplay = document.getElementById('gameRoomCodeDisplay');
+    
+    // Check which setting the user chose
+    if (currentGameplayMode === 'popup') {
+        // 1. POPUP MODE: Open in a new window and hide the embed iframe
+        window.open(activeRoomData.smashUrl, '_blank', 'width=1000,height=700');
+        if (smashFrame) smashFrame.src = "";
+        if (codeContainer) codeContainer.classList.add('hidden'); // Hide the code container
+    } else {
+        // 2. EMBED / TYPE IN CODE MODE: Put game in iframe and show code
+        if (smashFrame) smashFrame.src = activeRoomData.smashUrl || "https://smashkarts.io";
+        
+        if (codeContainer) {
+            codeContainer.classList.remove('hidden'); // Show the code text
+            if (codeDisplay) codeDisplay.innerText = "(us643345)"; // Display your custom code
+        }
     }
     
+    // Show the game screen (for chat and UI)
     gameScreen.classList.remove('game-fade-exit', 'hidden');
     document.getElementById('gameModeBadge').innerText = activeRoomData.mode;
     triggerChatActivityTimer();
@@ -732,6 +757,9 @@ function leaveEmbeddedGame() {
     if (smashFrame) {
         smashFrame.src = '';
     }
+
+    // Hide dropdown so it resets for the next game
+    document.getElementById('gameHeaderDropdown').classList.add('hidden');
 
     gameScreen.classList.add('game-fade-exit');
 
