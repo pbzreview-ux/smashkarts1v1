@@ -66,7 +66,7 @@ function toggleOnlineStatus(isOnline) {
     showToast(isOnline ? "You are now VISIBLE online." : "You are now HIDDEN (Invisible).", isOnline ? "🟢" : "👻");
 }
 
-/* AUTH & SESSION MANAGEMENT (WITH STRICT ACCOUNT CHECKING) */
+/* AUTH & SESSION MANAGEMENT */
 const AuthSession = {
     INACTIVITY_LIMIT_MS: 30 * 60 * 1000,
     WARNING_WINDOW_MS: 60 * 1000,
@@ -215,7 +215,6 @@ function handleAuthSubmit(e, type) {
     } else {
         const email = document.getElementById('loginEmail').value.trim();
         const password = document.getElementById('loginPassword').value.trim();
-        const usernameInput = document.getElementById('loginUsername').value.trim();
 
         const foundUser = AuthSession.findUser(email, password);
         if (!foundUser) {
@@ -302,7 +301,6 @@ function renderOnlineUsersList(users) {
     });
 }
 
-/* FRIEND REQUEST HANDLERS */
 function sendFriendRequest(targetSocketId, username) {
     socket.emit('send_friend_request', { targetSocketId });
     showToast(`Friend request sent to ${username}!`, "➕");
@@ -379,7 +377,6 @@ function sendFriendChallengeWithCode() {
     closeFriendChallengeModal();
 }
 
-/* MATCH CHALLENGE RECEIVE / ACCEPT */
 socket.on('receive_match_challenge', (data) => {
     pendingChallengeData = data;
     document.getElementById('challengeText').innerText = `${data.fromUsername} challenged you to a 1v1 match!`;
@@ -590,26 +587,48 @@ function toggleOverlayChat() {
 
 document.getElementById('matchChatInput')?.addEventListener('input', triggerChatActivityTimer);
 
-/* MAKE CODE MODAL */
-function openMakeCodeModal() {
-    document.getElementById('makeCodeIframe').src = "https://smashkarts.io";
-    document.getElementById('makeCodeModal').classList.remove('hidden');
-}
-
-function closeMakeCodeModal() {
-    document.getElementById('makeCodeIframe').src = "";
-    document.getElementById('makeCodeModal').classList.add('hidden');
-}
-
-function copyAndPlay() {
-    const codeInput = document.getElementById('copyCodeInput').value;
-    if (!codeInput.trim()) {
-        showToast("Please paste the generated Smash Karts code or link!", "⚠️");
+/* COPY CODE & PASTE/PLAY TRANSITION */
+function copyCodeFromBox() {
+    const quickInput = document.getElementById('quickCodeInput');
+    if (!quickInput.value.trim()) {
+        showToast("Enter or paste the code from the generator box first!", "⚠️");
         return;
     }
+    document.getElementById('smashUrl').value = quickInput.value;
+    showToast("Room code copied to lobby settings!", "📋");
+}
+
+function pasteAndPlayTransition() {
+    const codeInput = document.getElementById('quickCodeInput').value || document.getElementById('smashUrl').value;
+    if (!codeInput.trim()) {
+        showToast("Please make or paste your created room code/link first!", "⚠️");
+        return;
+    }
+    
     document.getElementById('smashUrl').value = codeInput;
-    closeMakeCodeModal();
-    createLobby();
+
+    const user = AuthSession.getUser();
+    if (user) {
+        socket.emit('record_match_played', user.username);
+    }
+
+    // Transition the smash generator box to full game screen
+    const boxWrapper = document.getElementById('smashBoxWrapper');
+    boxWrapper.style.position = 'fixed';
+    boxWrapper.style.top = '0';
+    boxWrapper.style.left = '0';
+    boxWrapper.style.width = '100vw';
+    boxWrapper.style.height = '100vh';
+    boxWrapper.style.zIndex = '99999';
+    boxWrapper.style.borderRadius = '0';
+
+    // Show game screen shell top bar for chat & exit
+    const gameScreen = document.getElementById('gameScreen');
+    gameScreen.classList.remove('game-fade-exit', 'hidden');
+    document.getElementById('smashFrame').src = codeInput.includes('http') ? codeInput : `https://smashkarts.io/?game=${encodeURIComponent(codeInput)}`;
+    document.getElementById('gameModeBadge').innerText = currentMode;
+    document.getElementById('mainDashboard').classList.add('hidden');
+    triggerChatActivityTimer();
 }
 
 /* MATCHMAKING & DASHBOARD NAVIGATION */
@@ -638,7 +657,7 @@ function showTab(tabId) {
 function createLobby() {
     const user = AuthSession.getUser();
     const playerName = user ? user.username : "Player";
-    const smashUrl = document.getElementById('smashUrl').value || "https://smashkarts.io";
+    const smashUrl = document.getElementById('smashUrl').value || document.getElementById('quickCodeInput').value || "https://smashkarts.io";
     const winCondition = document.getElementById('winCondition').value;
 
     socket.emit('create_room', { playerName, smashUrl, winCondition, mode: currentMode });
@@ -680,7 +699,10 @@ function enterGameFromLobby() {
 
     const gameScreen = document.getElementById('gameScreen');
     gameScreen.classList.remove('game-fade-exit', 'hidden');
-    document.getElementById('smashFrame').src = activeRoomData.smashUrl;
+    
+    // Join the exact smashUrl link stored in the activeRoomData lobby instead of main page
+    const targetGameUrl = activeRoomData.smashUrl || "https://smashkarts.io";
+    document.getElementById('smashFrame').src = targetGameUrl;
     document.getElementById('gameModeBadge').innerText = activeRoomData.mode;
     document.getElementById('mainDashboard').classList.add('hidden');
     triggerChatActivityTimer();
@@ -691,18 +713,31 @@ function leaveEmbeddedGame() {
         socket.emit('leave_match', { roomId: activeRoomData.roomId });
     }
 
+    // Reset generator box wrapper styles if expanded
+    const boxWrapper = document.getElementById('smashBoxWrapper');
+    boxWrapper.style.position = '';
+    boxWrapper.style.top = '';
+    boxWrapper.style.left = '';
+    boxWrapper.style.width = '';
+    boxWrapper.style.height = '';
+    boxWrapper.style.zIndex = '';
+    boxWrapper.style.borderRadius = '';
+
     const gameScreen = document.getElementById('gameScreen');
     gameScreen.classList.add('game-fade-exit');
 
     setTimeout(() => {
         document.getElementById('smashFrame').src = '';
+        document.getElementById('makeCodeIframe').src = 'https://smashkarts.io';
         gameScreen.classList.add('hidden');
         document.getElementById('mainDashboard').classList.remove('hidden');
         activeRoomData = null;
         
-        // Clear the Smash Karts input box so old code is reset on exit
+        // Clear input boxes so old code is reset on exit
         const smashUrlInput = document.getElementById('smashUrl');
+        const quickInput = document.getElementById('quickCodeInput');
         if (smashUrlInput) smashUrlInput.value = '';
+        if (quickInput) quickInput.value = '';
     }, 350);
 }
 
