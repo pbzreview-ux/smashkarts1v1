@@ -332,7 +332,7 @@ socket.on('friend_request_accepted', (data) => {
 
 function initiateFriend1v1(friendUsername) {
     friendChallengeTargetUser = friendUsername;
-    document.getElementById('friendChallengeHeader').innerText = `⚔️ CREATE 1v1 ROOM CODE FOR ${friendUsername.toUpperCase()}`;
+    document.getElementById('friendChallengeHeader').innerText = `⚔️ CREATE 1v1 ROOM LINK FOR ${friendUsername.toUpperCase()}`;
     document.getElementById('friendChallengeIframe').src = "https://smashkarts.io";
     document.getElementById('friendChallengeCodeInput').value = '';
     document.getElementById('friendChallengeModal').classList.remove('hidden');
@@ -345,9 +345,9 @@ function closeFriendChallengeModal() {
 }
 
 function sendFriendChallengeWithCode() {
-    const codeInput = document.getElementById('friendChallengeCodeInput').value;
-    if (!codeInput || !codeInput.trim()) {
-        showToast("Please enter a room link or code first!", "⚠️");
+    const codeInput = document.getElementById('friendChallengeCodeInput').value.trim();
+    if (!codeInput) {
+        showToast("Error: You must paste a valid Smash Karts room link or code!", "⚠️");
         return;
     }
 
@@ -365,10 +365,10 @@ function sendFriendChallengeWithCode() {
         targetUsername: friendChallengeTargetUser,
         fromUsername: user ? user.username : 'Player',
         mode: '1v1',
-        smashUrl: codeInput.trim()
+        smashUrl: codeInput
     });
 
-    showToast(`1v1 match code sent to ${friendChallengeTargetUser}!`, "⚔️");
+    showToast(`1v1 match challenge sent to ${friendChallengeTargetUser}!`, "⚔️");
     closeFriendChallengeModal();
 }
 
@@ -590,9 +590,9 @@ function closeMakeCodeModal() {
 }
 
 function copyAndPlay() {
-    const codeInput = document.getElementById('copyCodeInput').value;
-    if (!codeInput.trim()) {
-        showToast("Please paste the generated Smash Karts code or link!", "⚠️");
+    const codeInput = document.getElementById('copyCodeInput').value.trim();
+    if (!codeInput) {
+        showToast("Error: You must paste the Smash Karts room link or code first!", "⚠️");
         return;
     }
     
@@ -629,13 +629,17 @@ function createLobby() {
     
     let smashUrlInput = document.getElementById('smashUrl').value.trim();
     if (!smashUrlInput) {
-        showToast("Please enter a room code or link first!", "⚠️");
+        showToast("Error: A valid Smash Karts room link or code is required!", "⚠️");
         return;
     }
 
     const winCondition = document.getElementById('winCondition').value;
     socket.emit('create_room', { playerName, smashUrl: smashUrlInput, winCondition, mode: currentMode });
 }
+
+socket.on('room_error', (data) => {
+    showToast(data.message, "❌");
+});
 
 socket.on('room_created', (room) => openPreGameLobby(room));
 
@@ -663,7 +667,10 @@ function closePreGameLobbyModal() {
 }
 
 function enterGameFromLobby() {
-    if (!activeRoomData) return;
+    if (!activeRoomData || !activeRoomData.smashUrl) {
+        showToast("Error: No valid Smash Karts launch room URL found!", "❌");
+        return;
+    }
     
     closePreGameLobbyModal();
 
@@ -675,8 +682,8 @@ function enterGameFromLobby() {
     const gameScreen = document.getElementById('gameScreen');
     gameScreen.classList.remove('game-fade-exit', 'hidden');
     
-    // DIRECTLY LOAD THE CUSTOM ROOM LINK OR GENERATED URL INTO THE IFRAME
-    document.getElementById('smashFrame').src = activeRoomData.smashUrl || "https://smashkarts.io";
+    // LOAD THE EXACT LAUNCH URL DIRECTLY INTO THE IFRAME
+    document.getElementById('smashFrame').src = activeRoomData.smashUrl;
     
     document.getElementById('gameModeBadge').innerText = activeRoomData.mode;
     document.getElementById('mainDashboard').classList.add('hidden');

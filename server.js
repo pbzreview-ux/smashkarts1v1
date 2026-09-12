@@ -36,25 +36,25 @@ function sanitizeUsername(name) {
 }
 
 function extractSmashUrl(rawInput) {
-    if (!rawInput) return "https://smashkarts.io";
+    if (!rawInput) return null;
     const trimmed = String(rawInput).trim();
     
-    // Match full http/https URLs (e.g. https://smashkarts.io/link/?room=usw341745)
-    const match = trimmed.match(/https?:\/\/[^\s]+/);
+    // Match full URLs containing smashkarts.io (like your full room link example)
+    const match = trimmed.match(/https?:\/\/[^\s]+/i);
     if (match) {
         return match[0];
     }
     
     if (trimmed.toLowerCase().includes('smashkarts.io')) {
-        return 'https://' + trimmed.replace(/^https?:\/\//, '');
+        return 'https://' + trimmed.replace(/^https?:\/\//i, '');
     }
     
-    // If user enters just a raw room code (e.g. usw341745), format it into the official room link structure
+    // If user enters just a raw room code (e.g. usw341745 or us367571), convert it into the official room link format
     if (trimmed.length > 0 && !trimmed.includes(' ')) {
         return `https://smashkarts.io/link/?room=${encodeURIComponent(trimmed)}`;
     }
     
-    return "https://smashkarts.io";
+    return null;
 }
 
 function moderateText(text) {
@@ -225,16 +225,28 @@ io.on('connection', (socket) => {
         if (!sender || !target) return;
         if (!sender.friends.has(target.username)) return;
 
+        const cleanUrl = extractSmashUrl(smashUrl);
+        if (!cleanUrl) {
+            socket.emit('room_error', { message: 'A valid Smash Karts room link or code is required!' });
+            return;
+        }
+
         const senderName = sanitizeUsername(fromUsername);
         io.to(target.id).emit('receive_match_challenge', {
             challengerSocketId: socket.id,
             fromUsername: senderName,
             mode: mode || '1v1',
-            smashUrl: extractSmashUrl(smashUrl)
+            smashUrl: cleanUrl
         });
     });
 
     socket.on('accept_match_challenge', ({ challengerSocketId, targetUsername, smashUrl }) => {
+        const cleanUrl = extractSmashUrl(smashUrl);
+        if (!cleanUrl) {
+            socket.emit('room_error', { message: 'A valid Smash Karts room link or code is required!' });
+            return;
+        }
+
         const acceptName = sanitizeUsername(targetUsername);
         const challenger = connectedPlayers[challengerSocketId];
         const challengerName = challenger ? challenger.username : 'Challenger';
@@ -243,7 +255,7 @@ io.on('connection', (socket) => {
         const room = {
             roomId,
             hostName: challengerName,
-            smashUrl: extractSmashUrl(smashUrl),
+            smashUrl: cleanUrl,
             winCondition: 'First to 3',
             mode: '1v1',
             maxPlayers: 2,
@@ -267,6 +279,11 @@ io.on('connection', (socket) => {
 
     socket.on('create_room', (data) => {
         const cleanUrl = extractSmashUrl(data.smashUrl);
+        if (!cleanUrl) {
+            socket.emit('room_error', { message: 'Error: You must provide a valid Smash Karts room link or code to join/create!' });
+            return;
+        }
+
         const roomId = Math.random().toString(36).substring(2, 8).toUpperCase();
         const mode = data.mode === '2v2' ? '2v2' : '1v1';
         const hostName = sanitizeUsername(data.playerName);
