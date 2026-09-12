@@ -66,7 +66,7 @@ function toggleOnlineStatus(isOnline) {
     showToast(isOnline ? "You are now VISIBLE online." : "You are now HIDDEN (Invisible).", isOnline ? "🟢" : "👻");
 }
 
-/* AUTH & SESSION MANAGEMENT */
+/* AUTH & SESSION MANAGEMENT (WITH STRICT ACCOUNT CHECKING) */
 const AuthSession = {
     INACTIVITY_LIMIT_MS: 30 * 60 * 1000,
     WARNING_WINDOW_MS: 60 * 1000,
@@ -215,6 +215,7 @@ function handleAuthSubmit(e, type) {
     } else {
         const email = document.getElementById('loginEmail').value.trim();
         const password = document.getElementById('loginPassword').value.trim();
+        const usernameInput = document.getElementById('loginUsername').value.trim();
 
         const foundUser = AuthSession.findUser(email, password);
         if (!foundUser) {
@@ -301,6 +302,7 @@ function renderOnlineUsersList(users) {
     });
 }
 
+/* FRIEND REQUEST HANDLERS */
 function sendFriendRequest(targetSocketId, username) {
     socket.emit('send_friend_request', { targetSocketId });
     showToast(`Friend request sent to ${username}!`, "➕");
@@ -377,6 +379,7 @@ function sendFriendChallengeWithCode() {
     closeFriendChallengeModal();
 }
 
+/* MATCH CHALLENGE RECEIVE / ACCEPT */
 socket.on('receive_match_challenge', (data) => {
     pendingChallengeData = data;
     document.getElementById('challengeText').innerText = `${data.fromUsername} challenged you to a 1v1 match!`;
@@ -403,7 +406,7 @@ function declineChallenge() {
 
 socket.on('challenge_game_start', (room) => {
     activeRoomData = room;
-    expandSmashBox();
+    enterGameFromLobby();
 });
 
 /* DIRECT MESSAGING & MESSAGES TAB */
@@ -559,78 +562,54 @@ socket.on('leaderboard_update', (topPlayers) => {
     });
 });
 
-/* COPY CODE & EXPAND BOX TRANSITION (PRESERVES ACTIVE SESSION) */
-function copyCodeFromBox() {
-    const quickInput = document.getElementById('quickCodeInput');
-    if (!quickInput.value.trim()) {
-        showToast("Enter or paste the code from the generator box first!", "⚠️");
+/* 5-SEC CHAT OVERLAY AUTO-HIDE */
+function triggerChatActivityTimer() {
+    const overlay = document.getElementById('chatOverlay');
+    if (!overlay) return;
+    overlay.classList.remove('hidden-overlay');
+    clearTimeout(chatInactivityTimer);
+    chatInactivityTimer = setTimeout(() => {
+        overlay.classList.add('hidden-overlay');
+        document.getElementById('toggleChatBtnLabel').innerText = 'Show Chat';
+    }, 5000);
+}
+
+function toggleOverlayChat() {
+    const overlay = document.getElementById('chatOverlay');
+    const label = document.getElementById('toggleChatBtnLabel');
+    if (overlay.classList.contains('hidden-overlay')) {
+        overlay.classList.remove('hidden-overlay');
+        label.innerText = 'Hide Chat';
+        triggerChatActivityTimer();
+    } else {
+        overlay.classList.add('hidden-overlay');
+        label.innerText = 'Show Chat';
+        clearTimeout(chatInactivityTimer);
+    }
+}
+
+document.getElementById('matchChatInput')?.addEventListener('input', triggerChatActivityTimer);
+
+/* MAKE CODE MODAL */
+function openMakeCodeModal() {
+    document.getElementById('makeCodeIframe').src = "https://smashkarts.io";
+    document.getElementById('makeCodeModal').classList.remove('hidden');
+}
+
+function closeMakeCodeModal() {
+    document.getElementById('makeCodeIframe').src = "";
+    document.getElementById('makeCodeModal').classList.add('hidden');
+}
+
+function copyAndPlay() {
+    const codeInput = document.getElementById('copyCodeInput').value;
+    if (!codeInput.trim()) {
+        showToast("Please paste the generated Smash Karts code or link!", "⚠️");
         return;
     }
-    document.getElementById('smashUrl').value = quickInput.value;
-    showToast("Room code copied to lobby settings!", "📋");
-}
-
-function expandSmashBox() {
-    const container = document.getElementById('generatorContainer');
-    const exitBtn = document.getElementById('exitFullscreenBtn');
-    
-    container.style.position = 'fixed';
-    container.style.top = '0';
-    container.style.left = '0';
-    container.style.width = '100vw';
-    container.style.height = '100vh';
-    container.style.zIndex = '99999';
-    container.style.borderRadius = '0';
-    container.style.margin = '0';
-    
-    exitBtn.classList.remove('hidden');
-
-    const user = AuthSession.getUser();
-    if (user) {
-        socket.emit('record_match_played', user.username);
-    }
-    showToast("Expanded active game session!", "🎮");
-}
-
-function collapseSmashBox() {
-    const container = document.getElementById('generatorContainer');
-    const exitBtn = document.getElementById('exitFullscreenBtn');
-    
-    container.style.position = '';
-    container.style.top = '';
-    container.style.left = '';
-    container.style.width = '';
-    container.style.height = '';
-    container.style.zIndex = '';
-    container.style.borderRadius = '';
-    container.style.margin = '';
-    
-    exitBtn.classList.add('hidden');
-    showToast("Returned to dashboard.", "↩️");
-}
-
-function pasteAndPlayTransition() {
-    const codeInput = document.getElementById('quickCodeInput').value || document.getElementById('smashUrl').value;
-    const iframe = document.getElementById('makeCodeIframe');
-    
-    if (codeInput.trim()) {
-        const trimmed = codeInput.trim();
-        let targetUrl = "https://smashkarts.io";
-        
-        if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
-            targetUrl = trimmed;
-        } else if (trimmed.toLowerCase().includes('smashkarts.io')) {
-            targetUrl = 'https://' + trimmed.replace(/^https?:\/\//, '');
-        } else if (trimmed.length > 0 && trimmed.length < 30 && !trimmed.includes(' ')) {
-            targetUrl = `https://smashkarts.io/join/${encodeURIComponent(trimmed)}`;
-        } else {
-            targetUrl = `https://smashkarts.io/?game=${encodeURIComponent(trimmed)}`;
-        }
-        
-        iframe.src = targetUrl;
-    }
-
-    expandSmashBox();
+    document.getElementById('smashUrl').value = codeInput;
+    closeMakeCodeModal();
+    createLobby();
 }
 
 /* MATCHMAKING & DASHBOARD NAVIGATION */
@@ -640,6 +619,7 @@ function switchMatchMode(mode) {
     document.getElementById('btnNav1v1').classList.toggle('active', mode === '1v1');
     document.getElementById('btnNav2v2').classList.toggle('active', mode === '2v2');
     document.getElementById('arenaTitle').innerText = `${mode.toUpperCase()} MATCHMAKING`;
+    document.getElementById('arenaSubtitle').innerText = `Start or join a ${mode} match`;
 }
 
 function showTab(tabId) {
@@ -658,7 +638,7 @@ function showTab(tabId) {
 function createLobby() {
     const user = AuthSession.getUser();
     const playerName = user ? user.username : "Player";
-    const smashUrl = document.getElementById('smashUrl').value || document.getElementById('quickCodeInput').value || "https://smashkarts.io";
+    const smashUrl = document.getElementById('smashUrl').value || "https://smashkarts.io";
     const winCondition = document.getElementById('winCondition').value;
 
     socket.emit('create_room', { playerName, smashUrl, winCondition, mode: currentMode });
@@ -693,12 +673,37 @@ function enterGameFromLobby() {
     if (!activeRoomData) return;
     closePreGameLobbyModal();
 
-    const iframe = document.getElementById('makeCodeIframe');
-    if (activeRoomData.smashUrl) {
-        iframe.src = activeRoomData.smashUrl;
+    const user = AuthSession.getUser();
+    if (user) {
+        socket.emit('record_match_played', user.username);
     }
 
-    expandSmashBox();
+    const gameScreen = document.getElementById('gameScreen');
+    gameScreen.classList.remove('game-fade-exit', 'hidden');
+    document.getElementById('smashFrame').src = activeRoomData.smashUrl;
+    document.getElementById('gameModeBadge').innerText = activeRoomData.mode;
+    document.getElementById('mainDashboard').classList.add('hidden');
+    triggerChatActivityTimer();
+}
+
+function leaveEmbeddedGame() {
+    if (activeRoomData) {
+        socket.emit('leave_match', { roomId: activeRoomData.roomId });
+    }
+
+    const gameScreen = document.getElementById('gameScreen');
+    gameScreen.classList.add('game-fade-exit');
+
+    setTimeout(() => {
+        document.getElementById('smashFrame').src = '';
+        gameScreen.classList.add('hidden');
+        document.getElementById('mainDashboard').classList.remove('hidden');
+        activeRoomData = null;
+        
+        // Clear the Smash Karts input box so old code is reset on exit
+        const smashUrlInput = document.getElementById('smashUrl');
+        if (smashUrlInput) smashUrlInput.value = '';
+    }, 350);
 }
 
 function sendPreGameChatMessage() {
@@ -710,12 +715,30 @@ function sendPreGameChatMessage() {
     }
 }
 
+function sendMatchChatMessage() {
+    const input = document.getElementById('matchChatInput');
+    const user = AuthSession.getUser();
+    if (input.value.trim() && activeRoomData) {
+        socket.emit('send_match_chat', { roomId: activeRoomData.roomId, message: input.value.trim(), senderName: user ? user.username : 'Player' });
+        input.value = '';
+        triggerChatActivityTimer();
+    }
+}
+
 socket.on('receive_match_chat', (data) => {
     const msg = `<div class="bg-blue-950/80 p-1.5 rounded-xl border border-white/10"><strong class="text-yellow-300">${escapeHTML(data.senderName)}:</strong> ${escapeHTML(data.message)}</div>`;
+    
+    const matchChat = document.getElementById('matchChatMessages');
     const preGameChat = document.getElementById('preGameChatMessages');
 
+    if (matchChat) matchChat.innerHTML += msg;
+    if (preGameChat) preGameChat.innerHTML += msg;
+
+    if (matchChat) {
+        while (matchChat.children.length > 10) matchChat.removeChild(matchChat.firstChild);
+        matchChat.scrollTop = matchChat.scrollHeight;
+    }
     if (preGameChat) {
-        preGameChat.innerHTML += msg;
         while (preGameChat.children.length > 10) preGameChat.removeChild(preGameChat.firstChild);
         preGameChat.scrollTop = preGameChat.scrollHeight;
     }
@@ -763,6 +786,6 @@ document.addEventListener("DOMContentLoaded", () => {
         AuthSession.startTracker();
         updateUserUI();
     } else {
-        document.getElementById("authModal").classList.add("hidden");
+        document.getElementById("authModal").classList.remove("hidden");
     }
 });
