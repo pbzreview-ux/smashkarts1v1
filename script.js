@@ -8,6 +8,7 @@ let pendingChallengeData = null;
 let friendChallengeTargetUser = null;
 let onlineUsersCache = [];
 let publicRoomsCache = [];
+let pendingFriendRequests = [];
 
 function escapeHTML(str) {
     if (!str) return '';
@@ -65,13 +66,37 @@ function toggleOnlineStatus(isOnline) {
     showToast(isOnline ? "You are now VISIBLE online." : "You are now HIDDEN (Invisible).", isOnline ? "🟢" : "👻");
 }
 
-/* AUTH & SESSION MANAGEMENT */
+/* AUTH & SESSION MANAGEMENT (WITH STRICT ACCOUNT CHECKING) */
 const AuthSession = {
     INACTIVITY_LIMIT_MS: 30 * 60 * 1000,
     WARNING_WINDOW_MS: 60 * 1000,
     THROTTLE_MS: 5000,
     lastActivity: Date.now(),
     isWarningShown: false,
+
+    getRegisteredUsers() {
+        try {
+            return JSON.parse(localStorage.getItem("registered_users")) || [];
+        } catch(e) {
+            return [];
+        }
+    },
+
+    saveRegisteredUser(userObj) {
+        const users = this.getRegisteredUsers();
+        users.push(userObj);
+        localStorage.setItem("registered_users", JSON.stringify(users));
+    },
+
+    findUser(email, password) {
+        const users = this.getRegisteredUsers();
+        return users.find(u => u.email.toLowerCase() === email.toLowerCase() && u.password === password);
+    },
+
+    userExists(email) {
+        const users = this.getRegisteredUsers();
+        return users.some(u => u.email.toLowerCase() === email.toLowerCase());
+    },
 
     login(email, username) {
         const cleanUser = (username && username.trim() !== '') ? username.trim() : "Player";
@@ -80,7 +105,7 @@ const AuthSession = {
         document.getElementById("authModal").classList.add("hidden");
         this.startTracker();
         updateUserUI();
-        showToast(`Welcome, ${cleanUser}!`, "🎮");
+        showToast(`Welcome back, ${cleanUser}!`, "🎮");
     },
 
     getUser() {
@@ -170,12 +195,36 @@ function toggleAuthTab(type) {
 
 function handleAuthSubmit(e, type) {
     e.preventDefault();
-    const usernameId = type === 'login' ? 'loginUsername' : 'regUsername';
-    const emailId = type === 'login' ? 'loginEmail' : 'regEmail';
-    
-    const username = document.getElementById(usernameId).value;
-    const email = document.getElementById(emailId).value;
-    AuthSession.login(email, username);
+    if (type === 'register') {
+        const username = document.getElementById('regUsername').value.trim();
+        const email = document.getElementById('regEmail').value.trim();
+        const password = document.getElementById('regPassword').value.trim();
+
+        if (AuthSession.userExists(email)) {
+            showToast("An account with this email already exists! Please log in.", "⚠️");
+            toggleAuthTab('login');
+            return;
+        }
+
+        AuthSession.saveRegisteredUser({ username, email, password });
+        showToast("Account successfully created! Please log in.", "🎉");
+        toggleAuthTab('login');
+        document.getElementById('regUsername').value = '';
+        document.getElementById('regEmail').value = '';
+        document.getElementById('regPassword').value = '';
+    } else {
+        const email = document.getElementById('loginEmail').value.trim();
+        const password = document.getElementById('loginPassword').value.trim();
+        const usernameInput = document.getElementById('loginUsername').value.trim();
+
+        const foundUser = AuthSession.findUser(email, password);
+        if (!foundUser) {
+            showToast("Account not found! You do not have an account. Please sign up first.", "❌");
+            return;
+        }
+
+        AuthSession.login(foundUser.email, foundUser.username);
+    }
 }
 
 function promptEditUsername() {
@@ -261,12 +310,26 @@ function sendFriendRequest(targetSocketId, username) {
 
 socket.on('receive_friend_request', (data) => {
     incrementUnreadBadge();
-    showToast(`New Friend Request from ${data.fromUsername}!`, "👋");
-    
-    if (confirm(`Accept Friend Request from ${data.fromUsername}?`)) {
-        socket.emit('accept_friend_request', { challengerSocketId: data.fromSocketId, challengerUsername: data.fromUsername });
-    }
+    showToast(`New Friend Request from ${data.fromUsername}! Check Messages tab.`, "👋");
 });
+
+socket.on('friend_requests_update', (requests) => {
+    pendingFriendRequests = requests;
+    if (requests && requests.length > 0) {
+        incrementUnreadBadge();
+    }
+    updateFriendsTabList();
+});
+
+function acceptFriendRequestByName(username) {
+    socket.emit('accept_friend_request', { challengerUsername: username });
+    showToast(`Accepted friend request from ${username}!`, "🤝");
+}
+
+function declineFriendRequestByName(username) {
+    socket.emit('decline_friend_request', { challengerUsername: username });
+    showToast(`Declined friend request from ${username}.`, "✕");
+}
 
 socket.on('friend_request_accepted', (data) => {
     showToast(`You and ${data.username} are now friends!`, "🤝");
@@ -364,8 +427,36 @@ function updateFriendsTabList() {
     const myUserObj = onlineUsersCache.find(u => u.username === currentUser.username);
     const friendNames = myUserObj ? myUserObj.friends : [];
 
+    if (pendingFriendRequests && pendingFriendRequests.length > 0) {
+        const pendingHeader = document.createElement('div');
+        pendingHeader.className = 'font-bungee text-[10px] text-yellow-300 mb-1 mt-1';
+        pendingHeader.innerText = 'PENDING REQUESTS';
+        container.appendChild(pendingHeader);
+
+        pendingFriendRequests.forEach(reqName => {
+            const reqRow = document.createElement('div');
+            reqRow.className = 'bg-yellow-500/20 border border-yellow-400/50 p-2 rounded-xl flex items-center justify-between mb-2';
+            reqRow.innerHTML = `
+                <span class="font-bold text-xs text-white">👤 ${escapeHTML(reqName)}</span>
+                <div class="flex gap-1">
+                    <button onclick="acceptFriendRequestByName('${escapeHTML(reqName)}')" class="bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold px-2.5 py-1 rounded-lg">✔ Accept</button>
+                    <button onclick="declineFriendRequestByName('${escapeHTML(reqName)}')" class="bg-red-600 hover:bg-red-500 text-white text-[10px] font-bold px-2.5 py-1 rounded-lg">✕</button>
+                </div>
+            `;
+            container.appendChild(reqRow);
+        });
+    }
+
+    const friendsHeader = document.createElement('div');
+    friendsHeader.className = 'font-bungee text-[10px] text-yellow-300 mb-1 mt-2';
+    friendsHeader.innerText = 'YOUR FRIENDS';
+    container.appendChild(friendsHeader);
+
     if (friendNames.length === 0) {
-        container.innerHTML = '<p class="text-xs text-blue-200">No friends added yet. Open "Online Players" to add friends!</p>';
+        const emptyMsg = document.createElement('p');
+        emptyMsg.className = 'text-xs text-blue-200 mt-1';
+        emptyMsg.innerText = 'No friends added yet. Open "Online Players" to add friends!';
+        container.appendChild(emptyMsg);
         return;
     }
 
@@ -374,7 +465,7 @@ function updateFriendsTabList() {
         const isOnline = !!targetOnlineObj;
 
         const wrapper = document.createElement('div');
-        wrapper.className = `p-2 rounded-xl flex flex-col gap-1 transition-all ${activeDMTargetUser === name ? 'bg-yellow-400/30 border border-yellow-400' : 'bg-blue-950/60 hover:bg-blue-800/60'}`;
+        wrapper.className = `p-2 rounded-xl flex flex-col gap-1 transition-all mb-1.5 ${activeDMTargetUser === name ? 'bg-yellow-400/30 border border-yellow-400' : 'bg-blue-950/60 hover:bg-blue-800/60'}`;
         
         wrapper.innerHTML = `
             <div class="flex items-center justify-between">
