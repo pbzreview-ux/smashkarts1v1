@@ -1,132 +1,316 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <style>
-    .blue-card {
-      width: 360px;
-      background-color: #0284c7;
-      color: #ffffff;
-      border-radius: 8px;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      overflow: hidden;
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-    }
-
-    .card-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 12px 16px;
-      background-color: #0369a1;
-      cursor: pointer;
-      user-select: none;
-      font-weight: 600;
-    }
-
-    .arrow {
-      transition: transform 0.3s ease;
-      display: inline-block;
-      font-size: 12px;
-    }
-
-    .arrow.open {
-      transform: rotate(180deg);
-    }
-
-    .card-content {
-      display: none;
-      padding: 16px;
-      background-color: #0284c7;
-    }
-
-    .card-content.show {
-      display: block;
-    }
-
-    .code-box {
-      background-color: #0c4a6e;
-      color: #7dd3fc;
-      padding: 10px 12px;
-      border-radius: 6px;
-      font-family: "Courier New", Courier, monospace;
-      font-size: 13px;
-      margin-bottom: 12px;
-      word-break: break-all;
-    }
-
-    .options-group {
-      display: flex;
-      gap: 8px;
-      margin-bottom: 12px;
-    }
-
-    .btn {
-      padding: 8px 14px;
-      border: none;
-      border-radius: 4px;
-      cursor: pointer;
-      font-size: 13px;
-      font-weight: 600;
-      transition: background-color 0.2s ease;
-    }
-
-    .btn-option {
-      background-color: #e0f2fe;
-      color: #0369a1;
-      flex: 1;
-    }
-
-    .btn-option:hover {
-      background-color: #bae6fd;
-    }
-
-    .btn-exit {
-      background-color: #ef4444;
-      color: #ffffff;
-      width: 100%;
-    }
-
-    .btn-exit:hover {
-      background-color: #dc2626;
-    }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smashkarts1v1s Arena</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="/socket.io/socket.io.js"></script>
+    <link rel="stylesheet" href="style.css">
 </head>
-<body>
+<body class="min-h-screen flex flex-col justify-between overflow-x-hidden">
 
-<div class="blue-card" id="codeCard">
-  <div class="card-header" onclick="toggleDropdown()">
-    <span>Code Message & Options</span>
-    <span class="arrow" id="dropdownArrow">▼</span>
-  </div>
-  
-  <div class="card-content" id="dropdownContent">
-    <div class="code-box">
-      <code>STATUS_OK: Message processed successfully.</code>
+    <div id="toastContainer"></div>
+    <button id="settingsFloatingBtn" onclick="openSettingsModal()" title="Settings">⚙️</button>
+
+    <div id="settingsModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
+        <div class="w-full max-w-sm bg-blue-900 border-2 border-yellow-400 rounded-3xl p-6 shadow-2xl">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="font-bungee text-lg text-yellow-300">⚙️ SETTINGS</h3>
+                <button onclick="closeSettingsModal()" class="text-white hover:text-red-400 font-bold text-lg">✕</button>
+            </div>
+            
+            <div class="space-y-4">
+                <div class="flex justify-between items-center bg-blue-950/80 p-3.5 rounded-2xl border border-white/10">
+                    <div>
+                        <span class="block text-xs font-bold text-white">Online Status</span>
+                        <span class="text-[10px] text-blue-200">Show visible in player list</span>
+                    </div>
+                    <label class="relative inline-flex items-center cursor-pointer">
+                        <input type="checkbox" id="onlineStatusToggle" onchange="toggleOnlineStatus(this.checked)" checked class="sr-only peer">
+                        <div class="w-11 h-6 bg-gray-750 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500"></div>
+                    </label>
+                </div>
+
+                <div class="flex justify-between items-center bg-blue-950/80 p-3.5 rounded-2xl border border-white/10">
+                    <div>
+                        <span class="block text-xs font-bold text-white">Gameplay Mode</span>
+                        <span class="text-[10px] text-blue-200">Popup window or type-in-code embed</span>
+                    </div>
+                    <select id="gameplayModeSelect" onchange="updateGameplayMode(this.value)" class="smash-input px-3 py-1.5 rounded-xl text-xs font-bold text-yellow-300 bg-blue-900 border border-yellow-400/50">
+                        <option value="popup">Popup Window</option>
+                        <option value="embed">Type in Code</option>
+                    </select>
+                </div>
+
+                <button onclick="promptEditUsername(); closeSettingsModal();" class="w-full bg-blue-800 hover:bg-blue-700 text-white font-bold py-3 rounded-2xl text-xs flex items-center justify-center gap-2">
+                    ✏️ Edit Username
+                </button>
+            </div>
+        </div>
     </div>
-    
-    <div class="options-group">
-      <button class="btn btn-option">Option 1</button>
-      <button class="btn btn-option">Option 2</button>
+
+    <div id="editUsernameModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
+        <div class="w-full max-w-sm bg-blue-900 border-2 border-yellow-400 rounded-3xl p-6 shadow-2xl">
+            <h3 class="font-bungee text-lg text-yellow-300 mb-3">✏️ CHANGE USERNAME</h3>
+            <input type="text" id="newUsernameInput" placeholder="Enter new username..." class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold mb-4">
+            <div class="flex gap-2">
+                <button onclick="closeEditUsernameModal()" class="w-1/2 bg-gray-600 hover:bg-gray-500 text-white font-bold py-2.5 rounded-xl text-xs">Cancel</button>
+                <button onclick="saveNewUsername()" class="w-1/2 btn-smash text-white font-bungee py-2.5 rounded-xl text-xs">Save</button>
+            </div>
+        </div>
     </div>
-    
-    <button class="btn btn-exit" onclick="exitCard()">Exit</button>
-  </div>
-</div>
 
-<script>
-  function toggleDropdown() {
-    const content = document.getElementById('dropdownContent');
-    const arrow = document.getElementById('dropdownArrow');
-    
-    content.classList.toggle('show');
-    arrow.classList.toggle('open');
-  }
+    <div id="authModal" class="fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
+        <div class="w-full max-w-md bg-blue-900 border-2 border-yellow-400 rounded-3xl p-6 shadow-2xl">
+            <div class="flex border-b border-white/20 mb-6 pb-2 gap-4 justify-center">
+                <button id="tabLoginBtn" onclick="toggleAuthTab('login')" class="font-bungee text-lg text-yellow-300 border-b-2 border-yellow-300 pb-1">LOG IN</button>
+                <button id="tabRegisterBtn" onclick="toggleAuthTab('register')" class="font-bungee text-lg text-white/50 pb-1 hover:text-white">CREATE ACCOUNT</button>
+            </div>
 
-  function exitCard() {
-    const card = document.getElementById('codeCard');
-    card.style.display = 'none';
-  }
-</script>
+            <form id="loginForm" onsubmit="handleAuthSubmit(event, 'login')" class="space-y-4">
+                <div>
+                    <label class="block text-xs font-bold uppercase text-blue-200 mb-1">Username</label>
+                    <input type="text" id="loginUsername" required placeholder="Choose a Username..." class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
+                </div>
+                <div>
+                    <label class="block text-xs font-bold uppercase text-blue-200 mb-1">Email Address</label>
+                    <input type="email" id="loginEmail" required placeholder="player@example.com" class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
+                </div>
+                <div>
+                    <label class="block text-xs font-bold uppercase text-blue-200 mb-1">Password</label>
+                    <input type="password" id="loginPassword" required placeholder="••••••••" class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
+                </div>
+                <button type="submit" class="btn-smash w-full py-3.5 rounded-2xl font-bungee text-lg text-white">LOG IN & PLAY</button>
+            </form>
 
+            <form id="registerForm" onsubmit="handleAuthSubmit(event, 'register')" class="space-y-4 hidden">
+                <div>
+                    <label class="block text-xs font-bold uppercase text-blue-200 mb-1">Username (Visible to others)</label>
+                    <input type="text" id="regUsername" required placeholder="SpeedRacer99" class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
+                </div>
+                <div>
+                    <label class="block text-xs font-bold uppercase text-blue-200 mb-1">Email Address</label>
+                    <input type="email" id="regEmail" required placeholder="player@example.com" class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
+                </div>
+                <div>
+                    <label class="block text-xs font-bold uppercase text-blue-200 mb-1">Password</label>
+                    <input type="password" id="regPassword" required placeholder="••••••••" class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
+                </div>
+                <button type="submit" class="btn-smash w-full py-3.5 rounded-2xl font-bungee text-lg text-white">CREATE ACCOUNT</button>
+            </form>
+        </div>
+    </div>
+
+    <div id="onlineUsersModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
+        <div class="w-full max-w-md bg-blue-900 border-2 border-emerald-400 rounded-3xl p-6 shadow-2xl">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="font-bungee text-lg text-emerald-300">🟢 ONLINE PLAYERS</h3>
+                <button onclick="closeOnlineModal()" class="text-white hover:text-red-400 font-bold text-lg">✕</button>
+            </div>
+            <div id="onlineUsersList" class="max-h-80 overflow-y-auto space-y-2"></div>
+        </div>
+    </div>
+
+    <div id="gameScreen" class="hidden fixed inset-0 z-40 bg-black overflow-hidden">
+        <iframe id="smashFrame" src="" class="w-full h-full border-0 absolute inset-0 z-0" allow="autoplay; keyboard; fullscreen"></iframe>
+
+        <div id="gameTopBar" class="absolute top-0 left-0 right-0 z-30 transform -translate-y-full hover:translate-y-0 focus-within:translate-y-0 transition-transform duration-300 ease-in-out group">
+            <div class="bg-blue-900/95 backdrop-blur-md border-b-2 border-yellow-400/80 px-6 py-2.5 flex justify-between items-center shadow-2xl">
+                <div class="flex items-center gap-3">
+                    <span class="font-bungee text-yellow-300 text-lg sm:text-xl drop-shadow">🎮 SMASH KARTS</span>
+                    <span id="gameModeBadge" class="bg-yellow-400 text-blue-950 font-black text-xs px-3 py-1 rounded-full uppercase shadow">1v1</span>
+                </div>
+
+                <div class="flex items-center gap-3">
+                    <div id="gameRoomCodeContainer" class="flex items-center gap-2 bg-blue-950/80 border border-yellow-400/60 text-yellow-300 font-mono font-bold text-xs px-3 py-1.5 rounded-xl shadow">
+                        <span>ROOM CODE:</span>
+                        <span id="gameRoomCodeDisplay" class="text-white font-extrabold">------</span>
+                        <button id="copyRoomCodeBtn" onclick="copyActiveRoomCode()" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 text-[10px] font-black px-2 py-0.5 rounded transition-all">COPY</button>
+                    </div>
+
+                    <button onclick="toggleOverlayChat()" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 font-black px-3.5 py-1.5 rounded-xl text-xs uppercase shadow-md transition-all flex items-center gap-1.5">
+                        <span>💬</span> <span id="toggleChatBtnLabel">Show Chat</span>
+                    </button>
+
+                    <button onclick="leaveEmbeddedGame()" class="bg-red-600 hover:bg-red-500 text-white font-black px-3.5 py-1.5 rounded-xl text-xs uppercase shadow-md transition-all flex items-center gap-1">
+                        <span>✕</span> <span>Exit Game</span>
+                    </button>
+                </div>
+            </div>
+
+            <div class="flex justify-center">
+                <button onclick="toggleGameTopBar()" class="bg-blue-900/95 border-b-2 border-x-2 border-yellow-400/80 text-yellow-300 text-[10px] font-bungee px-4 py-1 rounded-b-xl shadow-lg hover:bg-blue-800 transition-all cursor-pointer flex items-center gap-1">
+                    <span id="topBarTabIcon">▼</span> OPTIONS & MENU
+                </button>
+            </div>
+        </div>
+
+        <div id="chatOverlay" class="hidden-overlay absolute top-16 right-4 z-30 bg-blue-900/90 border-2 border-yellow-400 rounded-2xl p-3 shadow-2xl flex flex-col w-72 backdrop-blur-md">
+            <div class="flex justify-between items-center mb-2 border-b border-white/10 pb-1">
+                <span class="font-bungee text-xs text-yellow-300">💬 IN-GAME CHAT</span>
+                <button onclick="toggleOverlayChat()" class="text-white hover:text-red-400 font-bold text-xs">✕</button>
+            </div>
+            <div id="matchChatMessages" class="h-36 overflow-y-auto space-y-1.5 text-xs mb-2 pr-1"></div>
+            <div class="flex gap-1.5">
+                <input type="text" id="matchChatInput" placeholder="Type..." onkeydown="if(event.key==='Enter') sendMatchChatMessage()" class="smash-input flex-1 px-2.5 py-1.5 rounded-xl text-xs">
+                <button onclick="sendMatchChatMessage()" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 font-black px-3 py-1.5 rounded-xl text-xs">Send</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="mainDashboard" class="min-h-screen flex flex-col justify-between">
+        <header class="w-full px-6 py-4 flex justify-between items-center">
+            <div class="flex items-center gap-3">
+                <div class="flex items-center gap-2 bg-blue-900/40 p-2 pr-4 rounded-2xl border border-white/20">
+                    <div class="w-9 h-9 rounded-xl bg-yellow-400 flex items-center justify-center font-black text-blue-950 text-lg">👤</div>
+                    <div>
+                        <span class="block text-[10px] font-bold uppercase text-blue-200">Username</span>
+                        <div class="flex items-center gap-2">
+                            <span id="userDisplayTag" class="text-sm font-bold text-white">Player</span>
+                            <button onclick="promptEditUsername()" title="Edit Username" class="text-xs text-yellow-300 hover:underline">✏️</button>
+                        </div>
+                    </div>
+                </div>
+
+                <button id="onlineCounterBtn" onclick="openOnlineModal()" class="bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/50 px-3 py-2 rounded-2xl flex items-center gap-2 transition-all">
+                    <span class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                    <span id="onlineCountBadge" class="text-xs font-bold text-emerald-300">0 Online</span>
+                </button>
+            </div>
+
+            <button onclick="AuthSession.logout()" class="bg-red-600 hover:bg-red-500 text-white text-xs font-bold px-4 py-2 rounded-xl">Logout</button>
+        </header>
+
+        <div class="flex flex-1 w-full max-w-7xl mx-auto px-4">
+            <aside class="flex flex-col gap-4 py-6 pr-4 items-center">
+                <button id="btnNavLeaderboard" onclick="showTab('leaderboardTab')" title="Leaderboard" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg">🏆</button>
+                <button id="btnNav1v1" onclick="switchMatchMode('1v1')" title="1v1 Matchmaking" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg active">🎮</button>
+                <button id="btnNav2v2" onclick="switchMatchMode('2v2')" title="2v2 Matchmaking" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg">⚔️</button>
+                
+                <button id="btnNavMessages" onclick="showMessagesTab()" title="Friends & Messages" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg">
+                    💬
+                    <span id="messagesBadge" class="unread-badge hidden">0</span>
+                </button>
+            </aside>
+
+            <main class="flex-1 flex flex-col items-center">
+                <div class="mb-8">
+                    <div class="bg-gradient-to-b from-yellow-300 to-yellow-500 border-4 border-white rounded-3xl px-10 py-3 shadow-2xl">
+                        <span class="font-bungee text-3xl sm:text-4xl text-blue-950">Smashkarts1v1s</span>
+                    </div>
+                </div>
+
+                <div class="w-full max-w-4xl bg-blue-950/40 border-2 border-white/20 backdrop-blur-xl rounded-3xl p-6 shadow-2xl mb-8">
+                    <div id="leaderboardTab" class="tab-content hidden space-y-4">
+                        <h2 class="font-bungee text-xl text-yellow-300 mb-2">🏆 TOP 5 PLAYERS (MOST GAMES PLAYED)</h2>
+                        <div id="leaderboardList" class="space-y-2"></div>
+                    </div>
+
+                    <div id="messagesTab" class="tab-content hidden space-y-4">
+                        <h2 class="font-bungee text-xl text-yellow-300 mb-2">💬 FRIENDS & DIRECT MESSAGES</h2>
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 h-80">
+                            <div class="bg-blue-900/60 p-3 rounded-2xl border border-white/10 flex flex-col">
+                                <span class="font-bungee text-xs text-yellow-300 mb-2">YOUR FRIENDS</span>
+                                <div id="friendsTabList" class="flex-1 overflow-y-auto space-y-1.5 pr-1"></div>
+                            </div>
+                            <div class="md:col-span-2 bg-blue-900/60 p-3 rounded-2xl border border-white/10 flex flex-col">
+                                <span id="activeDMChatHeader" class="font-bungee text-xs text-yellow-300 mb-2">SELECT A FRIEND TO MESSAGE</span>
+                                <div id="tabDMMessages" class="flex-1 overflow-y-auto space-y-1.5 pr-1 text-xs mb-3 bg-blue-950/80 p-2.5 rounded-xl border border-white/10"></div>
+                                <div class="flex gap-2">
+                                    <input type="text" id="tabDMInput" placeholder="Type message..." onkeydown="if(event.key==='Enter') sendTabDM()" class="smash-input flex-1 px-3 py-2 rounded-xl text-xs">
+                                    <button onclick="sendTabDM()" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 font-black px-4 py-2 rounded-xl text-xs uppercase">Send</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="setupTab" class="tab-content space-y-6">
+                        <div class="flex justify-between items-center border-b border-white/10 pb-4">
+                            <div>
+                                <h2 id="arenaTitle" class="font-bungee text-2xl text-white">1v1 MATCHMAKING</h2>
+                                <p id="arenaSubtitle" class="text-xs text-blue-200">Start or join a match</p>
+                            </div>
+                            <button onclick="openFindGameModal()" class="text-xs bg-emerald-500 hover:bg-emerald-400 text-white font-black px-5 py-2.5 rounded-xl uppercase">🔍 Public Lobbies</button>
+                        </div>
+
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-xs font-bold uppercase text-blue-200 mb-2">Smash Karts Room Link or Code</label>
+                                <div class="flex gap-2">
+                                    <input type="text" id="smashUrl" placeholder="Paste link or code here..." class="smash-input flex-1 px-4 py-3 rounded-2xl text-sm font-bold">
+                                    <button onclick="openMakeCodeModal()" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 font-black px-3 py-3 rounded-2xl text-xs uppercase flex-shrink-0">⚡ Make Code</button>
+                                </div>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-bold uppercase text-blue-200 mb-2">Win Condition</label>
+                                <select id="winCondition" class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
+                                    <option value="First to 3">First to 3</option>
+                                    <option value="First to 6">First to 6</option>
+                                    <option value="First to 10">First to 10</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <button onclick="createLobby()" class="btn-smash w-full py-4 rounded-2xl font-bungee text-xl text-white">+ CREATE LOBBY & PRE-CHAT</button>
+                    </div>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <div id="preGameLobbyModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
+        <div class="w-full max-w-2xl bg-blue-900 border-2 border-yellow-400 rounded-3xl p-6 shadow-2xl relative flex flex-col max-h-[90vh]">
+            <div class="flex justify-between items-center border-b border-white/10 pb-3 mb-4">
+                <h3 class="font-bungee text-lg text-yellow-300">🎮 PRE-GAME LOBBY</h3>
+                <button onclick="closePreGameLobbyModal()" class="text-white hover:text-red-400 font-bold text-lg">✕</button>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 flex-1">
+                <div class="bg-blue-950/80 rounded-2xl p-3 border border-white/10 flex flex-col justify-between">
+                    <div>
+                        <h4 class="font-bungee text-xs text-yellow-300 mb-2">PLAYERS</h4>
+                        <div id="preGamePlayerList" class="space-y-2 text-xs"></div>
+                    </div>
+                    <button onclick="enterGameFromLobby()" class="btn-smash w-full py-3 rounded-xl font-bungee text-sm text-white">🚀 JOIN GAME</button>
+                </div>
+                <div class="md:col-span-2 bg-blue-950/80 rounded-2xl p-3 border border-white/10 flex flex-col">
+                    <h4 class="font-bungee text-xs text-yellow-300 mb-2">💬 PRE-MATCH CHAT</h4>
+                    <div id="preGameChatMessages" class="flex-1 overflow-y-auto space-y-2 text-xs pr-1 mb-3 min-h-[160px]"></div>
+                    <div class="flex gap-2">
+                        <input type="text" id="preGameChatInput" placeholder="Plan teams..." onkeydown="if(event.key==='Enter') sendPreGameChatMessage()" class="smash-input flex-1 px-3 py-2 rounded-xl text-xs">
+                        <button onclick="sendPreGameChatMessage()" class="bg-yellow-400 text-blue-950 font-black px-4 py-2 rounded-xl text-xs uppercase">Send</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="makeCodeModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
+        <div class="w-full max-w-3xl bg-blue-900 border-2 border-white/30 rounded-3xl p-5 shadow-2xl flex flex-col h-[85vh]">
+            <div class="flex justify-between items-center mb-3">
+                <h3 class="font-bungee text-base text-yellow-300">⚡ MAKE ROOM CODE IN SMASH KARTS</h3>
+                <button onclick="closeMakeCodeModal()" class="text-white hover:text-red-400 font-bold text-lg">✕</button>
+            </div>
+            <div class="flex-1 bg-black rounded-2xl overflow-hidden mb-3">
+                <iframe id="makeCodeIframe" src="" class="w-full h-full border-0"></iframe>
+            </div>
+            <div class="flex gap-2">
+                <input type="text" id="copyCodeInput" placeholder="Paste created room link/code..." class="smash-input flex-1 px-3 py-2 rounded-xl text-xs font-bold">
+                <button onclick="copyAndPlay()" class="btn-smash px-5 py-2 rounded-xl font-bungee text-xs text-white">📋 COPY & PLAY NOW</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="findGameModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
+        <div class="w-full max-w-md bg-blue-900 border-2 border-white/30 rounded-3xl p-6 shadow-2xl relative">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="font-bungee text-lg text-yellow-300">🎮 ACTIVE MATCHES</h3>
+                <button onclick="closeFindGameModal()" class="text-white hover:text-red-400 font-bold text-lg">✕</button>
+            </div>
+            <div id="publicRoomsList" class="max-h-80 overflow-y-auto space-y-2.5"></div>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
 </body>
 </html>
