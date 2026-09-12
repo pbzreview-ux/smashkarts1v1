@@ -799,7 +799,6 @@ function enterGameFromLobby() {
         if (match) roomCode = match[1];
     }
 
-    // Made the top code display container larger, bolder, and much easier to read
     if (codeContainer) {
         codeContainer.classList.remove('hidden'); 
         codeContainer.innerHTML = `
@@ -810,7 +809,6 @@ function enterGameFromLobby() {
         `;
     }
 
-    // Removed the Copy Code button from options dropdown, leaving only the Exit Game button cleanly
     const dropdown = document.getElementById('gameHeaderDropdown');
     if (dropdown) {
         dropdown.innerHTML = `
@@ -822,10 +820,23 @@ function enterGameFromLobby() {
         `;
     }
 
+    let popupMsgDiv = document.getElementById('popupMessageOverlay');
+    if (!popupMsgDiv && gameScreen) {
+        popupMsgDiv = document.createElement('div');
+        popupMsgDiv.id = 'popupMessageOverlay';
+        popupMsgDiv.className = 'absolute inset-0 flex items-center justify-center pointer-events-none z-10';
+        gameScreen.appendChild(popupMsgDiv);
+    }
+
     if (currentGameplayMode === 'popup') {
         window.open(activeRoomData.smashUrl, '_blank', 'width=1000,height=700');
         if (smashFrame) smashFrame.classList.add('hidden');
+        if (popupMsgDiv) {
+            popupMsgDiv.innerHTML = `<div class="bg-blue-950/90 border border-yellow-400/50 px-5 py-2.5 rounded-xl shadow-xl text-yellow-300 font-bungee text-xs tracking-wide">JOIN POP UP TAB :)</div>`;
+            popupMsgDiv.classList.remove('hidden');
+        }
     } else {
+        if (popupMsgDiv) popupMsgDiv.classList.add('hidden');
         if (smashFrame) {
             smashFrame.classList.remove('hidden');
             smashFrame.src = activeRoomData.smashUrl || "https://smashkarts.io";
@@ -857,6 +868,9 @@ function leaveEmbeddedGame() {
     if (smashFrame) {
         smashFrame.src = '';
     }
+
+    const popupMsgDiv = document.getElementById('popupMessageOverlay');
+    if (popupMsgDiv) popupMsgDiv.classList.add('hidden');
 
     document.getElementById('gameHeaderDropdown').classList.add('hidden');
     gameScreen.classList.add('game-fade-exit');
