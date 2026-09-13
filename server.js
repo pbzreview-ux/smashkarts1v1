@@ -2,6 +2,8 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const path = require('path');
+const fs = require('fs');
+const crypto = require('crypto');
 
 const app = express();
 const server = http.createServer(app);
@@ -9,15 +11,144 @@ const io = new Server(server, {
     cors: { origin: "*" }
 });
 
-app.use(express.static(path.join(__dirname, '/')));
+// Automatically add the saving features to your existing script.js.
+app.get('/script.js', (req, res) => {
+    const filename = ['script.js', 'script(1).js'].find(name =>
+        fs.existsSync(path.join(__dirname, name))
+    );
 
-const connectedPlayers = {}; 
-const activeRoomsMap = new Map(); 
-const playerStats = {}; 
-const directMessageStore = {}; 
+    if (!filename) {
+        return res.status(404).send('Missing script.js');
+    }
+
+    res.type('application/javascript').send(
+        fs.readFileSync(path.join(__dirname, filename), 'utf8') +
+        '\n;(' + installSavedHistory.toString() + ')();'
+    );
+});
+
+// Do not expose saved messages, JSON files, or server source.
+app.use((req, res, next) => {
+    if (/^\/data(?:\/|$)/i.test(req.path)) {
+        return res.sendStatus(404);
+    }
+
+    if (
+        req.path === '/' ||
+        /\.(html|css|png|jpg|jpeg|gif|svg|webp|ico|woff2?|ttf|mp3|mp4)$/i.test(req.path)
+    ) {
+        return next();
+    }
+
+    res.sendStatus(404);
+});
+
+app.use(express.static(__dirname));
+
+const connectedPlayers = {};
+const activeRoomsMap = new Map();
+
+const dataDirectory = path.resolve(
+    process.env.SMASH_DATA_DIR || path.join(__dirname, 'data')
+);
+
+fs.mkdirSync(dataDirectory, { recursive: true });
+
+const dataFile = path.join(dataDirectory, 'history.json');
+
+const saved = fs.existsSync(dataFile)
+    ? JSON.parse(fs.readFileSync(dataFile, 'utf8'))
+    : {
+        profiles: {},
+        stats: {},
+        directMessages: {},
+        matches: {}
+    };
+
+// Stop rather than silently overwrite invalid saved history.
+if (
+    !saved.profiles ||
+    !saved.stats ||
+    !saved.directMessages ||
+    !saved.matches
+) {
+    throw new Error(
+        'Invalid history.json. Restore your backup before restarting.'
+    );
+}
+
+const profiles = Object.assign(Object.create(null), saved.profiles);
+const playerStats = Object.assign(Object.create(null), saved.stats);
+const directMessageStore = Object.assign(
+    Object.create(null),
+    saved.directMessages
+);
+const matchHistory = Object.assign(Object.create(null), saved.matches);
+
+function saveHistory() {
+    const temporary = dataFile + '.tmp';
+    const fd = fs.openSync(temporary, 'w', 0o600);
+
+    try {
+        fs.writeFileSync(fd, JSON.stringify({
+            profiles,
+            stats: playerStats,
+            directMessages: directMessageStore,
+            matches: matchHistory
+        }));
+
+        fs.fsyncSync(fd);
+    } finally {
+        fs.closeSync(fd);
+    }
+
+    fs.renameSync(temporary, dataFile);
+}
+
+function profileFor(username) {
+    if (!profiles[username]) {
+        profiles[username] = {
+            friends: [],
+            requests: [],
+            isOnline: true
+        };
+    }
+
+    return profiles[username];
+}
+
+function savePlayer(player) {
+    const profile = profileFor(player.username);
+
+    profile.friends = Array.from(player.friends);
+    profile.requests = Array.from(player.friendRequests);
+    profile.isOnline = player.isOnline;
+}
+
+function syncFriends(username) {
+    const profile = profileFor(username);
+
+    for (const player of Object.values(connectedPlayers)) {
+        if (
+            player.username !== username ||
+            !player.isAuthenticated
+        ) {
+            continue;
+        }
+
+        player.friends = new Set(profile.friends);
+        player.friendRequests = new Set(profile.requests);
+
+        io.to(player.id).emit('saved_friends', {
+            friends: profile.friends,
+            requests: profile.requests
+        });
+    }
+}
 
 function escapeHTML(str) {
     if (!str) return '';
+
     return String(str)
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
@@ -28,51 +159,83 @@ function escapeHTML(str) {
 
 function sanitizeUsername(name) {
     if (!name || typeof name !== 'string') return 'Player';
+
     const trimmed = name.trim();
-    if (!trimmed || trimmed.toLowerCase() === 'undefined' || trimmed.toLowerCase() === 'null') {
+
+    if (
+        !trimmed ||
+        trimmed.toLowerCase() === 'undefined' ||
+        trimmed.toLowerCase() === 'null'
+    ) {
         return 'Player';
     }
+
     return escapeHTML(trimmed.slice(0, 20));
 }
 
 function extractSmashUrl(rawInput) {
     if (!rawInput) return null;
+
     let text = String(rawInput).trim();
-    
+
     if (text.includes('ttps://')) {
-        text = text.replace('ttps://', 'https://');
+        text = text.replace(/^ttps:\/\//i, 'https://');
     }
 
-    const linkMatch = text.match(/https?:\/\/(www\.)?smashkarts\.io\/link\/\?[^\s]+/i);
+    const linkMatch = text.match(
+        /https?:\/\/(www\.)?smashkarts\.io\/link\/\?[^\s]+/i
+    );
+
     if (linkMatch) {
         return linkMatch[0];
     }
-    
+
     const roomMatch = text.match(/Room:\s*([A-Za-z0-9]+)/i);
+
     if (roomMatch) {
-        return `https://smashkarts.io/link/?room=${encodeURIComponent(roomMatch[1])}`;
+        return (
+            'https://smashkarts.io/link/?room=' +
+            encodeURIComponent(roomMatch[1])
+        );
     }
 
-    if (text.length > 0 && !text.includes(' ') && !text.includes('\n') && !text.includes('/')) {
-        return `https://smashkarts.io/link/?room=${encodeURIComponent(text)}`;
+    if (
+        text.length > 0 &&
+        !text.includes(' ') &&
+        !text.includes('\n') &&
+        !text.includes('/')
+    ) {
+        return (
+            'https://smashkarts.io/link/?room=' +
+            encodeURIComponent(text)
+        );
     }
-    
+
     return null;
 }
 
 function moderateText(text) {
     if (!text) return '';
-    const BANNED_WORDS = ['badword1', 'badword2', 'hate', 'spam'];
-    let cleanText = escapeHTML(text);
+
+    const BANNED_WORDS = [
+        'badword1',
+        'badword2',
+        'hate',
+        'spam'
+    ];
+
+    let cleanText = String(text);
+
     BANNED_WORDS.forEach(word => {
         const regex = new RegExp(`\\b${word}\\b`, 'gi');
         cleanText = cleanText.replace(regex, '***');
     });
+
     return cleanText;
 }
 
 function getDMKey(u1, u2) {
-    return [u1, u2].sort().join('__DM__');
+    return JSON.stringify([u1, u2].sort());
 }
 
 function findSocketByUsername(username) {
@@ -82,16 +245,34 @@ function findSocketByUsername(username) {
 }
 
 function broadcastPublicRooms() {
-    const roomsList = Array.from(activeRoomsMap.values());
+    // Public lobby listings never include saved chat messages.
+    const roomsList = Array.from(activeRoomsMap.values()).map(
+        ({
+            roomId,
+            hostName,
+            winCondition,
+            mode,
+            maxPlayers,
+            players
+        }) => ({
+            roomId,
+            hostName,
+            winCondition,
+            mode,
+            maxPlayers,
+            players
+        })
+    );
+
     io.emit('public_rooms_update', roomsList);
 }
 
 io.on('connection', (socket) => {
-    connectedPlayers[socket.id] = { 
-        id: socket.id, 
-        username: "Guest", 
+    connectedPlayers[socket.id] = {
+        id: socket.id,
+        username: "Guest",
         email: null,
-        isAuthenticated: false, 
+        isAuthenticated: false,
         isOnline: true,
         friends: new Set(),
         friendRequests: new Set()
@@ -99,20 +280,37 @@ io.on('connection', (socket) => {
 
     socket.on('set_user_session', (userData) => {
         if (!userData || !userData.username) return;
+
         const uname = sanitizeUsername(userData.username);
-        
         const player = connectedPlayers[socket.id];
+
         if (player) {
             player.username = uname;
             player.email = userData.email || null;
             player.isAuthenticated = true;
-            socket.emit('friend_requests_update', Array.from(player.friendRequests));
+
+            const profile = profileFor(uname);
+
+            player.friends = new Set(profile.friends);
+            player.friendRequests = new Set(profile.requests);
+            player.isOnline = profile.isOnline;
+
+            socket.emit('saved_friends', {
+                friends: profile.friends,
+                requests: profile.requests
+            });
+
+            socket.emit(
+                'friend_requests_update',
+                Array.from(player.friendRequests)
+            );
         }
-        
+
         if (!playerStats[uname]) {
             playerStats[uname] = 0;
         }
-        
+
+        saveHistory();
         broadcastOnlineUsers();
         broadcastLeaderboard();
     });
@@ -120,6 +318,9 @@ io.on('connection', (socket) => {
     socket.on('toggle_online_status', (isOnline) => {
         if (connectedPlayers[socket.id]) {
             connectedPlayers[socket.id].isOnline = !!isOnline;
+
+            savePlayer(connectedPlayers[socket.id]);
+            saveHistory();
             broadcastOnlineUsers();
         }
     });
@@ -128,64 +329,137 @@ io.on('connection', (socket) => {
         const sender = connectedPlayers[socket.id];
         const target = connectedPlayers[targetSocketId];
 
-        if (sender && target && sender.isAuthenticated && target.isAuthenticated) {
+        if (
+            sender &&
+            target &&
+            sender.isAuthenticated &&
+            target.isAuthenticated
+        ) {
+            if (
+                sender.username === target.username ||
+                sender.friends.has(target.username)
+            ) {
+                return;
+            }
+
             target.friendRequests.add(sender.username);
+
+            savePlayer(target);
+            saveHistory();
+            syncFriends(target.username);
+
             io.to(targetSocketId).emit('receive_friend_request', {
                 fromSocketId: socket.id,
                 fromUsername: sender.username
             });
-            io.to(targetSocketId).emit('friend_requests_update', Array.from(target.friendRequests));
+
+            io.to(targetSocketId).emit(
+                'friend_requests_update',
+                Array.from(target.friendRequests)
+            );
         }
     });
 
     socket.on('decline_friend_request', ({ challengerUsername }) => {
         const user = connectedPlayers[socket.id];
+
         if (!user || !user.isAuthenticated) return;
 
         user.friendRequests.delete(challengerUsername);
-        socket.emit('friend_requests_update', Array.from(user.friendRequests));
+
+        savePlayer(user);
+        saveHistory();
+        syncFriends(user.username);
+
+        socket.emit(
+            'friend_requests_update',
+            Array.from(user.friendRequests)
+        );
     });
 
     socket.on('accept_friend_request', ({ challengerUsername }) => {
         const user = connectedPlayers[socket.id];
+
         if (!user || !user.isAuthenticated) return;
+        if (!user.friendRequests.has(challengerUsername)) return;
 
         user.friends.add(challengerUsername);
         user.friendRequests.delete(challengerUsername);
 
-        const challenger = findSocketByUsername(challengerUsername);
-        if (challenger) {
-            challenger.friends.add(user.username);
-            io.to(challenger.id).emit('friend_request_accepted', { username: user.username });
+        const otherProfile = profileFor(challengerUsername);
+
+        if (!otherProfile.friends.includes(user.username)) {
+            otherProfile.friends.push(user.username);
         }
 
-        socket.emit('friend_requests_update', Array.from(user.friendRequests));
-        socket.emit('friend_request_accepted', { username: challengerUsername });
+        otherProfile.requests = otherProfile.requests.filter(
+            name => name !== user.username
+        );
+
+        savePlayer(user);
+        saveHistory();
+
+        syncFriends(user.username);
+        syncFriends(challengerUsername);
+
+        const challenger = findSocketByUsername(challengerUsername);
+
+        if (challenger) {
+            challenger.friends.add(user.username);
+
+            io.to(challenger.id).emit('friend_request_accepted', {
+                username: user.username
+            });
+        }
+
+        socket.emit(
+            'friend_requests_update',
+            Array.from(user.friendRequests)
+        );
+
+        socket.emit('friend_request_accepted', {
+            username: challengerUsername
+        });
+
         broadcastOnlineUsers();
     });
 
     socket.on('send_direct_message', ({ targetUsername, message }) => {
         const sender = connectedPlayers[socket.id];
-        if (!sender || !sender.isAuthenticated || !message || !message.trim()) return;
+
+        if (
+            !sender ||
+            !sender.isAuthenticated ||
+            !message ||
+            !message.trim()
+        ) {
+            return;
+        }
 
         const cleanTarget = sanitizeUsername(targetUsername);
         const targetPlayer = findSocketByUsername(cleanTarget);
 
         if (!sender.friends.has(cleanTarget)) {
-            return socket.emit('dm_error', { message: 'You can only message users on your friends list.' });
+            return socket.emit('dm_error', {
+                message: 'You can only message users on your friends list.'
+            });
         }
 
         const cleanMsg = moderateText(message.trim());
         const dmKey = getDMKey(sender.username, cleanTarget);
 
-        if (!directMessageStore[dmKey]) directMessageStore[dmKey] = [];
-        
-        const msgObj = { senderUsername: sender.username, message: cleanMsg, timestamp: Date.now() };
-        directMessageStore[dmKey].push(msgObj);
-        
-        if (directMessageStore[dmKey].length > 10) {
-            directMessageStore[dmKey] = directMessageStore[dmKey].slice(-10);
+        if (!directMessageStore[dmKey]) {
+            directMessageStore[dmKey] = [];
         }
+
+        const msgObj = {
+            senderUsername: sender.username,
+            message: cleanMsg,
+            timestamp: Date.now()
+        };
+
+        directMessageStore[dmKey].push(msgObj);
+        saveHistory();
 
         if (targetPlayer) {
             io.to(targetPlayer.id).emit('receive_direct_message', {
@@ -204,37 +478,63 @@ io.on('connection', (socket) => {
 
     socket.on('get_dm_history', ({ targetUsername }) => {
         const sender = connectedPlayers[socket.id];
-        if (!sender) return;
+
+        if (!sender || !sender.isAuthenticated) return;
+
         const cleanTarget = sanitizeUsername(targetUsername);
+
+        if (!sender.friends.has(cleanTarget)) return;
+
         const dmKey = getDMKey(sender.username, cleanTarget);
+
         socket.emit('load_dm_history', {
             targetUsername: cleanTarget,
             history: directMessageStore[dmKey] || []
         });
     });
 
-    socket.on('record_match_played', (rawUsername) => {
-        const uname = sanitizeUsername(rawUsername);
+    socket.on('record_match_played', () => {
+        const player = connectedPlayers[socket.id];
+
+        if (!player || !player.isAuthenticated) return;
+
+        const uname = player.username;
+
         if (uname && uname !== 'Player' && uname !== 'Guest') {
             playerStats[uname] = (playerStats[uname] || 0) + 1;
+
+            saveHistory();
             broadcastLeaderboard();
         }
     });
 
-    socket.on('send_match_challenge', ({ targetSocketId, targetUsername, fromUsername, mode, smashUrl }) => {
+    socket.on('send_match_challenge', ({
+        targetSocketId,
+        targetUsername,
+        fromUsername,
+        mode,
+        smashUrl
+    }) => {
         const sender = connectedPlayers[socket.id];
-        const target = targetSocketId ? connectedPlayers[targetSocketId] : findSocketByUsername(targetUsername);
+
+        const target = targetSocketId
+            ? connectedPlayers[targetSocketId]
+            : findSocketByUsername(targetUsername);
 
         if (!sender || !target) return;
         if (!sender.friends.has(target.username)) return;
 
         const cleanUrl = extractSmashUrl(smashUrl);
+
         if (!cleanUrl) {
-            socket.emit('room_error', { message: 'A valid Smash Karts room link or code is required!' });
+            socket.emit('room_error', {
+                message: 'A valid Smash Karts room link or code is required!'
+            });
             return;
         }
 
         const senderName = sanitizeUsername(fromUsername);
+
         io.to(target.id).emit('receive_match_challenge', {
             challengerSocketId: socket.id,
             fromUsername: senderName,
@@ -243,18 +543,29 @@ io.on('connection', (socket) => {
         });
     });
 
-    socket.on('accept_match_challenge', ({ challengerSocketId, targetUsername, smashUrl }) => {
+    socket.on('accept_match_challenge', ({
+        challengerSocketId,
+        targetUsername,
+        smashUrl
+    }) => {
         const cleanUrl = extractSmashUrl(smashUrl);
+
         if (!cleanUrl) {
-            socket.emit('room_error', { message: 'A valid Smash Karts room link or code is required!' });
+            socket.emit('room_error', {
+                message: 'A valid Smash Karts room link or code is required!'
+            });
             return;
         }
 
         const acceptName = sanitizeUsername(targetUsername);
         const challenger = connectedPlayers[challengerSocketId];
-        const challengerName = challenger ? challenger.username : 'Challenger';
-        const roomId = Math.random().toString(36).substring(2, 8).toUpperCase();
-        
+
+        const challengerName = challenger
+            ? challenger.username
+            : 'Challenger';
+
+        const roomId = crypto.randomUUID();
+
         const room = {
             roomId,
             hostName: challengerName,
@@ -272,38 +583,73 @@ io.on('connection', (socket) => {
 
         activeRoomsMap.set(roomId, room);
 
+        matchHistory[roomId] = {
+            ...room,
+            createdAt: Date.now(),
+            participants: [
+                ...new Set(room.players.map(p => p.name))
+            ]
+        };
+
+        saveHistory();
+
         socket.join(roomId);
-        const challengerSocket = io.sockets.sockets.get(challengerSocketId);
-        if (challengerSocket) challengerSocket.join(roomId);
+
+        const challengerSocket = io.sockets.sockets.get(
+            challengerSocketId
+        );
+
+        if (challengerSocket) {
+            challengerSocket.join(roomId);
+        }
 
         io.to(roomId).emit('challenge_game_start', room);
         broadcastPublicRooms();
     });
 
     socket.on('create_room', (data) => {
+        const player = connectedPlayers[socket.id];
+
+        if (!player || !player.isAuthenticated) return;
+
         const cleanUrl = extractSmashUrl(data.smashUrl);
+
         if (!cleanUrl) {
-            socket.emit('room_error', { message: 'Error: You must provide a valid Smash Karts room link or code to join/create!' });
+            socket.emit('room_error', {
+                message: 'Error: You must provide a valid Smash Karts room link or code to join/create!'
+            });
             return;
         }
 
-        const roomId = Math.random().toString(36).substring(2, 8).toUpperCase();
+        const roomId = crypto.randomUUID();
         const mode = data.mode === '2v2' ? '2v2' : '1v1';
-        const hostName = sanitizeUsername(data.playerName);
-        
+        const hostName = player.username;
+
         const newRoom = {
             roomId,
             hostName,
             smashUrl: cleanUrl,
-            winCondition: escapeHTML(data.winCondition || 'First to 3'),
+            winCondition: escapeHTML(
+                data.winCondition || 'First to 3'
+            ),
             mode,
             maxPlayers: mode === '2v2' ? 4 : 2,
-            players: [{ id: socket.id, name: hostName }],
+            players: [
+                { id: socket.id, name: hostName }
+            ],
             exitedPlayers: [],
             messages: []
         };
 
         activeRoomsMap.set(roomId, newRoom);
+
+        matchHistory[roomId] = {
+            ...newRoom,
+            createdAt: Date.now(),
+            participants: [hostName]
+        };
+
+        saveHistory();
 
         socket.join(roomId);
         socket.emit('room_created', newRoom);
@@ -315,7 +661,10 @@ io.on('connection', (socket) => {
     });
 
     socket.on('leave_match', ({ roomId }) => {
+        socket.leave(roomId);
+
         const room = activeRoomsMap.get(roomId);
+
         if (!room) return;
 
         if (!room.exitedPlayers.includes(socket.id)) {
@@ -328,31 +677,146 @@ io.on('connection', (socket) => {
         }
     });
 
-    socket.on('send_match_chat', ({ roomId, message, senderName }) => {
+    socket.on('send_match_chat', ({ roomId, message }) => {
         const room = activeRoomsMap.get(roomId);
-        if (message && message.trim()) {
-            const cleanMsg = moderateText(message.trim());
-            const cleanSender = sanitizeUsername(senderName);
-            const msgObj = { senderName: cleanSender, message: cleanMsg };
-            
-            if (room) {
-                room.messages.push(msgObj);
-                if (room.messages.length > 10) room.messages = room.messages.slice(-10);
-            }
-            io.to(roomId).emit('receive_match_chat', msgObj);
+        const player = connectedPlayers[socket.id];
+
+        if (
+            !room ||
+            !player ||
+            !player.isAuthenticated ||
+            !socket.rooms.has(roomId)
+        ) {
+            return;
         }
+
+        if (typeof message !== 'string' || !message.trim()) {
+            return;
+        }
+
+        const msgObj = {
+            senderName: player.username,
+            message: moderateText(message.trim()),
+            timestamp: Date.now()
+        };
+
+        room.messages.push(msgObj);
+        matchHistory[roomId].messages = room.messages;
+
+        saveHistory();
+
+        io.to(roomId).emit('receive_match_chat', msgObj);
+    });
+
+    socket.on('restore_legacy_friends', ({ friends }) => {
+        const player = connectedPlayers[socket.id];
+
+        if (
+            !player ||
+            !player.isAuthenticated ||
+            !Array.isArray(friends)
+        ) {
+            return;
+        }
+
+        for (const name of friends) {
+            if (typeof name !== 'string') continue;
+
+            const targetName = sanitizeUsername(name);
+
+            if (
+                targetName === player.username ||
+                player.friends.has(targetName)
+            ) {
+                continue;
+            }
+
+            const target = profileFor(targetName);
+
+            if (!target.requests.includes(player.username)) {
+                target.requests.push(player.username);
+            }
+
+            syncFriends(targetName);
+        }
+
+        saveHistory();
+    });
+
+    socket.on('get_saved_match_history', () => {
+        const player = connectedPlayers[socket.id];
+
+        if (!player || !player.isAuthenticated) return;
+
+        socket.emit(
+            'saved_match_history',
+            Object.values(matchHistory)
+                .filter(room =>
+                    room.participants.includes(player.username)
+                )
+                .sort((a, b) => b.createdAt - a.createdAt)
+        );
+    });
+
+    socket.on('join_public_room', ({ roomId }) => {
+        const player = connectedPlayers[socket.id];
+        const room = activeRoomsMap.get(roomId);
+
+        if (!player || !player.isAuthenticated || !room) {
+            return socket.emit('room_error', {
+                message: 'That lobby is no longer available.'
+            });
+        }
+
+        if (!room.players.some(p => p.id === socket.id)) {
+            if (room.players.length >= room.maxPlayers) {
+                return socket.emit('room_error', {
+                    message: 'That lobby is full.'
+                });
+            }
+
+            room.players.push({
+                id: socket.id,
+                name: player.username
+            });
+        }
+
+        if (
+            !matchHistory[roomId].participants.includes(
+                player.username
+            )
+        ) {
+            matchHistory[roomId].participants.push(
+                player.username
+            );
+        }
+
+        saveHistory();
+
+        socket.join(roomId);
+        socket.emit('room_created', room);
+        io.to(roomId).emit('saved_room_update', room);
+
+        broadcastPublicRooms();
     });
 
     socket.on('disconnect', () => {
         delete connectedPlayers[socket.id];
-        
+
         for (const [roomId, room] of activeRoomsMap.entries()) {
-            const isParticipant = room.players.some(p => p.id === socket.id);
+            const isParticipant = room.players.some(
+                p => p.id === socket.id
+            );
+
             if (isParticipant) {
                 if (!room.exitedPlayers.includes(socket.id)) {
                     room.exitedPlayers.push(socket.id);
                 }
-                if (room.exitedPlayers.length >= room.players.length) {
+
+                if (
+                    room.exitedPlayers.length >=
+                    room.players.length
+                ) {
                     activeRoomsMap.delete(roomId);
                 }
             }
@@ -372,13 +836,22 @@ function broadcastOnlineUsers() {
             friends: Array.from(p.friends)
         }));
 
-    io.emit('online_users_update', { count: playerList.length, users: playerList });
+    io.emit('online_users_update', {
+        count: playerList.length,
+        users: playerList
+    });
 }
 
 function broadcastLeaderboard() {
     const topPlayers = Object.entries(playerStats)
-        .map(([username, matches]) => ({ username, matches }))
-        .filter(p => p.username !== 'Player' && p.username !== 'Guest')
+        .map(([username, matches]) => ({
+            username,
+            matches
+        }))
+        .filter(p =>
+            p.username !== 'Player' &&
+            p.username !== 'Guest'
+        )
         .sort((a, b) => b.matches - a.matches)
         .slice(0, 5);
 
@@ -386,4 +859,446 @@ function broadcastLeaderboard() {
 }
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`Smashkarts1v1s Arena running on port ${PORT}`));
+
+server.listen(PORT, () => {
+    console.log(
+        `Smashkarts1v1s Arena running on port ${PORT}`
+    );
+});
+
+// This function runs in the browser after your existing script.js.
+function installSavedHistory() {
+    const defaults = {
+        gameplay: 'popup',
+        online: true,
+        mode: '1v1',
+        win: 'First to 3',
+        lastFriend: null
+    };
+
+    let preferences = { ...defaults };
+    let settingsWarningShown = false;
+
+    function storageKey() {
+        const user = AuthSession.getUser();
+
+        return 'smash_preferences_v1:' + (
+            user
+                ? String(
+                    user.email || user.username
+                ).toLowerCase()
+                : 'guest'
+        );
+    }
+
+    function readPreferences() {
+        try {
+            return {
+                ...defaults,
+                ...JSON.parse(
+                    localStorage.getItem(storageKey()) || '{}'
+                )
+            };
+        } catch {
+            return { ...defaults };
+        }
+    }
+
+    function savePreferences() {
+        try {
+            localStorage.setItem(
+                storageKey(),
+                JSON.stringify(preferences)
+            );
+        } catch {
+            if (!settingsWarningShown) {
+                showToast(
+                    'Browser storage is full or disabled; settings could not be saved.',
+                    '⚠️'
+                );
+            }
+
+            settingsWarningShown = true;
+        }
+    }
+
+    function restorePreferences() {
+        preferences = readPreferences();
+
+        currentGameplayMode =
+            preferences.gameplay === 'embed'
+                ? 'embed'
+                : 'popup';
+
+        document.getElementById(
+            'gameplayModeSelect'
+        ).value = currentGameplayMode;
+
+        document.getElementById(
+            'onlineStatusToggle'
+        ).checked = preferences.online !== false;
+
+        originalSwitchMode(
+            preferences.mode === '2v2' ? '2v2' : '1v1'
+        );
+
+        document.getElementById('winCondition').value =
+            ['First to 3', 'First to 6', 'First to 10']
+                .includes(preferences.win)
+                ? preferences.win
+                : 'First to 3';
+
+        activeDMTargetUser = preferences.lastFriend;
+
+        if (activeDMTargetUser) {
+            document.getElementById(
+                'activeDMChatHeader'
+            ).textContent =
+                '💬 MESSAGE WITH ' +
+                activeDMTargetUser.toUpperCase();
+        }
+    }
+
+    const originalSwitchMode = switchMatchMode;
+
+    switchMatchMode = function (mode) {
+        originalSwitchMode(mode);
+
+        preferences.mode = mode;
+        savePreferences();
+    };
+
+    updateGameplayMode = function (mode) {
+        currentGameplayMode =
+            mode === 'embed' ? 'embed' : 'popup';
+
+        preferences.gameplay = currentGameplayMode;
+        savePreferences();
+    };
+
+    const originalOnlineStatus = toggleOnlineStatus;
+
+    toggleOnlineStatus = function (online) {
+        preferences.online = !!online;
+        savePreferences();
+        originalOnlineStatus(online);
+    };
+
+    document.getElementById('winCondition')
+        .addEventListener('change', event => {
+            preferences.win = event.target.value;
+            savePreferences();
+        });
+
+    const originalUpdateUserUI = updateUserUI;
+
+    updateUserUI = function () {
+        restorePreferences();
+        originalUpdateUserUI();
+
+        if (AuthSession.getUser()) {
+            socket.emit(
+                'toggle_online_status',
+                preferences.online !== false
+            );
+
+            if (activeDMTargetUser) {
+                socket.emit('get_dm_history', {
+                    targetUsername: activeDMTargetUser
+                });
+            }
+        }
+    };
+
+    socket.on('connect', () => {
+        if (AuthSession.getUser()) {
+            updateUserUI();
+        }
+    });
+
+    const originalOpenDM = openTabDMWith;
+
+    openTabDMWith = function (username) {
+        preferences.lastFriend = username;
+
+        savePreferences();
+        closeOnlineModal();
+
+        document.getElementById(
+            'tabDMMessages'
+        ).replaceChildren();
+
+        originalOpenDM(username);
+    };
+
+    // Display the complete saved conversation.
+    renderDMMessages = function (history) {
+        const container = document.getElementById(
+            'tabDMMessages'
+        );
+
+        const user = AuthSession.getUser();
+
+        container.replaceChildren();
+
+        for (const message of history || []) {
+            const own =
+                user &&
+                message.senderUsername === user.username;
+
+            const row = document.createElement('div');
+            row.className = own ? 'text-right' : 'text-left';
+
+            const bubble = document.createElement('span');
+
+            bubble.className = (
+                own
+                    ? 'bg-yellow-400 text-blue-950'
+                    : 'bg-blue-800 text-white'
+            ) + ' font-bold px-2.5 py-1 rounded-xl inline-block text-[11px] mb-1';
+
+            bubble.style.overflowWrap = 'anywhere';
+
+            bubble.textContent =
+                (own ? 'Me' : message.senderUsername) +
+                ': ' +
+                message.message;
+
+            if (message.timestamp) {
+                bubble.title = new Date(
+                    message.timestamp
+                ).toLocaleString();
+            }
+
+            row.appendChild(bubble);
+            container.appendChild(row);
+        }
+
+        container.scrollTop = container.scrollHeight;
+    };
+
+    socket.off('dm_sent_success');
+    socket.off('load_dm_history');
+
+    for (const event of [
+        'dm_sent_success',
+        'load_dm_history'
+    ]) {
+        socket.on(event, data => {
+            if (data.targetUsername === activeDMTargetUser) {
+                renderDMMessages(data.history);
+            }
+        });
+    }
+
+    socket.on('saved_friends', data => {
+        const user = AuthSession.getUser();
+
+        if (!user) return;
+
+        const previous = getLocalFriends(user.username);
+
+        saveLocalFriends(user.username, data.friends);
+        pendingFriendRequests = data.requests;
+
+        const cachedSelf = onlineUsersCache.find(
+            p => p.username === user.username
+        );
+
+        if (cachedSelf) {
+            cachedSelf.friends = data.friends;
+        }
+
+        updateFriendsTabList();
+
+        const missing = previous.filter(
+            name => !data.friends.includes(name)
+        );
+
+        if (missing.length) {
+            socket.emit('restore_legacy_friends', {
+                friends: missing
+            });
+        }
+    });
+
+    // Wait for server confirmation before adding a friendship.
+    acceptFriendRequestByName = function (username) {
+        socket.emit('accept_friend_request', {
+            challengerUsername: username
+        });
+    };
+
+    joinPublicRoomById = function (roomId) {
+        socket.emit('join_public_room', { roomId });
+    };
+
+    socket.on('saved_room_update', room => {
+        if (
+            activeRoomData &&
+            activeRoomData.roomId === room.roomId
+        ) {
+            activeRoomData = room;
+            updatePreGameLobbyUI(room);
+        }
+    });
+
+    function renderRoomMessages(messages) {
+        for (const id of [
+            'matchChatMessages',
+            'preGameChatMessages'
+        ]) {
+            const container = document.getElementById(id);
+
+            container.replaceChildren();
+
+            for (const message of messages || []) {
+                const row = document.createElement('div');
+
+                row.className =
+                    'bg-blue-950/80 p-1.5 rounded-xl border border-white/10';
+
+                row.style.overflowWrap = 'anywhere';
+
+                row.textContent =
+                    message.senderName + ': ' + message.message;
+
+                container.appendChild(row);
+            }
+
+            container.scrollTop = container.scrollHeight;
+        }
+    }
+
+    const originalOpenLobby = openPreGameLobby;
+
+    openPreGameLobby = function (room) {
+        originalOpenLobby(room);
+        renderRoomMessages(room.messages || []);
+    };
+
+    socket.off('receive_match_chat');
+
+    socket.on('receive_match_chat', message => {
+        if (!activeRoomData) return;
+
+        if (!activeRoomData.messages) {
+            activeRoomData.messages = [];
+        }
+
+        activeRoomData.messages.push(message);
+        renderRoomMessages(activeRoomData.messages);
+    });
+
+    // Saved match history dialog.
+    const historyDialog = document.createElement('dialog');
+
+    historyDialog.style.cssText =
+        'width:min(720px,94vw);max-height:85vh;' +
+        'background:#173477;color:white;' +
+        'border:2px solid #ffd318;border-radius:20px;' +
+        'padding:20px;overflow:auto';
+
+    const close = document.createElement('button');
+    close.textContent = '✕ Close history';
+
+    close.style.cssText =
+        'float:right;padding:8px;color:#ffe238;font-weight:bold';
+
+    close.onclick = () => historyDialog.close();
+
+    const title = document.createElement('h2');
+    title.textContent = 'Saved match history';
+
+    title.style.cssText =
+        'font-size:20px;font-weight:bold;margin-bottom:20px';
+
+    const list = document.createElement('div');
+
+    historyDialog.append(close, title, list);
+    document.body.appendChild(historyDialog);
+
+    function openHistory() {
+        list.textContent = 'Loading saved matches…';
+
+        if (!historyDialog.open) {
+            historyDialog.showModal();
+        }
+
+        socket.emit('get_saved_match_history');
+    }
+
+    const historyButton = document.createElement('button');
+    historyButton.textContent = '📜 Saved history';
+
+    historyButton.className =
+        'bg-blue-800 text-yellow-300 font-bold px-4 py-2 rounded-xl text-xs';
+
+    historyButton.onclick = openHistory;
+
+    document.querySelector(
+        '#mainDashboard header'
+    ).appendChild(historyButton);
+
+    document.addEventListener('DOMContentLoaded', () => {
+        const options = document.getElementById('arenaOptions');
+
+        if (options) {
+            const button = historyButton.cloneNode(true);
+            button.onclick = openHistory;
+            options.appendChild(button);
+        }
+    });
+
+    socket.on('saved_match_history', rooms => {
+        list.replaceChildren();
+
+        if (!rooms.length) {
+            list.textContent =
+                'No saved matches yet. New matches will appear here.';
+        }
+
+        for (const room of rooms) {
+            const details = document.createElement('details');
+
+            details.style.cssText =
+                'padding:12px;margin-bottom:10px;' +
+                'background:#102653;border-radius:12px';
+
+            const summary = document.createElement('summary');
+            summary.style.cursor = 'pointer';
+
+            summary.textContent =
+                new Date(room.createdAt).toLocaleString() +
+                ' · ' + room.mode +
+                ' · ' + room.participants.join(', ');
+
+            details.appendChild(summary);
+
+            for (const message of room.messages || []) {
+                const row = document.createElement('p');
+
+                row.style.cssText =
+                    'margin-top:8px;overflow-wrap:anywhere';
+
+                row.textContent =
+                    message.senderName + ': ' + message.message;
+
+                details.appendChild(row);
+            }
+
+            if (!room.messages.length) {
+                const empty = document.createElement('p');
+
+                empty.textContent =
+                    'No chat messages in this match.';
+
+                details.appendChild(empty);
+            }
+
+            list.appendChild(details);
+        }
+    });
+
+    restorePreferences();
+}
