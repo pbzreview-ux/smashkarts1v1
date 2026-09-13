@@ -7,10 +7,210 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="/socket.io/socket.io.js"></script>
     <link rel="stylesheet" href="style.css">
+
+    <style>
+        #gameScreen {
+            --menu-height: 76px;
+        }
+
+        #gameScreen #gameTopBar {
+            position: absolute;
+            inset: 0 0 auto;
+            z-index: 150;
+            transform: none !important;
+            transition: none;
+        }
+
+        #gameScreen [hidden] {
+            display: none !important;
+        }
+
+        #arenaToolbar {
+            box-sizing: border-box;
+            min-height: 76px;
+            padding: 12px 22px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 12px;
+            background: #203d88;
+            border-bottom: 1px solid #ffffff30;
+            color: #ffe238;
+        }
+
+        .arena-brand,
+        .arena-actions {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+
+        .arena-brand {
+            font-family: "Bungee", sans-serif;
+            font-size: 24px;
+        }
+
+        #gameModeBadge {
+            padding: 4px 14px;
+            border-radius: 24px;
+            background: #ffd318;
+            color: #142f75;
+            font: 900 16px "Inter", sans-serif;
+            text-transform: uppercase;
+        }
+
+        .arena-button {
+            padding: 11px 16px;
+            border: 1px solid #ffda25;
+            border-radius: 20px;
+            background: #ffffff15;
+            color: #ffe238;
+            font: 900 14px "Inter", sans-serif;
+            cursor: pointer;
+        }
+
+        #arenaChatButton {
+            background: #ffd318;
+            color: #142f75;
+        }
+
+        #arenaOptionsButton {
+            background: #234caa;
+            border-color: #7f99d7;
+        }
+
+        #arenaMenuToggle {
+            position: absolute;
+            top: 100%;
+            right: 18px;
+            padding: 7px 14px;
+            border: 1px solid #ffd318;
+            border-top: 0;
+            border-radius: 0 0 12px 12px;
+            background: #203d88;
+            color: #ffe238;
+            font: 900 12px "Inter", sans-serif;
+            cursor: pointer;
+            box-shadow: 0 5px 12px #0004;
+        }
+
+        #arenaOptions {
+            position: absolute;
+            top: calc(100% + 38px);
+            right: 16px;
+            width: min(280px, calc(100vw - 32px));
+            max-height: calc(100dvh - var(--menu-height) - 55px);
+            overflow-y: auto;
+            padding: 8px;
+            border: 1px solid #ffd318;
+            border-radius: 16px;
+            background: #173477;
+            box-shadow: 0 12px 30px #0008;
+        }
+
+        #arenaOptions button {
+            display: block;
+            width: 100%;
+            padding: 12px;
+            border: 0;
+            border-radius: 10px;
+            background: transparent;
+            color: white;
+            text-align: left;
+            font-weight: 800;
+            cursor: pointer;
+        }
+
+        #arenaOptions button:hover {
+            background: #ffffff20;
+        }
+
+        #arenaOptions .arena-exit {
+            color: #ffb7b7;
+        }
+
+        #gameScreen #smashFrame {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            border: 0;
+            z-index: 0;
+        }
+
+        #gameScreen.arena-menu-open #smashFrame {
+            top: var(--menu-height);
+            height: calc(100% - var(--menu-height));
+        }
+
+        #gameScreen #chatOverlay {
+            position: absolute;
+            top: 48px;
+            bottom: auto;
+            right: 16px;
+            width: min(320px, calc(100vw - 32px));
+            max-height: calc(100dvh - 64px);
+            box-sizing: border-box;
+            overflow: hidden;
+            z-index: 140;
+            background: #173477f5;
+        }
+
+        #gameScreen.arena-menu-open #chatOverlay {
+            top: calc(var(--menu-height) + 48px);
+            max-height: calc(100dvh - var(--menu-height) - 64px);
+        }
+
+        #gameScreen #chatOverlay.hidden-overlay {
+            display: none !important;
+        }
+
+        #matchChatMessages {
+            min-height: 35px;
+            flex-shrink: 1;
+            overflow-y: auto;
+        }
+
+        #matchChatInput {
+            min-width: 0;
+        }
+
+        #gameTopBar button:focus-visible {
+            outline: 3px solid white;
+            outline-offset: 3px;
+        }
+
+        body:has(#gameScreen:not(.hidden)) {
+            overflow: hidden;
+        }
+
+        @media (max-width: 700px) {
+            #arenaToolbar {
+                padding: 10px 12px;
+            }
+
+            .arena-brand {
+                font-size: 18px;
+            }
+
+            .arena-actions {
+                gap: 6px;
+            }
+
+            .arena-button {
+                padding: 9px 10px;
+                font-size: 12px;
+            }
+        }
+    </style>
 </head>
+
 <body class="min-h-screen flex flex-col justify-between overflow-x-hidden">
 
     <div id="toastContainer"></div>
+
     <button id="settingsFloatingBtn" onclick="openSettingsModal()" title="Settings">⚙️</button>
 
     <div id="settingsModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
@@ -19,7 +219,7 @@
                 <h3 class="font-bungee text-lg text-yellow-300">⚙️ SETTINGS</h3>
                 <button onclick="closeSettingsModal()" class="text-white hover:text-red-400 font-bold text-lg">✕</button>
             </div>
-            
+
             <div class="space-y-4">
                 <div class="flex justify-between items-center bg-blue-950/80 p-3.5 rounded-2xl border border-white/10">
                     <div>
@@ -113,43 +313,73 @@
     </div>
 
     <div id="gameScreen" class="hidden fixed inset-0 z-40 bg-black overflow-hidden">
-        <iframe id="smashFrame" src="" class="w-full h-full border-0 absolute inset-0 z-0" allow="autoplay; keyboard; fullscreen"></iframe>
+        <iframe
+            id="smashFrame"
+            src=""
+            title="Smash Karts game"
+            class="w-full h-full border-0 absolute inset-0 z-0"
+            allow="autoplay; fullscreen 'none'">
+        </iframe>
 
-        <div id="gameTopBar" class="absolute top-0 left-0 right-0 z-30 transform -translate-y-full hover:translate-y-0 focus-within:translate-y-0 transition-transform duration-300 ease-in-out group">
-            <div class="bg-blue-900/95 backdrop-blur-md border-b-2 border-yellow-400/80 px-6 py-2.5 flex justify-between items-center shadow-2xl">
-                <div class="flex items-center gap-3">
-                    <span class="font-bungee text-yellow-300 text-lg sm:text-xl drop-shadow">🎮 SMASH KARTS</span>
-                    <span id="gameModeBadge" class="bg-yellow-400 text-blue-950 font-black text-xs px-3 py-1 rounded-full uppercase shadow">1v1</span>
+        <div id="gameTopBar">
+            <div id="arenaToolbar" hidden>
+                <div class="arena-brand">
+                    <span>🎮 SMASH KARTS</span>
+                    <span id="gameModeBadge">1v1</span>
                 </div>
 
-                <div class="flex items-center gap-3">
-                    <div id="gameRoomCodeContainer" class="flex items-center gap-2 bg-blue-950/80 border border-yellow-400/60 text-yellow-300 font-mono font-bold text-xs px-3 py-1.5 rounded-xl shadow">
-                        <span>ROOM CODE:</span>
-                        <span id="gameRoomCodeDisplay" class="text-white font-extrabold">------</span>
-                        <button id="copyRoomCodeBtn" onclick="copyActiveRoomCode()" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 text-[10px] font-black px-2 py-0.5 rounded transition-all">COPY</button>
+                <div class="arena-actions">
+                    <div id="gameRoomCodeContainer">
+                        <button
+                            id="copyRoomCodeBtn"
+                            class="arena-button"
+                            onclick="copyActiveRoomCode()"
+                            title="Copy room code">
+                            Code: (<span id="gameRoomCodeDisplay">------</span>)
+                        </button>
                     </div>
 
-                    <button onclick="toggleOverlayChat()" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 font-black px-3.5 py-1.5 rounded-xl text-xs uppercase shadow-md transition-all flex items-center gap-1.5">
-                        <span>💬</span> <span id="toggleChatBtnLabel">Show Chat</span>
+                    <button
+                        id="arenaChatButton"
+                        class="arena-button"
+                        onclick="toggleOverlayChat()"
+                        aria-controls="chatOverlay"
+                        aria-expanded="false">
+                        💬 <span id="toggleChatBtnLabel">Show Chat</span>
                     </button>
 
-                    <button onclick="leaveEmbeddedGame()" class="bg-red-600 hover:bg-red-500 text-white font-black px-3.5 py-1.5 rounded-xl text-xs uppercase shadow-md transition-all flex items-center gap-1">
-                        <span>✕</span> <span>Exit Game</span>
+                    <button
+                        id="arenaOptionsButton"
+                        class="arena-button"
+                        aria-controls="arenaOptions"
+                        aria-expanded="false">
+                        ⚙️ OPTIONS ▾
                     </button>
                 </div>
             </div>
 
-            <div class="flex justify-center">
-                <button onclick="toggleGameTopBar()" class="bg-blue-900/95 border-b-2 border-x-2 border-yellow-400/80 text-yellow-300 text-[10px] font-bungee px-4 py-1 rounded-b-xl shadow-lg hover:bg-blue-800 transition-all cursor-pointer flex items-center gap-1">
-                    <span id="topBarTabIcon">▼</span> OPTIONS & MENU
-                </button>
+            <button
+                id="arenaMenuToggle"
+                aria-controls="arenaToolbar"
+                aria-expanded="false">
+                <span id="topBarTabIcon">▼</span>
+                <span id="arenaMenuLabel">OPTIONS & CHAT</span>
+            </button>
+
+            <div id="arenaOptions" hidden>
+                <button data-action="chat">💬 Show / hide chat</button>
+                <button data-action="copy">📋 Copy room code</button>
+                <button data-action="settings">⚙️ Settings</button>
+                <button data-action="online">🟢 Online players</button>
+                <button data-action="fullscreen" id="arenaFullscreen">⛶ Full screen</button>
+                <button data-action="exit" class="arena-exit">✕ Exit game</button>
             </div>
         </div>
 
         <div id="chatOverlay" class="hidden-overlay absolute top-16 right-4 z-30 bg-blue-900/90 border-2 border-yellow-400 rounded-2xl p-3 shadow-2xl flex flex-col w-72 backdrop-blur-md">
             <div class="flex justify-between items-center mb-2 border-b border-white/10 pb-1">
                 <span class="font-bungee text-xs text-yellow-300">💬 IN-GAME CHAT</span>
-                <button onclick="toggleOverlayChat()" class="text-white hover:text-red-400 font-bold text-xs">✕</button>
+                <button onclick="toggleOverlayChat()" aria-label="Close chat" class="text-white hover:text-red-400 font-bold text-xs">✕</button>
             </div>
             <div id="matchChatMessages" class="h-36 overflow-y-auto space-y-1.5 text-xs mb-2 pr-1"></div>
             <div class="flex gap-1.5">
@@ -187,7 +417,7 @@
                 <button id="btnNavLeaderboard" onclick="showTab('leaderboardTab')" title="Leaderboard" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg">🏆</button>
                 <button id="btnNav1v1" onclick="switchMatchMode('1v1')" title="1v1 Matchmaking" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg active">🎮</button>
                 <button id="btnNav2v2" onclick="switchMatchMode('2v2')" title="2v2 Matchmaking" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg">⚔️</button>
-                
+
                 <button id="btnNavMessages" onclick="showMessagesTab()" title="Friends & Messages" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg">
                     💬
                     <span id="messagesBadge" class="unread-badge hidden">0</span>
@@ -292,7 +522,7 @@
                 <button onclick="closeMakeCodeModal()" class="text-white hover:text-red-400 font-bold text-lg">✕</button>
             </div>
             <div class="flex-1 bg-black rounded-2xl overflow-hidden mb-3">
-                <iframe id="makeCodeIframe" src="" class="w-full h-full border-0"></iframe>
+                <iframe id="makeCodeIframe" src="" title="Create a Smash Karts room" class="w-full h-full border-0"></iframe>
             </div>
             <div class="flex gap-2">
                 <input type="text" id="copyCodeInput" placeholder="Paste created room link/code..." class="smash-input flex-1 px-3 py-2 rounded-xl text-xs font-bold">
@@ -312,5 +542,202 @@
     </div>
 
     <script src="script.js"></script>
+
+    <script>
+        (() => {
+            const screen = document.getElementById("gameScreen");
+            const chat = document.getElementById("chatOverlay");
+            const chatInput = document.getElementById("matchChatInput");
+            const toolbar = document.getElementById("arenaToolbar");
+            const menuToggle = document.getElementById("arenaMenuToggle");
+            const options = document.getElementById("arenaOptions");
+            const optionsButton = document.getElementById("arenaOptionsButton");
+            const chatButton = document.getElementById("arenaChatButton");
+
+            function setOptionsOpen(open) {
+                options.hidden = !open;
+                optionsButton.setAttribute("aria-expanded", String(open));
+            }
+
+            function measureToolbar() {
+                const height = toolbar.getBoundingClientRect().height;
+
+                if (height > 0) {
+                    screen.style.setProperty("--menu-height", `${height}px`);
+                }
+            }
+
+            function setToolbarOpen(open) {
+                toolbar.hidden = !open;
+                screen.classList.toggle("arena-menu-open", open);
+                menuToggle.setAttribute("aria-expanded", String(open));
+
+                document.getElementById("topBarTabIcon").textContent =
+                    open ? "▲" : "▼";
+
+                document.getElementById("arenaMenuLabel").textContent =
+                    open ? "HIDE MENU" : "OPTIONS & CHAT";
+
+                if (!open) {
+                    setOptionsOpen(false);
+                }
+
+                measureToolbar();
+            }
+
+            function setChatOpen(open) {
+                clearTimeout(chatInactivityTimer);
+                chatInactivityTimer = null;
+
+                chat.classList.toggle("hidden-overlay", !open);
+                chatButton.setAttribute("aria-expanded", String(open));
+
+                document.getElementById("toggleChatBtnLabel").textContent =
+                    open ? "Hide Chat" : "Show Chat";
+            }
+
+            // Replace the original five-second chat handler.
+            chatInput.removeEventListener("input", triggerChatActivityTimer);
+            clearTimeout(chatInactivityTimer);
+
+            triggerChatActivityTimer = function () {
+                setChatOpen(true);
+
+                chatInactivityTimer = setTimeout(() => {
+                    setChatOpen(false);
+                }, 5000);
+            };
+
+            toggleOverlayChat = function () {
+                setOptionsOpen(false);
+
+                if (chat.classList.contains("hidden-overlay")) {
+                    triggerChatActivityTimer();
+                    chatInput.focus();
+                } else {
+                    setChatOpen(false);
+                }
+            };
+
+            toggleGameTopBar = function () {
+                setToolbarOpen(toolbar.hidden);
+            };
+
+            chatInput.addEventListener("input", triggerChatActivityTimer);
+            menuToggle.addEventListener("click", toggleGameTopBar);
+
+            optionsButton.addEventListener("click", () => {
+                setOptionsOpen(options.hidden);
+            });
+
+            options.addEventListener("click", async (event) => {
+                const button = event.target.closest("button[data-action]");
+
+                if (!button) {
+                    return;
+                }
+
+                setOptionsOpen(false);
+
+                switch (button.dataset.action) {
+                    case "chat":
+                        toggleOverlayChat();
+                        break;
+
+                    case "copy":
+                        copyActiveRoomCode();
+                        break;
+
+                    case "settings":
+                        openSettingsModal();
+                        break;
+
+                    case "online":
+                        openOnlineModal();
+                        break;
+
+                    case "fullscreen":
+                        try {
+                            // Fullscreen the page to keep chat and controls visible.
+                            if (document.fullscreenElement) {
+                                await document.exitFullscreen();
+                            } else if (document.documentElement.requestFullscreen) {
+                                await document.documentElement.requestFullscreen();
+                            } else {
+                                showToast(
+                                    "Fullscreen is unavailable in this browser.",
+                                    "ℹ️"
+                                );
+                            }
+                        } catch {
+                            showToast("Could not change fullscreen mode.", "ℹ️");
+                        }
+                        break;
+
+                    case "exit":
+                        leaveEmbeddedGame();
+                        break;
+                }
+            });
+
+            document.addEventListener("click", (event) => {
+                if (!event.target.closest("#arenaOptions, #arenaOptionsButton")) {
+                    setOptionsOpen(false);
+                }
+            });
+
+            document.addEventListener("keydown", (event) => {
+                if (event.key === "Escape" && !options.hidden) {
+                    setOptionsOpen(false);
+                    optionsButton.focus();
+                }
+            });
+
+            document.addEventListener("fullscreenchange", () => {
+                document.getElementById("arenaFullscreen").textContent =
+                    document.fullscreenElement
+                        ? "⛶ Exit full screen"
+                        : "⛶ Full screen";
+
+                measureToolbar();
+            });
+
+            const originalEnterGame = enterGameFromLobby;
+
+            enterGameFromLobby = function (...args) {
+                const result = originalEnterGame.apply(this, args);
+
+                if (!screen.classList.contains("hidden")) {
+                    setToolbarOpen(true);
+                    setOptionsOpen(false);
+                }
+
+                return result;
+            };
+
+            const originalLeaveGame = leaveEmbeddedGame;
+
+            leaveEmbeddedGame = function (...args) {
+                setChatOpen(false);
+                setToolbarOpen(false);
+
+                if (document.fullscreenElement && document.exitFullscreen) {
+                    document.exitFullscreen().catch(() => {});
+                }
+
+                return originalLeaveGame.apply(this, args);
+            };
+
+            window.addEventListener("resize", measureToolbar);
+
+            if (typeof ResizeObserver !== "undefined") {
+                new ResizeObserver(measureToolbar).observe(toolbar);
+            }
+
+            setChatOpen(false);
+            setToolbarOpen(!screen.classList.contains("hidden"));
+        })();
+    </script>
+
 </body>
 </html>
