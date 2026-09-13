@@ -4,8 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Smashkarts1v1s Arena</title>
+
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="/socket.io/socket.io.js"></script>
+
     <link rel="stylesheet" href="style.css">
 
     <style>
@@ -61,6 +63,37 @@
             text-transform: uppercase;
         }
 
+        /* =================================================
+           LIVE LOBBY PLAYER DISPLAY
+           ================================================= */
+
+        #gameLobbyInfo {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            min-width: 0;
+            max-width: min(48vw, 620px);
+            padding: 7px 11px;
+            border: 1px solid #ffffff38;
+            border-radius: 18px;
+            background: #102653;
+            box-sizing: border-box;
+        }
+
+        #gameLobbyPlayerCount {
+            color: #ffe238;
+            font: 900 12px "Inter", sans-serif;
+            white-space: nowrap;
+        }
+
+        #gameLobbyPlayerNames {
+            color: white;
+            font: 800 11px "Inter", sans-serif;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
         .arena-button {
             padding: 11px 16px;
             border: 1px solid #ffda25;
@@ -69,6 +102,10 @@
             color: #ffe238;
             font: 900 14px "Inter", sans-serif;
             cursor: pointer;
+        }
+
+        .arena-button:hover {
+            filter: brightness(1.1);
         }
 
         #arenaChatButton {
@@ -84,7 +121,10 @@
         #arenaMenuToggle {
             position: absolute;
             top: 100%;
-            right: 18px;
+
+            /* moved slightly left */
+            right: 28px;
+
             padding: 7px 14px;
             border: 1px solid #ffd318;
             border-top: 0;
@@ -186,6 +226,12 @@
             overflow: hidden;
         }
 
+        @media (max-width: 900px) {
+            #gameLobbyPlayerNames {
+                max-width: 180px;
+            }
+        }
+
         @media (max-width: 700px) {
             #arenaToolbar {
                 padding: 10px 12px;
@@ -203,6 +249,14 @@
                 padding: 9px 10px;
                 font-size: 12px;
             }
+
+            #gameLobbyInfo {
+                max-width: 100%;
+            }
+
+            #gameLobbyPlayerNames {
+                max-width: 130px;
+            }
         }
     </style>
 </head>
@@ -211,108 +265,376 @@
 
     <div id="toastContainer"></div>
 
-    <button id="settingsFloatingBtn" onclick="openSettingsModal()" title="Settings">⚙️</button>
+    <button
+        id="settingsFloatingBtn"
+        onclick="openSettingsModal()"
+        title="Settings">
+        ⚙️
+    </button>
 
-    <div id="settingsModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
+
+    <!-- =================================================
+         SETTINGS
+         ================================================= -->
+
+    <div
+        id="settingsModal"
+        class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
+
         <div class="w-full max-w-sm bg-blue-900 border-2 border-yellow-400 rounded-3xl p-6 shadow-2xl">
+
             <div class="flex justify-between items-center mb-4">
-                <h3 class="font-bungee text-lg text-yellow-300">⚙️ SETTINGS</h3>
-                <button onclick="closeSettingsModal()" class="text-white hover:text-red-400 font-bold text-lg">✕</button>
+
+                <h3 class="font-bungee text-lg text-yellow-300">
+                    ⚙️ SETTINGS
+                </h3>
+
+                <button
+                    onclick="closeSettingsModal()"
+                    class="text-white hover:text-red-400 font-bold text-lg">
+                    ✕
+                </button>
+
             </div>
+
 
             <div class="space-y-4">
+
                 <div class="flex justify-between items-center bg-blue-950/80 p-3.5 rounded-2xl border border-white/10">
+
                     <div>
-                        <span class="block text-xs font-bold text-white">Online Status</span>
-                        <span class="text-[10px] text-blue-200">Show visible in player list</span>
+
+                        <span class="block text-xs font-bold text-white">
+                            Online Status
+                        </span>
+
+                        <span class="text-[10px] text-blue-200">
+                            Show visible in player list
+                        </span>
+
                     </div>
+
+
                     <label class="relative inline-flex items-center cursor-pointer">
-                        <input type="checkbox" id="onlineStatusToggle" onchange="toggleOnlineStatus(this.checked)" checked class="sr-only peer">
+
+                        <input
+                            type="checkbox"
+                            id="onlineStatusToggle"
+                            onchange="toggleOnlineStatus(this.checked)"
+                            checked
+                            class="sr-only peer">
+
                         <div class="w-11 h-6 bg-gray-750 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500"></div>
+
                     </label>
+
                 </div>
+
 
                 <div class="flex justify-between items-center bg-blue-950/80 p-3.5 rounded-2xl border border-white/10">
+
                     <div>
-                        <span class="block text-xs font-bold text-white">Gameplay Mode</span>
-                        <span class="text-[10px] text-blue-200">Popup window or type-in-code embed</span>
+
+                        <span class="block text-xs font-bold text-white">
+                            Gameplay Mode
+                        </span>
+
+                        <span class="text-[10px] text-blue-200">
+                            Popup window or type-in-code embed
+                        </span>
+
                     </div>
-                    <select id="gameplayModeSelect" onchange="updateGameplayMode(this.value)" class="smash-input px-3 py-1.5 rounded-xl text-xs font-bold text-yellow-300 bg-blue-900 border border-yellow-400/50">
-                        <option value="popup">Popup Window</option>
-                        <option value="embed">Type in Code</option>
+
+
+                    <select
+                        id="gameplayModeSelect"
+                        onchange="updateGameplayMode(this.value)"
+                        class="smash-input px-3 py-1.5 rounded-xl text-xs font-bold text-yellow-300 bg-blue-900 border border-yellow-400/50">
+
+                        <option value="popup">
+                            Popup Window
+                        </option>
+
+                        <option value="embed">
+                            Type in Code
+                        </option>
+
                     </select>
+
                 </div>
 
-                <button onclick="promptEditUsername(); closeSettingsModal();" class="w-full bg-blue-800 hover:bg-blue-700 text-white font-bold py-3 rounded-2xl text-xs flex items-center justify-center gap-2">
+
+                <button
+                    onclick="promptEditUsername(); closeSettingsModal();"
+                    class="w-full bg-blue-800 hover:bg-blue-700 text-white font-bold py-3 rounded-2xl text-xs flex items-center justify-center gap-2">
+
                     ✏️ Edit Username
+
                 </button>
+
             </div>
+
         </div>
+
     </div>
 
-    <div id="editUsernameModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
+
+    <!-- =================================================
+         EDIT USERNAME
+         ================================================= -->
+
+    <div
+        id="editUsernameModal"
+        class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
+
         <div class="w-full max-w-sm bg-blue-900 border-2 border-yellow-400 rounded-3xl p-6 shadow-2xl">
-            <h3 class="font-bungee text-lg text-yellow-300 mb-3">✏️ CHANGE USERNAME</h3>
-            <input type="text" id="newUsernameInput" placeholder="Enter new username..." class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold mb-4">
+
+            <h3 class="font-bungee text-lg text-yellow-300 mb-3">
+                ✏️ CHANGE USERNAME
+            </h3>
+
+            <input
+                type="text"
+                id="newUsernameInput"
+                placeholder="Enter new username..."
+                class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold mb-4">
+
+
             <div class="flex gap-2">
-                <button onclick="closeEditUsernameModal()" class="w-1/2 bg-gray-600 hover:bg-gray-500 text-white font-bold py-2.5 rounded-xl text-xs">Cancel</button>
-                <button onclick="saveNewUsername()" class="w-1/2 btn-smash text-white font-bungee py-2.5 rounded-xl text-xs">Save</button>
+
+                <button
+                    onclick="closeEditUsernameModal()"
+                    class="w-1/2 bg-gray-600 hover:bg-gray-500 text-white font-bold py-2.5 rounded-xl text-xs">
+
+                    Cancel
+
+                </button>
+
+                <button
+                    onclick="saveNewUsername()"
+                    class="w-1/2 btn-smash text-white font-bungee py-2.5 rounded-xl text-xs">
+
+                    Save
+
+                </button>
+
             </div>
+
         </div>
+
     </div>
 
-    <div id="authModal" class="fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
+
+    <!-- =================================================
+         LOGIN / REGISTER
+         ================================================= -->
+
+    <div
+        id="authModal"
+        class="fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
+
         <div class="w-full max-w-md bg-blue-900 border-2 border-yellow-400 rounded-3xl p-6 shadow-2xl">
+
             <div class="flex border-b border-white/20 mb-6 pb-2 gap-4 justify-center">
-                <button id="tabLoginBtn" onclick="toggleAuthTab('login')" class="font-bungee text-lg text-yellow-300 border-b-2 border-yellow-300 pb-1">LOG IN</button>
-                <button id="tabRegisterBtn" onclick="toggleAuthTab('register')" class="font-bungee text-lg text-white/50 pb-1 hover:text-white">CREATE ACCOUNT</button>
+
+                <button
+                    id="tabLoginBtn"
+                    onclick="toggleAuthTab('login')"
+                    class="font-bungee text-lg text-yellow-300 border-b-2 border-yellow-300 pb-1">
+
+                    LOG IN
+
+                </button>
+
+
+                <button
+                    id="tabRegisterBtn"
+                    onclick="toggleAuthTab('register')"
+                    class="font-bungee text-lg text-white/50 pb-1 hover:text-white">
+
+                    CREATE ACCOUNT
+
+                </button>
+
             </div>
 
-            <form id="loginForm" onsubmit="handleAuthSubmit(event, 'login')" class="space-y-4">
+
+            <form
+                id="loginForm"
+                onsubmit="handleAuthSubmit(event, 'login')"
+                class="space-y-4">
+
                 <div>
-                    <label class="block text-xs font-bold uppercase text-blue-200 mb-1">Username</label>
-                    <input type="text" id="loginUsername" required placeholder="Choose a Username..." class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
+
+                    <label class="block text-xs font-bold uppercase text-blue-200 mb-1">
+                        Username
+                    </label>
+
+                    <input
+                        type="text"
+                        id="loginUsername"
+                        required
+                        placeholder="Choose a Username..."
+                        class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
+
                 </div>
+
+
                 <div>
-                    <label class="block text-xs font-bold uppercase text-blue-200 mb-1">Email Address</label>
-                    <input type="email" id="loginEmail" required placeholder="player@example.com" class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
+
+                    <label class="block text-xs font-bold uppercase text-blue-200 mb-1">
+                        Email Address
+                    </label>
+
+                    <input
+                        type="email"
+                        id="loginEmail"
+                        required
+                        placeholder="player@example.com"
+                        class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
+
                 </div>
+
+
                 <div>
-                    <label class="block text-xs font-bold uppercase text-blue-200 mb-1">Password</label>
-                    <input type="password" id="loginPassword" required placeholder="••••••••" class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
+
+                    <label class="block text-xs font-bold uppercase text-blue-200 mb-1">
+                        Password
+                    </label>
+
+                    <input
+                        type="password"
+                        id="loginPassword"
+                        required
+                        placeholder="••••••••"
+                        class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
+
                 </div>
-                <button type="submit" class="btn-smash w-full py-3.5 rounded-2xl font-bungee text-lg text-white">LOG IN & PLAY</button>
+
+
+                <button
+                    type="submit"
+                    class="btn-smash w-full py-3.5 rounded-2xl font-bungee text-lg text-white">
+
+                    LOG IN & PLAY
+
+                </button>
+
             </form>
 
-            <form id="registerForm" onsubmit="handleAuthSubmit(event, 'register')" class="space-y-4 hidden">
+
+            <form
+                id="registerForm"
+                onsubmit="handleAuthSubmit(event, 'register')"
+                class="space-y-4 hidden">
+
                 <div>
-                    <label class="block text-xs font-bold uppercase text-blue-200 mb-1">Username (Visible to others)</label>
-                    <input type="text" id="regUsername" required placeholder="SpeedRacer99" class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
+
+                    <label class="block text-xs font-bold uppercase text-blue-200 mb-1">
+                        Username (Visible to others)
+                    </label>
+
+                    <input
+                        type="text"
+                        id="regUsername"
+                        required
+                        placeholder="SpeedRacer99"
+                        class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
+
                 </div>
+
+
                 <div>
-                    <label class="block text-xs font-bold uppercase text-blue-200 mb-1">Email Address</label>
-                    <input type="email" id="regEmail" required placeholder="player@example.com" class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
+
+                    <label class="block text-xs font-bold uppercase text-blue-200 mb-1">
+                        Email Address
+                    </label>
+
+                    <input
+                        type="email"
+                        id="regEmail"
+                        required
+                        placeholder="player@example.com"
+                        class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
+
                 </div>
+
+
                 <div>
-                    <label class="block text-xs font-bold uppercase text-blue-200 mb-1">Password</label>
-                    <input type="password" id="regPassword" required placeholder="••••••••" class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
+
+                    <label class="block text-xs font-bold uppercase text-blue-200 mb-1">
+                        Password
+                    </label>
+
+                    <input
+                        type="password"
+                        id="regPassword"
+                        required
+                        placeholder="••••••••"
+                        class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
+
                 </div>
-                <button type="submit" class="btn-smash w-full py-3.5 rounded-2xl font-bungee text-lg text-white">CREATE ACCOUNT</button>
+
+
+                <button
+                    type="submit"
+                    class="btn-smash w-full py-3.5 rounded-2xl font-bungee text-lg text-white">
+
+                    CREATE ACCOUNT
+
+                </button>
+
             </form>
+
         </div>
+
     </div>
 
-    <div id="onlineUsersModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
+
+    <!-- =================================================
+         ONLINE PLAYERS
+         ================================================= -->
+
+    <div
+        id="onlineUsersModal"
+        class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
+
         <div class="w-full max-w-md bg-blue-900 border-2 border-emerald-400 rounded-3xl p-6 shadow-2xl">
+
             <div class="flex justify-between items-center mb-4">
-                <h3 class="font-bungee text-lg text-emerald-300">🟢 ONLINE PLAYERS</h3>
-                <button onclick="closeOnlineModal()" class="text-white hover:text-red-400 font-bold text-lg">✕</button>
+
+                <h3 class="font-bungee text-lg text-emerald-300">
+                    🟢 ONLINE PLAYERS
+                </h3>
+
+                <button
+                    onclick="closeOnlineModal()"
+                    class="text-white hover:text-red-400 font-bold text-lg">
+
+                    ✕
+
+                </button>
+
             </div>
-            <div id="onlineUsersList" class="max-h-80 overflow-y-auto space-y-2"></div>
+
+            <div
+                id="onlineUsersList"
+                class="max-h-80 overflow-y-auto space-y-2">
+            </div>
+
         </div>
+
     </div>
 
-    <div id="gameScreen" class="hidden fixed inset-0 z-40 bg-black overflow-hidden">
+
+    <!-- =================================================
+         ACTUAL GAME SCREEN
+         ================================================= -->
+
+    <div
+        id="gameScreen"
+        class="hidden fixed inset-0 z-40 bg-black overflow-hidden">
+
         <iframe
             id="smashFrame"
             src=""
@@ -321,23 +643,99 @@
             allow="autoplay; fullscreen 'none'">
         </iframe>
 
+
+        <!-- =================================================
+             BLUE GAME BAR
+             ================================================= -->
+
         <div id="gameTopBar">
-            <div id="arenaToolbar" hidden>
+
+            <div
+                id="arenaToolbar"
+                hidden>
+
+
+                <!-- LEFT SIDE -->
+
                 <div class="arena-brand">
-                    <span>🎮 SMASH KARTS</span>
-                    <span id="gameModeBadge">1v1</span>
+
+                    <span>
+                        🎮 SMASH KARTS
+                    </span>
+
+                    <span id="gameModeBadge">
+                        1v1
+                    </span>
+
+
+                    <!-- THIS IS THE LIVE PLAYER COUNT -->
+
+                    <div
+                        id="gameLobbyInfo"
+                        title="Players currently in this website lobby">
+
+                        <span id="gameLobbyPlayerCount">
+                            👥 0 IN LOBBY
+                        </span>
+
+                        <span id="gameLobbyPlayerNames">
+                            No active players
+                        </span>
+
+                    </div>
+
                 </div>
 
+
+                <!-- RIGHT SIDE -->
+
                 <div class="arena-actions">
+
                     <div id="gameRoomCodeContainer">
+
                         <button
                             id="copyRoomCodeBtn"
                             class="arena-button"
                             onclick="copyActiveRoomCode()"
                             title="Copy room code">
-                            Code: (<span id="gameRoomCodeDisplay">------</span>)
+
+                            Code:
+                            (<span id="gameRoomCodeDisplay">------</span>)
+
                         </button>
+
                     </div>
+
+
+                    <!-- PASTE CODE -->
+
+                    <button
+                        id="gamePasteCodeButton"
+                        class="arena-button"
+                        type="button"
+                        onclick="pasteCodeIntoCurrentLobby()"
+                        title="Paste a Smash Karts room code into this website lobby">
+
+                        📋 PASTE CODE
+
+                    </button>
+
+
+                    <!-- LOBBY BUTTON -->
+
+                    <button
+                        id="gameLobbyButton"
+                        class="arena-button"
+                        type="button"
+                        onclick="openCurrentArenaLobby()"
+                        title="Open the current lobby and see all players">
+
+                        👥 LOBBY
+
+                    </button>
+
+
+                    <!-- CHAT -->
 
                     <button
                         id="arenaChatButton"
@@ -345,398 +743,2024 @@
                         onclick="toggleOverlayChat()"
                         aria-controls="chatOverlay"
                         aria-expanded="false">
-                        💬 <span id="toggleChatBtnLabel">Show Chat</span>
+
+                        💬
+                        <span id="toggleChatBtnLabel">
+                            Show Chat
+                        </span>
+
                     </button>
+
+
+                    <!-- OPTIONS -->
 
                     <button
                         id="arenaOptionsButton"
                         class="arena-button"
                         aria-controls="arenaOptions"
                         aria-expanded="false">
+
                         ⚙️ OPTIONS ▾
+
                     </button>
+
                 </div>
+
             </div>
+
+
+            <!-- SHOW / HIDE MENU -->
 
             <button
                 id="arenaMenuToggle"
                 aria-controls="arenaToolbar"
                 aria-expanded="false">
-                <span id="topBarTabIcon">▼</span>
-                <span id="arenaMenuLabel">OPTIONS & CHAT</span>
+
+                <span id="topBarTabIcon">
+                    ▼
+                </span>
+
+                <span id="arenaMenuLabel">
+                    OPTIONS & CHAT
+                </span>
+
             </button>
 
-            <div id="arenaOptions" hidden>
-                <button data-action="chat">💬 Show / hide chat</button>
-                <button data-action="copy">📋 Copy room code</button>
-                <button data-action="settings">⚙️ Settings</button>
-                <button data-action="online">🟢 Online players</button>
-                <button data-action="fullscreen" id="arenaFullscreen">⛶ Full screen</button>
-                <button data-action="exit" class="arena-exit">✕ Exit game</button>
+
+            <!-- OPTIONS DROPDOWN -->
+
+            <div
+                id="arenaOptions"
+                hidden>
+
+                <button data-action="chat">
+                    💬 Show / hide chat
+                </button>
+
+                <button data-action="copy">
+                    📋 Copy room code
+                </button>
+
+                <button data-action="settings">
+                    ⚙️ Settings
+                </button>
+
+                <button data-action="online">
+                    🟢 Online players
+                </button>
+
+                <button
+                    data-action="fullscreen"
+                    id="arenaFullscreen">
+
+                    ⛶ Full screen
+
+                </button>
+
+                <button
+                    data-action="exit"
+                    class="arena-exit">
+
+                    ✕ Exit game
+
+                </button>
+
             </div>
+
         </div>
 
-        <div id="chatOverlay" class="hidden-overlay absolute top-16 right-4 z-30 bg-blue-900/90 border-2 border-yellow-400 rounded-2xl p-3 shadow-2xl flex flex-col w-72 backdrop-blur-md">
+
+        <!-- =================================================
+             IN-GAME LOBBY CHAT
+             ================================================= -->
+
+        <div
+            id="chatOverlay"
+            class="hidden-overlay absolute top-16 right-4 z-30 bg-blue-900/90 border-2 border-yellow-400 rounded-2xl p-3 shadow-2xl flex flex-col w-72 backdrop-blur-md">
+
             <div class="flex justify-between items-center mb-2 border-b border-white/10 pb-1">
-                <span class="font-bungee text-xs text-yellow-300">💬 IN-GAME CHAT</span>
-                <button onclick="toggleOverlayChat()" aria-label="Close chat" class="text-white hover:text-red-400 font-bold text-xs">✕</button>
+
+                <span class="font-bungee text-xs text-yellow-300">
+                    💬 LOBBY CHAT
+                </span>
+
+                <button
+                    onclick="toggleOverlayChat()"
+                    aria-label="Close chat"
+                    class="text-white hover:text-red-400 font-bold text-xs">
+
+                    ✕
+
+                </button>
+
             </div>
-            <div id="matchChatMessages" class="h-36 overflow-y-auto space-y-1.5 text-xs mb-2 pr-1"></div>
+
+
+            <div
+                id="matchChatMessages"
+                class="h-36 overflow-y-auto space-y-1.5 text-xs mb-2 pr-1">
+            </div>
+
+
             <div class="flex gap-1.5">
-                <input type="text" id="matchChatInput" placeholder="Type..." onkeydown="if(event.key==='Enter') sendMatchChatMessage()" class="smash-input flex-1 px-2.5 py-1.5 rounded-xl text-xs">
-                <button onclick="sendMatchChatMessage()" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 font-black px-3 py-1.5 rounded-xl text-xs">Send</button>
+
+                <input
+                    type="text"
+                    id="matchChatInput"
+                    placeholder="Type..."
+                    onkeydown="if(event.key==='Enter') sendMatchChatMessage()"
+                    class="smash-input flex-1 px-2.5 py-1.5 rounded-xl text-xs">
+
+
+                <button
+                    onclick="sendMatchChatMessage()"
+                    class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 font-black px-3 py-1.5 rounded-xl text-xs">
+
+                    Send
+
+                </button>
+
             </div>
+
         </div>
+
     </div>
 
-    <div id="mainDashboard" class="min-h-screen flex flex-col justify-between">
+
+    <!-- =================================================
+         MAIN DASHBOARD
+         ================================================= -->
+
+    <div
+        id="mainDashboard"
+        class="min-h-screen flex flex-col justify-between">
+
+
         <header class="w-full px-6 py-4 flex justify-between items-center">
+
             <div class="flex items-center gap-3">
+
                 <div class="flex items-center gap-2 bg-blue-900/40 p-2 pr-4 rounded-2xl border border-white/20">
-                    <div class="w-9 h-9 rounded-xl bg-yellow-400 flex items-center justify-center font-black text-blue-950 text-lg">👤</div>
-                    <div>
-                        <span class="block text-[10px] font-bold uppercase text-blue-200">Username</span>
-                        <div class="flex items-center gap-2">
-                            <span id="userDisplayTag" class="text-sm font-bold text-white">Player</span>
-                            <button onclick="promptEditUsername()" title="Edit Username" class="text-xs text-yellow-300 hover:underline">✏️</button>
-                        </div>
+
+                    <div class="w-9 h-9 rounded-xl bg-yellow-400 flex items-center justify-center font-black text-blue-950 text-lg">
+                        👤
                     </div>
+
+
+                    <div>
+
+                        <span class="block text-[10px] font-bold uppercase text-blue-200">
+                            Username
+                        </span>
+
+
+                        <div class="flex items-center gap-2">
+
+                            <span
+                                id="userDisplayTag"
+                                class="text-sm font-bold text-white">
+
+                                Player
+
+                            </span>
+
+
+                            <button
+                                onclick="promptEditUsername()"
+                                title="Edit Username"
+                                class="text-xs text-yellow-300 hover:underline">
+
+                                ✏️
+
+                            </button>
+
+                        </div>
+
+                    </div>
+
                 </div>
 
-                <button id="onlineCounterBtn" onclick="openOnlineModal()" class="bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/50 px-3 py-2 rounded-2xl flex items-center gap-2 transition-all">
+
+                <button
+                    id="onlineCounterBtn"
+                    onclick="openOnlineModal()"
+                    class="bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/50 px-3 py-2 rounded-2xl flex items-center gap-2 transition-all">
+
                     <span class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
-                    <span id="onlineCountBadge" class="text-xs font-bold text-emerald-300">0 Online</span>
+
+                    <span
+                        id="onlineCountBadge"
+                        class="text-xs font-bold text-emerald-300">
+
+                        0 Online
+
+                    </span>
+
                 </button>
+
             </div>
 
-            <button onclick="AuthSession.logout()" class="bg-red-600 hover:bg-red-500 text-white text-xs font-bold px-4 py-2 rounded-xl">Logout</button>
+
+            <button
+                onclick="AuthSession.logout()"
+                class="bg-red-600 hover:bg-red-500 text-white text-xs font-bold px-4 py-2 rounded-xl">
+
+                Logout
+
+            </button>
+
         </header>
 
-        <div class="flex flex-1 w-full max-w-7xl mx-auto px-4">
-            <aside class="flex flex-col gap-4 py-6 pr-4 items-center">
-                <button id="btnNavLeaderboard" onclick="showTab('leaderboardTab')" title="Leaderboard" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg">🏆</button>
-                <button id="btnNav1v1" onclick="switchMatchMode('1v1')" title="1v1 Matchmaking" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg active">🎮</button>
-                <button id="btnNav2v2" onclick="switchMatchMode('2v2')" title="2v2 Matchmaking" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg">⚔️</button>
 
-                <button id="btnNavMessages" onclick="showMessagesTab()" title="Friends & Messages" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg">
-                    💬
-                    <span id="messagesBadge" class="unread-badge hidden">0</span>
+        <div class="flex flex-1 w-full max-w-7xl mx-auto px-4">
+
+            <!-- SIDEBAR -->
+
+            <aside class="flex flex-col gap-4 py-6 pr-4 items-center">
+
+                <button
+                    id="btnNavLeaderboard"
+                    onclick="showTab('leaderboardTab')"
+                    title="Leaderboard"
+                    class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg">
+
+                    🏆
+
                 </button>
+
+
+                <button
+                    id="btnNav1v1"
+                    onclick="switchMatchMode('1v1')"
+                    title="1v1 Matchmaking"
+                    class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg active">
+
+                    🎮
+
+                </button>
+
+
+                <button
+                    id="btnNav2v2"
+                    onclick="switchMatchMode('2v2')"
+                    title="2v2 Matchmaking"
+                    class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg">
+
+                    ⚔️
+
+                </button>
+
+
+                <button
+                    id="btnNavMessages"
+                    onclick="showMessagesTab()"
+                    title="Friends & Messages"
+                    class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg">
+
+                    💬
+
+                    <span
+                        id="messagesBadge"
+                        class="unread-badge hidden">
+
+                        0
+
+                    </span>
+
+                </button>
+
             </aside>
 
+
+            <!-- CENTER -->
+
             <main class="flex-1 flex flex-col items-center">
+
                 <div class="mb-8">
+
                     <div class="bg-gradient-to-b from-yellow-300 to-yellow-500 border-4 border-white rounded-3xl px-10 py-3 shadow-2xl">
-                        <span class="font-bungee text-3xl sm:text-4xl text-blue-950">Smashkarts1v1s</span>
+
+                        <span class="font-bungee text-3xl sm:text-4xl text-blue-950">
+                            Smashkarts1v1s
+                        </span>
+
                     </div>
+
                 </div>
+
 
                 <div class="w-full max-w-4xl bg-blue-950/40 border-2 border-white/20 backdrop-blur-xl rounded-3xl p-6 shadow-2xl mb-8">
-                    <div id="leaderboardTab" class="tab-content hidden space-y-4">
-                        <h2 class="font-bungee text-xl text-yellow-300 mb-2">🏆 TOP 5 PLAYERS (MOST GAMES PLAYED)</h2>
-                        <div id="leaderboardList" class="space-y-2"></div>
+
+
+                    <!-- LEADERBOARD -->
+
+                    <div
+                        id="leaderboardTab"
+                        class="tab-content hidden space-y-4">
+
+                        <h2 class="font-bungee text-xl text-yellow-300 mb-2">
+                            🏆 TOP 5 PLAYERS (MOST GAMES PLAYED)
+                        </h2>
+
+                        <div
+                            id="leaderboardList"
+                            class="space-y-2">
+                        </div>
+
                     </div>
 
-                    <div id="messagesTab" class="tab-content hidden space-y-4">
-                        <h2 class="font-bungee text-xl text-yellow-300 mb-2">💬 FRIENDS & DIRECT MESSAGES</h2>
+
+                    <!-- MESSAGES -->
+
+                    <div
+                        id="messagesTab"
+                        class="tab-content hidden space-y-4">
+
+                        <h2 class="font-bungee text-xl text-yellow-300 mb-2">
+                            💬 FRIENDS & DIRECT MESSAGES
+                        </h2>
+
+
                         <div class="grid grid-cols-1 md:grid-cols-3 gap-4 h-80">
+
                             <div class="bg-blue-900/60 p-3 rounded-2xl border border-white/10 flex flex-col">
-                                <span class="font-bungee text-xs text-yellow-300 mb-2">YOUR FRIENDS</span>
-                                <div id="friendsTabList" class="flex-1 overflow-y-auto space-y-1.5 pr-1"></div>
-                            </div>
-                            <div class="md:col-span-2 bg-blue-900/60 p-3 rounded-2xl border border-white/10 flex flex-col">
-                                <span id="activeDMChatHeader" class="font-bungee text-xs text-yellow-300 mb-2">SELECT A FRIEND TO MESSAGE</span>
-                                <div id="tabDMMessages" class="flex-1 overflow-y-auto space-y-1.5 pr-1 text-xs mb-3 bg-blue-950/80 p-2.5 rounded-xl border border-white/10"></div>
-                                <div class="flex gap-2">
-                                    <input type="text" id="tabDMInput" placeholder="Type message..." onkeydown="if(event.key==='Enter') sendTabDM()" class="smash-input flex-1 px-3 py-2 rounded-xl text-xs">
-                                    <button onclick="sendTabDM()" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 font-black px-4 py-2 rounded-xl text-xs uppercase">Send</button>
+
+                                <span class="font-bungee text-xs text-yellow-300 mb-2">
+                                    YOUR FRIENDS
+                                </span>
+
+                                <div
+                                    id="friendsTabList"
+                                    class="flex-1 overflow-y-auto space-y-1.5 pr-1">
                                 </div>
+
                             </div>
+
+
+                            <div class="md:col-span-2 bg-blue-900/60 p-3 rounded-2xl border border-white/10 flex flex-col">
+
+                                <span
+                                    id="activeDMChatHeader"
+                                    class="font-bungee text-xs text-yellow-300 mb-2">
+
+                                    SELECT A FRIEND TO MESSAGE
+
+                                </span>
+
+
+                                <div
+                                    id="tabDMMessages"
+                                    class="flex-1 overflow-y-auto space-y-1.5 pr-1 text-xs mb-3 bg-blue-950/80 p-2.5 rounded-xl border border-white/10">
+                                </div>
+
+
+                                <div class="flex gap-2">
+
+                                    <input
+                                        type="text"
+                                        id="tabDMInput"
+                                        placeholder="Type message..."
+                                        onkeydown="if(event.key==='Enter') sendTabDM()"
+                                        class="smash-input flex-1 px-3 py-2 rounded-xl text-xs">
+
+
+                                    <button
+                                        onclick="sendTabDM()"
+                                        class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 font-black px-4 py-2 rounded-xl text-xs uppercase">
+
+                                        Send
+
+                                    </button>
+
+                                </div>
+
+                            </div>
+
                         </div>
+
                     </div>
 
-                    <div id="setupTab" class="tab-content space-y-6">
+
+                    <!-- 1V1 / 2V2 PAGE -->
+
+                    <div
+                        id="setupTab"
+                        class="tab-content space-y-6">
+
+
                         <div class="flex justify-between items-center border-b border-white/10 pb-4">
+
                             <div>
-                                <h2 id="arenaTitle" class="font-bungee text-2xl text-white">1v1 MATCHMAKING</h2>
-                                <p id="arenaSubtitle" class="text-xs text-blue-200">Start or join a match</p>
+
+                                <h2
+                                    id="arenaTitle"
+                                    class="font-bungee text-2xl text-white">
+
+                                    1v1 MATCHMAKING
+
+                                </h2>
+
+
+                                <p
+                                    id="arenaSubtitle"
+                                    class="text-xs text-blue-200">
+
+                                    Start or join a match
+
+                                </p>
+
                             </div>
-                            <button onclick="openFindGameModal()" class="text-xs bg-emerald-500 hover:bg-emerald-400 text-white font-black px-5 py-2.5 rounded-xl uppercase">🔍 Public Lobbies</button>
+
+
+                            <button
+                                onclick="openFindGameModal()"
+                                class="text-xs bg-emerald-500 hover:bg-emerald-400 text-white font-black px-5 py-2.5 rounded-xl uppercase">
+
+                                🔍 Public Lobbies
+
+                            </button>
+
                         </div>
+
 
                         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+
                             <div>
-                                <label class="block text-xs font-bold uppercase text-blue-200 mb-2">Smash Karts Room Link or Code</label>
+
+                                <label class="block text-xs font-bold uppercase text-blue-200 mb-2">
+                                    Smash Karts Room Link or Code
+                                </label>
+
+
                                 <div class="flex gap-2">
-                                    <input type="text" id="smashUrl" placeholder="Paste link or code here..." class="smash-input flex-1 px-4 py-3 rounded-2xl text-sm font-bold">
-                                    <button onclick="openMakeCodeModal()" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 font-black px-3 py-3 rounded-2xl text-xs uppercase flex-shrink-0">⚡ Make Code</button>
+
+                                    <input
+                                        type="text"
+                                        id="smashUrl"
+                                        placeholder="Paste link or code here..."
+                                        class="smash-input flex-1 px-4 py-3 rounded-2xl text-sm font-bold">
+
+
+                                    <button
+                                        onclick="openMakeCodeModal()"
+                                        class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 font-black px-3 py-3 rounded-2xl text-xs uppercase flex-shrink-0">
+
+                                        ⚡ Make Code
+
+                                    </button>
+
                                 </div>
+
                             </div>
+
+
                             <div>
-                                <label class="block text-xs font-bold uppercase text-blue-200 mb-2">Win Condition</label>
-                                <select id="winCondition" class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
-                                    <option value="First to 3">First to 3</option>
-                                    <option value="First to 6">First to 6</option>
-                                    <option value="First to 10">First to 10</option>
+
+                                <label class="block text-xs font-bold uppercase text-blue-200 mb-2">
+                                    Win Condition
+                                </label>
+
+
+                                <select
+                                    id="winCondition"
+                                    class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
+
+                                    <option value="First to 3">
+                                        First to 3
+                                    </option>
+
+                                    <option value="First to 6">
+                                        First to 6
+                                    </option>
+
+                                    <option value="First to 10">
+                                        First to 10
+                                    </option>
+
                                 </select>
+
                             </div>
+
                         </div>
 
-                        <button onclick="createLobby()" class="btn-smash w-full py-4 rounded-2xl font-bungee text-xl text-white">+ CREATE LOBBY & PRE-CHAT</button>
+
+                        <button
+                            onclick="createLobby()"
+                            class="btn-smash w-full py-4 rounded-2xl font-bungee text-xl text-white">
+
+                            + CREATE LOBBY & PRE-CHAT
+
+                        </button>
+
                     </div>
+
                 </div>
+
             </main>
+
         </div>
+
     </div>
 
-    <div id="preGameLobbyModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
+
+    <!-- =================================================
+         LOBBY
+         ================================================= -->
+
+    <div
+        id="preGameLobbyModal"
+        class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
+
+
         <div class="w-full max-w-2xl bg-blue-900 border-2 border-yellow-400 rounded-3xl p-6 shadow-2xl relative flex flex-col max-h-[90vh]">
+
+
             <div class="flex justify-between items-center border-b border-white/10 pb-3 mb-4">
-                <h3 class="font-bungee text-lg text-yellow-300">🎮 PRE-GAME LOBBY</h3>
-                <button onclick="closePreGameLobbyModal()" class="text-white hover:text-red-400 font-bold text-lg">✕</button>
+
+                <h3 class="font-bungee text-lg text-yellow-300">
+                    🎮 PRE-GAME LOBBY
+                </h3>
+
+
+                <button
+                    onclick="closePreGameLobbyModal()"
+                    class="text-white hover:text-red-400 font-bold text-lg">
+
+                    ✕
+
+                </button>
+
             </div>
+
+
             <div class="grid grid-cols-1 md:grid-cols-3 gap-4 flex-1">
+
+
+                <!-- PLAYER LIST -->
+
                 <div class="bg-blue-950/80 rounded-2xl p-3 border border-white/10 flex flex-col justify-between">
+
                     <div>
-                        <h4 class="font-bungee text-xs text-yellow-300 mb-2">PLAYERS</h4>
-                        <div id="preGamePlayerList" class="space-y-2 text-xs"></div>
+
+                        <h4 class="font-bungee text-xs text-yellow-300 mb-2">
+                            👥 PLAYERS IN LOBBY (0)
+                        </h4>
+
+
+                        <div
+                            id="preGamePlayerList"
+                            class="space-y-2 text-xs">
+                        </div>
+
                     </div>
-                    <button onclick="enterGameFromLobby()" class="btn-smash w-full py-3 rounded-xl font-bungee text-sm text-white">🚀 JOIN GAME</button>
+
+
+                    <button
+                        onclick="enterGameFromLobby()"
+                        class="btn-smash w-full py-3 rounded-xl font-bungee text-sm text-white">
+
+                        🚀 JOIN GAME
+
+                    </button>
+
                 </div>
+
+
+                <!-- LOBBY CHAT -->
+
                 <div class="md:col-span-2 bg-blue-950/80 rounded-2xl p-3 border border-white/10 flex flex-col">
-                    <h4 class="font-bungee text-xs text-yellow-300 mb-2">💬 PRE-MATCH CHAT</h4>
-                    <div id="preGameChatMessages" class="flex-1 overflow-y-auto space-y-2 text-xs pr-1 mb-3 min-h-[160px]"></div>
-                    <div class="flex gap-2">
-                        <input type="text" id="preGameChatInput" placeholder="Plan teams..." onkeydown="if(event.key==='Enter') sendPreGameChatMessage()" class="smash-input flex-1 px-3 py-2 rounded-xl text-xs">
-                        <button onclick="sendPreGameChatMessage()" class="bg-yellow-400 text-blue-950 font-black px-4 py-2 rounded-xl text-xs uppercase">Send</button>
+
+                    <h4 class="font-bungee text-xs text-yellow-300 mb-2">
+                        💬 LOBBY CHAT
+                    </h4>
+
+
+                    <div
+                        id="preGameChatMessages"
+                        class="flex-1 overflow-y-auto space-y-2 text-xs pr-1 mb-3 min-h-[160px]">
                     </div>
+
+
+                    <div class="flex gap-2">
+
+                        <input
+                            type="text"
+                            id="preGameChatInput"
+                            placeholder="Chat with lobby..."
+                            onkeydown="if(event.key==='Enter') sendPreGameChatMessage()"
+                            class="smash-input flex-1 px-3 py-2 rounded-xl text-xs">
+
+
+                        <button
+                            onclick="sendPreGameChatMessage()"
+                            class="bg-yellow-400 text-blue-950 font-black px-4 py-2 rounded-xl text-xs uppercase">
+
+                            Send
+
+                        </button>
+
+                    </div>
+
                 </div>
+
             </div>
+
         </div>
+
     </div>
 
-    <div id="makeCodeModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
+
+    <!-- =================================================
+         MAKE CODE
+         ================================================= -->
+
+    <div
+        id="makeCodeModal"
+        class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
+
         <div class="w-full max-w-3xl bg-blue-900 border-2 border-white/30 rounded-3xl p-5 shadow-2xl flex flex-col h-[85vh]">
+
             <div class="flex justify-between items-center mb-3">
-                <h3 class="font-bungee text-base text-yellow-300">⚡ MAKE ROOM CODE IN SMASH KARTS</h3>
-                <button onclick="closeMakeCodeModal()" class="text-white hover:text-red-400 font-bold text-lg">✕</button>
+
+                <h3 class="font-bungee text-base text-yellow-300">
+                    ⚡ MAKE ROOM CODE IN SMASH KARTS
+                </h3>
+
+                <button
+                    onclick="closeMakeCodeModal()"
+                    class="text-white hover:text-red-400 font-bold text-lg">
+
+                    ✕
+
+                </button>
+
             </div>
+
+
             <div class="flex-1 bg-black rounded-2xl overflow-hidden mb-3">
-                <iframe id="makeCodeIframe" src="" title="Create a Smash Karts room" class="w-full h-full border-0"></iframe>
+
+                <iframe
+                    id="makeCodeIframe"
+                    src=""
+                    title="Create a Smash Karts room"
+                    class="w-full h-full border-0">
+                </iframe>
+
             </div>
+
+
             <div class="flex gap-2">
-                <input type="text" id="copyCodeInput" placeholder="Paste created room link/code..." class="smash-input flex-1 px-3 py-2 rounded-xl text-xs font-bold">
-                <button onclick="copyAndPlay()" class="btn-smash px-5 py-2 rounded-xl font-bungee text-xs text-white">📋 COPY & PLAY NOW</button>
+
+                <input
+                    type="text"
+                    id="copyCodeInput"
+                    placeholder="Paste created room link/code..."
+                    class="smash-input flex-1 px-3 py-2 rounded-xl text-xs font-bold">
+
+
+                <button
+                    onclick="copyAndPlay()"
+                    class="btn-smash px-5 py-2 rounded-xl font-bungee text-xs text-white">
+
+                    📋 COPY & PLAY NOW
+
+                </button>
+
             </div>
+
         </div>
+
     </div>
 
-    <div id="findGameModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
+
+    <!-- =================================================
+         FIND GAME
+         ================================================= -->
+
+    <div
+        id="findGameModal"
+        class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
+
         <div class="w-full max-w-md bg-blue-900 border-2 border-white/30 rounded-3xl p-6 shadow-2xl relative">
+
             <div class="flex justify-between items-center mb-4">
-                <h3 class="font-bungee text-lg text-yellow-300">🎮 ACTIVE MATCHES</h3>
-                <button onclick="closeFindGameModal()" class="text-white hover:text-red-400 font-bold text-lg">✕</button>
+
+                <h3 class="font-bungee text-lg text-yellow-300">
+                    🎮 ACTIVE MATCHES
+                </h3>
+
+
+                <button
+                    onclick="closeFindGameModal()"
+                    class="text-white hover:text-red-400 font-bold text-lg">
+
+                    ✕
+
+                </button>
+
             </div>
-            <div id="publicRoomsList" class="max-h-80 overflow-y-auto space-y-2.5"></div>
+
+
+            <div
+                id="publicRoomsList"
+                class="max-h-80 overflow-y-auto space-y-2.5">
+            </div>
+
         </div>
+
     </div>
+
+
+    <!-- =================================================
+         ORIGINAL WEBSITE JAVASCRIPT
+         ================================================= -->
 
     <script src="script.js"></script>
 
+
+    <!-- =================================================
+         GAME BAR / LOBBY FIX
+         ================================================= -->
+
     <script>
+
         (() => {
-            const screen = document.getElementById("gameScreen");
-            const chat = document.getElementById("chatOverlay");
-            const chatInput = document.getElementById("matchChatInput");
-            const toolbar = document.getElementById("arenaToolbar");
-            const menuToggle = document.getElementById("arenaMenuToggle");
-            const options = document.getElementById("arenaOptions");
-            const optionsButton = document.getElementById("arenaOptionsButton");
-            const chatButton = document.getElementById("arenaChatButton");
 
-            function setOptionsOpen(open) {
-                options.hidden = !open;
-                optionsButton.setAttribute("aria-expanded", String(open));
+
+            // =================================================
+            // GET ROOM CODE
+            // =================================================
+
+            function getArenaRoomCode(url) {
+
+                const match =
+                    String(
+                        url || ""
+                    ).match(
+                        /[?&]room=([A-Za-z0-9]+)/i
+                    );
+
+
+                return match
+                    ? match[1]
+                    : "";
             }
 
-            function measureToolbar() {
-                const height = toolbar.getBoundingClientRect().height;
 
-                if (height > 0) {
-                    screen.style.setProperty("--menu-height", `${height}px`);
+            // =================================================
+            // CHECK CODE BEFORE PASTING
+            // =================================================
+
+            function validateArenaRoomCode(
+                rawInput
+            ) {
+
+                if (!rawInput) {
+                    return null;
+                }
+
+
+                const text =
+                    String(
+                        rawInput
+                    )
+
+                        .trim()
+
+                        .replace(
+                            /["']/g,
+                            ""
+                        );
+
+
+                const validCode =
+                    (code) => (
+
+                        typeof code ===
+                            "string"
+
+                        &&
+
+                        /^[A-Za-z0-9]{6,12}$/.test(
+                            code
+                        )
+
+                        &&
+
+                        /[A-Za-z]/.test(
+                            code
+                        )
+
+                        &&
+
+                        /\d/.test(
+                            code
+                        )
+                    );
+
+
+                // Bare room code.
+                if (
+                    validCode(
+                        text
+                    )
+                ) {
+
+                    return text;
+                }
+
+
+                // Room: ABC123
+                const roomLabel =
+                    text.match(
+                        /^Room:\s*([A-Za-z0-9]+)$/i
+                    );
+
+
+                if (
+                    roomLabel &&
+                    validCode(
+                        roomLabel[1]
+                    )
+                ) {
+
+                    return roomLabel[1];
+                }
+
+
+                // Official Smash Karts URL.
+                try {
+
+                    const url =
+                        new URL(
+                            text
+                        );
+
+
+                    const host =
+                        url.hostname
+                            .toLowerCase();
+
+
+                    if (
+                        host !==
+                            "smashkarts.io"
+
+                        &&
+
+                        host !==
+                            "www.smashkarts.io"
+                    ) {
+
+                        return null;
+                    }
+
+
+                    const code =
+                        url.searchParams
+                            .get(
+                                "room"
+                            );
+
+
+                    return validCode(
+                        code
+                    )
+
+                        ?
+
+                        code
+
+                        :
+
+                        null;
+
+                } catch {
+
+                    return null;
                 }
             }
 
-            function setToolbarOpen(open) {
-                toolbar.hidden = !open;
-                screen.classList.toggle("arena-menu-open", open);
-                menuToggle.setAttribute("aria-expanded", String(open));
 
-                document.getElementById("topBarTabIcon").textContent =
-                    open ? "▲" : "▼";
+            // =================================================
+            // OPEN LOBBY BUTTON
+            //
+            // Works while playing:
+            // FFA
+            // 1v1
+            // 2v2
+            // =================================================
 
-                document.getElementById("arenaMenuLabel").textContent =
-                    open ? "HIDE MENU" : "OPTIONS & CHAT";
+            window.openCurrentArenaLobby =
+                function () {
 
-                if (!open) {
-                    setOptionsOpen(false);
-                }
+                    if (
+                        !activeRoomData
+                    ) {
 
-                measureToolbar();
-            }
+                        showToast(
+                            "You are not currently in a lobby.",
+                            "⚠️"
+                        );
 
-            function setChatOpen(open) {
-                clearTimeout(chatInactivityTimer);
-                chatInactivityTimer = null;
 
-                chat.classList.toggle("hidden-overlay", !open);
-                chatButton.setAttribute("aria-expanded", String(open));
+                        return;
+                    }
 
-                document.getElementById("toggleChatBtnLabel").textContent =
-                    open ? "Hide Chat" : "Show Chat";
-            }
 
-            // Replace the original five-second chat handler.
-            chatInput.removeEventListener("input", triggerChatActivityTimer);
-            clearTimeout(chatInactivityTimer);
+                    openPreGameLobby(
+                        activeRoomData
+                    );
 
-            triggerChatActivityTimer = function () {
-                setChatOpen(true);
 
-                chatInactivityTimer = setTimeout(() => {
-                    setChatOpen(false);
-                }, 5000);
-            };
+                    updateArenaLobbyDisplay(
+                        activeRoomData
+                    );
+                };
 
-            toggleOverlayChat = function () {
-                setOptionsOpen(false);
 
-                if (chat.classList.contains("hidden-overlay")) {
-                    triggerChatActivityTimer();
-                    chatInput.focus();
-                } else {
-                    setChatOpen(false);
-                }
-            };
+            // =================================================
+            // PASTE CODE BUTTON
+            // =================================================
 
-            toggleGameTopBar = function () {
-                setToolbarOpen(toolbar.hidden);
-            };
+            window.pasteCodeIntoCurrentLobby =
+                function () {
 
-            chatInput.addEventListener("input", triggerChatActivityTimer);
-            menuToggle.addEventListener("click", toggleGameTopBar);
+                    if (
+                        !activeRoomData
+                    ) {
 
-            optionsButton.addEventListener("click", () => {
-                setOptionsOpen(options.hidden);
-            });
+                        showToast(
+                            "You are not currently in a lobby.",
+                            "⚠️"
+                        );
 
-            options.addEventListener("click", async (event) => {
-                const button = event.target.closest("button[data-action]");
 
-                if (!button) {
+                        return;
+                    }
+
+
+                    const pasted =
+                        window.prompt(
+
+                            "Paste a Smash Karts room code or official Smash Karts room link:"
+                        );
+
+
+                    if (
+                        pasted ===
+                        null
+                    ) {
+
+                        return;
+                    }
+
+
+                    const code =
+                        validateArenaRoomCode(
+                            pasted
+                        );
+
+
+                    if (!code) {
+
+                        showToast(
+
+                            "That is not a valid-looking Smash Karts room code. Nothing was pasted.",
+
+                            "❌"
+                        );
+
+
+                        return;
+                    }
+
+
+                    socket.emit(
+                        "update_lobby_game_code",
+                        {
+                            roomId:
+                                activeRoomData.roomId,
+
+                            code
+                        }
+                    );
+                };
+
+
+            // =================================================
+            // LIVE PLAYER COUNT + NAMES
+            // =================================================
+
+            function updateArenaLobbyDisplay(
+                room
+            ) {
+
+                if (!room) {
                     return;
                 }
 
-                setOptionsOpen(false);
 
-                switch (button.dataset.action) {
-                    case "chat":
-                        toggleOverlayChat();
-                        break;
+                const players =
+                    Array.isArray(
+                        room.players
+                    )
 
-                    case "copy":
-                        copyActiveRoomCode();
-                        break;
+                        ?
 
-                    case "settings":
-                        openSettingsModal();
-                        break;
+                        room.players
 
-                    case "online":
-                        openOnlineModal();
-                        break;
+                        :
 
-                    case "fullscreen":
-                        try {
-                            // Fullscreen the page to keep chat and controls visible.
-                            if (document.fullscreenElement) {
-                                await document.exitFullscreen();
-                            } else if (document.documentElement.requestFullscreen) {
-                                await document.documentElement.requestFullscreen();
-                            } else {
+                        [];
+
+
+                // ---------------------------------------------
+                // NUMBER OF PEOPLE
+                // ---------------------------------------------
+
+                const count =
+                    document.getElementById(
+                        "gameLobbyPlayerCount"
+                    );
+
+
+                if (
+                    count
+                ) {
+
+                    count.textContent =
+                        `👥 ${players.length} IN LOBBY`;
+                }
+
+
+                // ---------------------------------------------
+                // PLAYER NAMES
+                // ---------------------------------------------
+
+                const names =
+                    document.getElementById(
+                        "gameLobbyPlayerNames"
+                    );
+
+
+                if (
+                    names
+                ) {
+
+                    const namesText =
+                        players.length
+
+                            ?
+
+                            players
+                                .map(
+                                    player =>
+                                        player.name
+                                )
+                                .join(
+                                    ", "
+                                )
+
+                            :
+
+                            "No active players";
+
+
+                    names.textContent =
+                        namesText;
+
+
+                    names.title =
+                        namesText;
+                }
+
+
+                // ---------------------------------------------
+                // FFA / 1v1 / 2v2 BADGE
+                // ---------------------------------------------
+
+                const modeBadge =
+                    document.getElementById(
+                        "gameModeBadge"
+                    );
+
+
+                if (
+                    modeBadge &&
+                    room.mode
+                ) {
+
+                    modeBadge.textContent =
+                        String(
+                            room.mode
+                        ).toUpperCase();
+                }
+
+
+                // ---------------------------------------------
+                // ROOM CODE
+                // ---------------------------------------------
+
+                const code =
+                    getArenaRoomCode(
+                        room.smashUrl
+                    );
+
+
+                if (
+                    code
+                ) {
+
+                    currentRoomCode =
+                        code;
+                }
+
+
+                const codeDisplay =
+                    document.getElementById(
+                        "gameRoomCodeDisplay"
+                    );
+
+
+                if (
+                    codeDisplay
+                ) {
+
+                    codeDisplay.textContent =
+
+                        code
+
+                        ||
+
+                        (
+                            room.mode ===
+                                "ffa"
+
+                                ?
+
+                                "NOT SET"
+
+                                :
+
+                                "------"
+                        );
+                }
+
+
+                // ---------------------------------------------
+                // PLAYER COUNT INSIDE LOBBY
+                // ---------------------------------------------
+
+                const playerHeading =
+                    document.querySelector(
+                        "#preGameLobbyModal h4"
+                    );
+
+
+                if (
+                    playerHeading
+                ) {
+
+                    playerHeading.textContent =
+                        `👥 PLAYERS IN LOBBY (${players.length})`;
+                }
+
+
+                // ---------------------------------------------
+                // LIVE PLAYER LIST INSIDE LOBBY
+                // ---------------------------------------------
+
+                const lobbyModal =
+                    document.getElementById(
+                        "preGameLobbyModal"
+                    );
+
+
+                if (
+                    lobbyModal
+
+                    &&
+
+                    !lobbyModal.classList.contains(
+                        "hidden"
+                    )
+
+                    &&
+
+                    typeof updatePreGameLobbyUI ===
+                        "function"
+                ) {
+
+                    updatePreGameLobbyUI(
+                        room
+                    );
+
+
+                    const headingAgain =
+                        document.querySelector(
+                            "#preGameLobbyModal h4"
+                        );
+
+
+                    if (
+                        headingAgain
+                    ) {
+
+                        headingAgain.textContent =
+                            `👥 PLAYERS IN LOBBY (${players.length})`;
+                    }
+                }
+            }
+
+
+            // =================================================
+            // 1v1 / 2v2 CREATED
+            // =================================================
+
+            socket.on(
+                "room_created",
+                (room) => {
+
+                    activeRoomData =
+                        room;
+
+
+                    updateArenaLobbyDisplay(
+                        room
+                    );
+                }
+            );
+
+
+            // =================================================
+            // FRIEND 1v1
+            // =================================================
+
+            socket.on(
+                "challenge_game_start",
+                (room) => {
+
+                    activeRoomData =
+                        room;
+
+
+                    updateArenaLobbyDisplay(
+                        room
+                    );
+                }
+            );
+
+
+            // =================================================
+            // FFA
+            // =================================================
+
+            socket.on(
+                "ffa_lobby_ready",
+                (room) => {
+
+                    activeRoomData =
+                        room;
+
+
+                    updateArenaLobbyDisplay(
+                        room
+                    );
+                }
+            );
+
+
+            // =================================================
+            // SOMEBODY JOINS / LEAVES
+            // =================================================
+
+            socket.on(
+                "saved_room_update",
+                (room) => {
+
+                    if (
+                        !activeRoomData
+
+                        ||
+
+                        activeRoomData.roomId !==
+                            room.roomId
+                    ) {
+
+                        return;
+                    }
+
+
+                    activeRoomData =
+                        room;
+
+
+                    updateArenaLobbyDisplay(
+                        room
+                    );
+                }
+            );
+
+
+            // =================================================
+            // ROOM CODE CHANGED
+            // =================================================
+
+            socket.on(
+                "lobby_game_code_updated",
+                (data) => {
+
+                    if (
+                        !activeRoomData
+
+                        ||
+
+                        activeRoomData.roomId !==
+                            data.roomId
+                    ) {
+
+                        return;
+                    }
+
+
+                    activeRoomData.smashUrl =
+                        data.smashUrl;
+
+
+                    updateArenaLobbyDisplay(
+                        activeRoomData
+                    );
+                }
+            );
+
+
+            // =================================================
+            // LOBBY DELETED
+            // =================================================
+
+            socket.on(
+                "lobby_deleted",
+                ({
+                    roomId
+                }) => {
+
+                    if (
+                        !activeRoomData
+
+                        ||
+
+                        activeRoomData.roomId !==
+                            roomId
+                    ) {
+
+                        return;
+                    }
+
+
+                    activeRoomData =
+                        null;
+
+
+                    const count =
+                        document.getElementById(
+                            "gameLobbyPlayerCount"
+                        );
+
+
+                    const names =
+                        document.getElementById(
+                            "gameLobbyPlayerNames"
+                        );
+
+
+                    if (
+                        count
+                    ) {
+
+                        count.textContent =
+                            "👥 0 IN LOBBY";
+                    }
+
+
+                    if (
+                        names
+                    ) {
+
+                        names.textContent =
+                            "No active players";
+                    }
+                }
+            );
+
+
+            // =================================================
+            // CURRENT GAME UI
+            // =================================================
+
+            const screen =
+                document.getElementById(
+                    "gameScreen"
+                );
+
+
+            const chat =
+                document.getElementById(
+                    "chatOverlay"
+                );
+
+
+            const chatInput =
+                document.getElementById(
+                    "matchChatInput"
+                );
+
+
+            const toolbar =
+                document.getElementById(
+                    "arenaToolbar"
+                );
+
+
+            const menuToggle =
+                document.getElementById(
+                    "arenaMenuToggle"
+                );
+
+
+            const options =
+                document.getElementById(
+                    "arenaOptions"
+                );
+
+
+            const optionsButton =
+                document.getElementById(
+                    "arenaOptionsButton"
+                );
+
+
+            const chatButton =
+                document.getElementById(
+                    "arenaChatButton"
+                );
+
+
+            // =================================================
+            // OPTIONS
+            // =================================================
+
+            function setOptionsOpen(
+                open
+            ) {
+
+                options.hidden =
+                    !open;
+
+
+                optionsButton.setAttribute(
+                    "aria-expanded",
+                    String(
+                        open
+                    )
+                );
+            }
+
+
+            // =================================================
+            // MEASURE BLUE TOOLBAR
+            // =================================================
+
+            function measureToolbar() {
+
+                const height =
+                    toolbar
+                        .getBoundingClientRect()
+                        .height;
+
+
+                if (
+                    height >
+                    0
+                ) {
+
+                    screen.style.setProperty(
+                        "--menu-height",
+                        `${height}px`
+                    );
+                }
+            }
+
+
+            // =================================================
+            // SHOW / HIDE BLUE TOOLBAR
+            // =================================================
+
+            function setToolbarOpen(
+                open
+            ) {
+
+                toolbar.hidden =
+                    !open;
+
+
+                screen.classList.toggle(
+                    "arena-menu-open",
+                    open
+                );
+
+
+                menuToggle.setAttribute(
+                    "aria-expanded",
+                    String(
+                        open
+                    )
+                );
+
+
+                document
+                    .getElementById(
+                        "topBarTabIcon"
+                    )
+                    .textContent =
+
+                        open
+                            ? "▲"
+                            : "▼";
+
+
+                document
+                    .getElementById(
+                        "arenaMenuLabel"
+                    )
+                    .textContent =
+
+                        open
+                            ? "HIDE MENU"
+                            : "OPTIONS & CHAT";
+
+
+                if (
+                    !open
+                ) {
+
+                    setOptionsOpen(
+                        false
+                    );
+                }
+
+
+                measureToolbar();
+            }
+
+
+            // =================================================
+            // SHOW / HIDE CHAT
+            // =================================================
+
+            function setChatOpen(
+                open
+            ) {
+
+                clearTimeout(
+                    chatInactivityTimer
+                );
+
+
+                chatInactivityTimer =
+                    null;
+
+
+                chat.classList.toggle(
+                    "hidden-overlay",
+                    !open
+                );
+
+
+                chatButton.setAttribute(
+                    "aria-expanded",
+                    String(
+                        open
+                    )
+                );
+
+
+                document
+                    .getElementById(
+                        "toggleChatBtnLabel"
+                    )
+                    .textContent =
+
+                        open
+                            ? "Hide Chat"
+                            : "Show Chat";
+            }
+
+
+            // =================================================
+            // FIVE SECOND CHAT TIMER
+            // =================================================
+
+            chatInput.removeEventListener(
+                "input",
+                triggerChatActivityTimer
+            );
+
+
+            clearTimeout(
+                chatInactivityTimer
+            );
+
+
+            triggerChatActivityTimer =
+                function () {
+
+                    setChatOpen(
+                        true
+                    );
+
+
+                    chatInactivityTimer =
+                        setTimeout(
+                            () => {
+
+                                setChatOpen(
+                                    false
+                                );
+
+                            },
+                            5000
+                        );
+                };
+
+
+            toggleOverlayChat =
+                function () {
+
+                    setOptionsOpen(
+                        false
+                    );
+
+
+                    if (
+                        chat.classList.contains(
+                            "hidden-overlay"
+                        )
+                    ) {
+
+                        triggerChatActivityTimer();
+
+
+                        chatInput.focus();
+
+                    } else {
+
+                        setChatOpen(
+                            false
+                        );
+                    }
+                };
+
+
+            toggleGameTopBar =
+                function () {
+
+                    setToolbarOpen(
+                        toolbar.hidden
+                    );
+                };
+
+
+            chatInput.addEventListener(
+                "input",
+                triggerChatActivityTimer
+            );
+
+
+            menuToggle.addEventListener(
+                "click",
+                toggleGameTopBar
+            );
+
+
+            // =================================================
+            // OPTIONS BUTTON
+            // =================================================
+
+            optionsButton.addEventListener(
+                "click",
+                () => {
+
+                    setOptionsOpen(
+                        options.hidden
+                    );
+                }
+            );
+
+
+            options.addEventListener(
+                "click",
+                async (
+                    event
+                ) => {
+
+                    const button =
+                        event.target.closest(
+                            "button[data-action]"
+                        );
+
+
+                    if (
+                        !button
+                    ) {
+
+                        return;
+                    }
+
+
+                    setOptionsOpen(
+                        false
+                    );
+
+
+                    switch (
+                        button.dataset.action
+                    ) {
+
+                        case "chat":
+
+                            toggleOverlayChat();
+
+                            break;
+
+
+                        case "copy":
+
+                            copyActiveRoomCode();
+
+                            break;
+
+
+                        case "settings":
+
+                            openSettingsModal();
+
+                            break;
+
+
+                        case "online":
+
+                            openOnlineModal();
+
+                            break;
+
+
+                        case "fullscreen":
+
+                            try {
+
+                                if (
+                                    document.fullscreenElement
+                                ) {
+
+                                    await document.exitFullscreen();
+
+                                } else if (
+                                    document.documentElement.requestFullscreen
+                                ) {
+
+                                    await document.documentElement.requestFullscreen();
+
+                                } else {
+
+                                    showToast(
+                                        "Fullscreen is unavailable in this browser.",
+                                        "ℹ️"
+                                    );
+                                }
+
+                            } catch {
+
                                 showToast(
-                                    "Fullscreen is unavailable in this browser.",
+                                    "Could not change fullscreen mode.",
                                     "ℹ️"
                                 );
                             }
-                        } catch {
-                            showToast("Could not change fullscreen mode.", "ℹ️");
+
+                            break;
+
+
+                        case "exit":
+
+                            leaveEmbeddedGame();
+
+                            break;
+                    }
+                }
+            );
+
+
+            document.addEventListener(
+                "click",
+                (
+                    event
+                ) => {
+
+                    if (
+                        !event.target.closest(
+                            "#arenaOptions, #arenaOptionsButton"
+                        )
+                    ) {
+
+                        setOptionsOpen(
+                            false
+                        );
+                    }
+                }
+            );
+
+
+            document.addEventListener(
+                "keydown",
+                (
+                    event
+                ) => {
+
+                    if (
+                        event.key ===
+                            "Escape"
+
+                        &&
+
+                        !options.hidden
+                    ) {
+
+                        setOptionsOpen(
+                            false
+                        );
+
+
+                        optionsButton.focus();
+                    }
+                }
+            );
+
+
+            document.addEventListener(
+                "fullscreenchange",
+                () => {
+
+                    document
+                        .getElementById(
+                            "arenaFullscreen"
+                        )
+                        .textContent =
+
+                            document.fullscreenElement
+
+                                ?
+
+                                "⛶ Exit full screen"
+
+                                :
+
+                                "⛶ Full screen";
+
+
+                    measureToolbar();
+                }
+            );
+
+
+            // =================================================
+            // ENTER GAME
+            // =================================================
+
+            const originalEnterGame =
+                enterGameFromLobby;
+
+
+            enterGameFromLobby =
+                function (
+                    ...args
+                ) {
+
+                    const result =
+                        originalEnterGame.apply(
+                            this,
+                            args
+                        );
+
+
+                    if (
+                        !screen.classList.contains(
+                            "hidden"
+                        )
+                    ) {
+
+                        setToolbarOpen(
+                            true
+                        );
+
+
+                        setOptionsOpen(
+                            false
+                        );
+
+
+                        if (
+                            activeRoomData
+                        ) {
+
+                            updateArenaLobbyDisplay(
+                                activeRoomData
+                            );
                         }
-                        break;
+                    }
 
-                    case "exit":
-                        leaveEmbeddedGame();
-                        break;
-                }
-            });
 
-            document.addEventListener("click", (event) => {
-                if (!event.target.closest("#arenaOptions, #arenaOptionsButton")) {
-                    setOptionsOpen(false);
-                }
-            });
+                    return result;
+                };
 
-            document.addEventListener("keydown", (event) => {
-                if (event.key === "Escape" && !options.hidden) {
-                    setOptionsOpen(false);
-                    optionsButton.focus();
-                }
-            });
 
-            document.addEventListener("fullscreenchange", () => {
-                document.getElementById("arenaFullscreen").textContent =
-                    document.fullscreenElement
-                        ? "⛶ Exit full screen"
-                        : "⛶ Full screen";
+            // =================================================
+            // LEAVE GAME
+            // =================================================
 
-                measureToolbar();
-            });
+            const originalLeaveGame =
+                leaveEmbeddedGame;
 
-            const originalEnterGame = enterGameFromLobby;
 
-            enterGameFromLobby = function (...args) {
-                const result = originalEnterGame.apply(this, args);
+            leaveEmbeddedGame =
+                function (
+                    ...args
+                ) {
 
-                if (!screen.classList.contains("hidden")) {
-                    setToolbarOpen(true);
-                    setOptionsOpen(false);
-                }
+                    setChatOpen(
+                        false
+                    );
 
-                return result;
-            };
 
-            const originalLeaveGame = leaveEmbeddedGame;
+                    setToolbarOpen(
+                        false
+                    );
 
-            leaveEmbeddedGame = function (...args) {
-                setChatOpen(false);
-                setToolbarOpen(false);
 
-                if (document.fullscreenElement && document.exitFullscreen) {
-                    document.exitFullscreen().catch(() => {});
-                }
+                    if (
+                        document.fullscreenElement
 
-                return originalLeaveGame.apply(this, args);
-            };
+                        &&
 
-            window.addEventListener("resize", measureToolbar);
+                        document.exitFullscreen
+                    ) {
 
-            if (typeof ResizeObserver !== "undefined") {
-                new ResizeObserver(measureToolbar).observe(toolbar);
+                        document
+                            .exitFullscreen()
+                            .catch(
+                                () => {}
+                            );
+                    }
+
+
+                    return originalLeaveGame.apply(
+                        this,
+                        args
+                    );
+                };
+
+
+            window.addEventListener(
+                "resize",
+                measureToolbar
+            );
+
+
+            if (
+                typeof ResizeObserver !==
+                "undefined"
+            ) {
+
+                new ResizeObserver(
+                    measureToolbar
+                ).observe(
+                    toolbar
+                );
             }
 
-            setChatOpen(false);
-            setToolbarOpen(!screen.classList.contains("hidden"));
+
+            setChatOpen(
+                false
+            );
+
+
+            setToolbarOpen(
+                !screen.classList.contains(
+                    "hidden"
+                )
+            );
+
         })();
+
     </script>
 
 </body>
