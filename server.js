@@ -9,155 +9,70 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: '*' } });
 
-// Serve your existing browser script, then append the extra lobby/FFA UI below.
+// Serve the existing browser script, then append the extra arena features.
 app.get('/script.js', (req, res) => {
     const filename = ['script.js', 'script(1).js'].find(name =>
         fs.existsSync(path.join(__dirname, name))
     );
 
     if (!filename) {
-        return res
-            .status(404)
-            .send('Missing script.js or script(1).js');
+        return res.status(404).send('Missing script.js or script(1).js');
     }
 
-    res
-        .type('application/javascript')
-        .send(
-            fs.readFileSync(
-                path.join(
-                    __dirname,
-                    filename
-                ),
-                'utf8'
-            ) +
-            '\n;(' +
-            installArenaExtras.toString() +
-            ')();'
-        );
+    res.type('application/javascript').send(
+        fs.readFileSync(path.join(__dirname, filename), 'utf8') +
+        '\n;(' + installArenaExtras.toString() + ')();'
+    );
 });
 
-
 app.use((req, res, next) => {
-
-    if (
-        /^\/data(?:\/|$)/i.test(
-            req.path
-        )
-    ) {
-        return res.sendStatus(404);
-    }
-
+    if (/^\/data(?:\/|$)/i.test(req.path)) return res.sendStatus(404);
 
     if (
         req.path === '/' ||
-        /\.(html|css|png|jpg|jpeg|gif|svg|webp|ico|woff2?|ttf|mp3|mp4)$/i
-            .test(req.path)
+        /\.(html|css|png|jpg|jpeg|gif|svg|webp|ico|woff2?|ttf|mp3|mp4)$/i.test(req.path)
     ) {
         return next();
     }
 
-
     res.sendStatus(404);
 });
 
-
-app.use(
-    express.static(__dirname)
-);
-
-
-// =========================================================
-// SERVER DATA
-// =========================================================
+app.use(express.static(__dirname));
 
 const connectedPlayers = {};
+const activeRoomsMap = new Map();
 
-const activeRoomsMap =
-    new Map();
-
-
-const dataDirectory =
-    path.resolve(
-        process.env.SMASH_DATA_DIR ||
-        path.join(
-            __dirname,
-            'data'
-        )
-    );
-
-
-fs.mkdirSync(
-    dataDirectory,
-    {
-        recursive: true
-    }
+const dataDirectory = path.resolve(
+    process.env.SMASH_DATA_DIR || path.join(__dirname, 'data')
 );
 
+fs.mkdirSync(dataDirectory, { recursive: true });
 
-const dataFile =
-    path.join(
-        dataDirectory,
-        'history.json'
-    );
+const dataFile = path.join(dataDirectory, 'history.json');
 
+const saved = fs.existsSync(dataFile)
+    ? JSON.parse(fs.readFileSync(dataFile, 'utf8'))
+    : {
+        profiles: {},
+        stats: {},
+        directMessages: {},
+        matches: {}
+    };
 
-const saved =
-    fs.existsSync(
-        dataFile
-    )
-        ? JSON.parse(
-            fs.readFileSync(
-                dataFile,
-                'utf8'
-            )
-        )
-        : {
-            profiles: {},
-            stats: {},
-            directMessages: {},
-            matches: {}
-        };
-
-
-if (
-    !saved.profiles ||
-    !saved.stats ||
-    !saved.directMessages ||
-    !saved.matches
-) {
+if (!saved.profiles || !saved.stats || !saved.directMessages || !saved.matches) {
     throw new Error(
         'Invalid history.json. Restore your backup before restarting.'
     );
 }
 
-
-const profiles =
-    Object.assign(
-        Object.create(null),
-        saved.profiles
-    );
-
-
-const playerStats =
-    Object.assign(
-        Object.create(null),
-        saved.stats
-    );
-
-
-const directMessageStore =
-    Object.assign(
-        Object.create(null),
-        saved.directMessages
-    );
-
-
-const matchHistory =
-    Object.assign(
-        Object.create(null),
-        saved.matches
-    );
+const profiles = Object.assign(Object.create(null), saved.profiles);
+const playerStats = Object.assign(Object.create(null), saved.stats);
+const directMessageStore = Object.assign(
+    Object.create(null),
+    saved.directMessages
+);
+const matchHistory = Object.assign(Object.create(null), saved.matches);
 
 
 // =========================================================
@@ -165,47 +80,27 @@ const matchHistory =
 // =========================================================
 
 function saveHistory() {
-
-    const temp =
-        dataFile + '.tmp';
-
-
-    const fd =
-        fs.openSync(
-            temp,
-            'w',
-            0o600
-        );
-
+    const temp = dataFile + '.tmp';
+    const fd = fs.openSync(temp, 'w', 0o600);
 
     try {
-
         fs.writeFileSync(
             fd,
             JSON.stringify({
                 profiles,
-                stats:
-                    playerStats,
-                directMessages:
-                    directMessageStore,
-                matches:
-                    matchHistory
+                stats: playerStats,
+                directMessages: directMessageStore,
+                matches: matchHistory
             })
         );
-
 
         fs.fsyncSync(fd);
 
     } finally {
-
         fs.closeSync(fd);
     }
 
-
-    fs.renameSync(
-        temp,
-        dataFile
-    );
+    fs.renameSync(temp, dataFile);
 }
 
 
@@ -214,102 +109,45 @@ function saveHistory() {
 // =========================================================
 
 function profileFor(username) {
-
-    if (
-        !profiles[
-            username
-        ]
-    ) {
-
-        profiles[
-            username
-        ] = {
+    if (!profiles[username]) {
+        profiles[username] = {
             friends: [],
             requests: [],
             isOnline: true
         };
     }
 
-
-    return profiles[
-        username
-    ];
+    return profiles[username];
 }
 
 
 function savePlayer(player) {
+    const profile = profileFor(player.username);
 
-    const profile =
-        profileFor(
-            player.username
-        );
-
-
-    profile.friends =
-        Array.from(
-            player.friends
-        );
-
-
-    profile.requests =
-        Array.from(
-            player.friendRequests
-        );
-
-
-    profile.isOnline =
-        player.isOnline;
+    profile.friends = Array.from(player.friends);
+    profile.requests = Array.from(player.friendRequests);
+    profile.isOnline = player.isOnline;
 }
 
 
 function syncFriends(username) {
+    const profile = profileFor(username);
 
-    const profile =
-        profileFor(
-            username
-        );
-
-
-    for (
-        const player of
-        Object.values(
-            connectedPlayers
-        )
-    ) {
-
+    for (const player of Object.values(connectedPlayers)) {
         if (
-            player.username !==
-                username ||
+            player.username !== username ||
             !player.isAuthenticated
         ) {
             continue;
         }
 
+        player.friends = new Set(profile.friends);
+        player.friendRequests = new Set(profile.requests);
 
-        player.friends =
-            new Set(
-                profile.friends
-            );
-
-
-        player.friendRequests =
-            new Set(
-                profile.requests
-            );
-
-
-        io.to(
-            player.id
-        ).emit(
-            'saved_friends',
-            {
-                friends:
-                    profile.friends,
-
-                requests:
-                    profile.requests
-            }
-        );
+        io.to(player.id).emit('saved_friends', {
+            friends: profile.friends,
+            requests: profile.requests
+        });
     }
 }
 
@@ -319,305 +157,168 @@ function syncFriends(username) {
 // =========================================================
 
 function escapeHTML(str) {
-
     if (!str) {
         return '';
     }
 
-
     return String(str)
-
-        .replace(
-            /&/g,
-            '&amp;'
-        )
-
-        .replace(
-            /</g,
-            '&lt;'
-        )
-
-        .replace(
-            />/g,
-            '&gt;'
-        )
-
-        .replace(
-            /"/g,
-            '&quot;'
-        )
-
-        .replace(
-            /'/g,
-            '&#039;'
-        );
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
 }
 
 
 function sanitizeUsername(name) {
-
     if (
         !name ||
-        typeof name !==
-            'string'
+        typeof name !== 'string'
     ) {
         return 'Player';
     }
 
-
-    const trimmed =
-        name.trim();
-
+    const trimmed = name.trim();
 
     if (
         !trimmed ||
-        trimmed
-            .toLowerCase() ===
-            'undefined' ||
-        trimmed
-            .toLowerCase() ===
-            'null'
+        trimmed.toLowerCase() === 'undefined' ||
+        trimmed.toLowerCase() === 'null'
     ) {
         return 'Player';
     }
 
-
     return escapeHTML(
-        trimmed.slice(
-            0,
-            20
-        )
+        trimmed.slice(0, 20)
     );
 }
 
 
 // =========================================================
-// ORDINARY ROOM CODE PARSER
-// Used by the existing 1v1 / 2v2 system.
+// NORMAL SMASH KARTS URL / CODE PARSER
 // =========================================================
 
-function extractSmashUrl(
-    rawInput
-) {
-
+function extractSmashUrl(rawInput) {
     if (!rawInput) {
         return null;
     }
 
+    let text = String(rawInput)
+        .trim()
+        .replace(/['"]+/g, '');
 
-    let text =
-        String(
-            rawInput
-        )
-            .trim()
-            .replace(
-                /['"]+/g,
-                ''
-            );
-
-
-    if (
-        /^ttps:\/\//i.test(
-            text
-        )
-    ) {
-
-        text =
-            'h' + text;
+    if (/^ttps:\/\//i.test(text)) {
+        text = 'h' + text;
     }
 
-
-    const link =
-        text.match(
-            /https?:\/\/(?:www\.)?smashkarts\.io\/link\/\?[^\s]+/i
-        );
-
+    const link = text.match(
+        /https?:\/\/(?:www\.)?smashkarts\.io\/link\/\?[^\s]+/i
+    );
 
     if (link) {
         return link[0];
     }
 
-
-    const roomMatch =
-        text.match(
-            /Room:\s*([A-Za-z0-9]+)/i
-        );
-
+    const roomMatch = text.match(
+        /Room:\s*([A-Za-z0-9]+)/i
+    );
 
     if (roomMatch) {
-
         return (
             'https://smashkarts.io/link/?room=' +
-            encodeURIComponent(
-                roomMatch[1]
-            )
+            encodeURIComponent(roomMatch[1])
         );
     }
 
-
-    if (
-        /^[A-Za-z0-9]+$/.test(
-            text
-        )
-    ) {
-
+    if (/^[A-Za-z0-9]+$/.test(text)) {
         return (
             'https://smashkarts.io/link/?room=' +
-            encodeURIComponent(
-                text
-            )
+            encodeURIComponent(text)
         );
     }
-
 
     return null;
 }
 
 
 // =========================================================
-// STRICTER ROOM CODE CHECK
-//
-// Used ONLY for the in-game PASTE CODE button.
-//
-// Random words / random URLs do not get sent.
+// STRICTER CHECK FOR THE PASTE CODE BUTTON
 // =========================================================
 
-function extractVerifiedLookingRoomUrl(
-    rawInput
-) {
-
+function extractVerifiedLookingRoomUrl(rawInput) {
     if (!rawInput) {
         return null;
     }
 
-
-    const text =
-        String(
-            rawInput
-        )
-            .trim()
-            .replace(
-                /['"]+/g,
-                ''
-            );
-
+    const text = String(rawInput)
+        .trim()
+        .replace(/['"]+/g, '');
 
     function validCode(code) {
-
         return (
-            typeof code ===
-                'string' &&
-            /^[A-Za-z0-9]{6,12}$/.test(
-                code
-            ) &&
-            /[A-Za-z]/.test(
-                code
-            ) &&
-            /\d/.test(
-                code
-            )
+            typeof code === 'string' &&
+            /^[A-Za-z0-9]{6,12}$/.test(code) &&
+            /[A-Za-z]/.test(code) &&
+            /\d/.test(code)
         );
     }
 
-
-    // Bare code
-    if (
-        validCode(
-            text
-        )
-    ) {
-
+    if (validCode(text)) {
         return (
             'https://smashkarts.io/link/?room=' +
-            encodeURIComponent(
-                text
-            )
+            encodeURIComponent(text)
         );
     }
 
-
-    // Room: CODE
-    const roomLabel =
-        text.match(
-            /^Room:\s*([A-Za-z0-9]+)$/i
-        );
-
+    const roomLabel = text.match(
+        /^Room:\s*([A-Za-z0-9]+)$/i
+    );
 
     if (
         roomLabel &&
-        validCode(
-            roomLabel[1]
-        )
+        validCode(roomLabel[1])
     ) {
-
         return (
             'https://smashkarts.io/link/?room=' +
-            encodeURIComponent(
-                roomLabel[1]
-            )
+            encodeURIComponent(roomLabel[1])
         );
     }
 
-
-    // Official Smash Karts link
     try {
-
-        const url =
-            new URL(
-                text
-            );
-
+        const url = new URL(text);
 
         const host =
-            url.hostname
-                .toLowerCase();
-
+            url.hostname.toLowerCase();
 
         if (
-            host !==
-                'smashkarts.io' &&
-            host !==
-                'www.smashkarts.io'
+            host !== 'smashkarts.io' &&
+            host !== 'www.smashkarts.io'
         ) {
             return null;
         }
-
 
         const code =
-            url.searchParams.get(
-                'room'
-            );
+            url.searchParams.get('room');
 
-
-        if (
-            !validCode(
-                code
-            )
-        ) {
+        if (!validCode(code)) {
             return null;
         }
-
 
         return (
             'https://smashkarts.io/link/?room=' +
-            encodeURIComponent(
-                code
-            )
+            encodeURIComponent(code)
         );
 
     } catch {
-
         return null;
     }
 }
 
 
 function moderateText(text) {
-
     if (!text) {
         return '';
     }
-
 
     const banned = [
         'badword1',
@@ -626,60 +327,37 @@ function moderateText(text) {
         'spam'
     ];
 
-
     let clean =
         String(text);
 
-
-    for (
-        const word of
-        banned
-    ) {
-
-        clean =
-            clean.replace(
-                new RegExp(
-                    `\\b${word}\\b`,
-                    'gi'
-                ),
-                '***'
-            );
+    for (const word of banned) {
+        clean = clean.replace(
+            new RegExp(
+                `\\b${word}\\b`,
+                'gi'
+            ),
+            '***'
+        );
     }
-
 
     return clean;
 }
 
 
-function getDMKey(
-    a,
-    b
-) {
-
+function getDMKey(a, b) {
     return JSON.stringify(
-        [
-            a,
-            b
-        ].sort()
+        [a, b].sort()
     );
 }
 
 
-function findSocketByUsername(
-    username
-) {
-
+function findSocketByUsername(username) {
     return Object.values(
         connectedPlayers
     ).find(
         p =>
-            p.username
-                .toLowerCase() ===
-            String(
-                username ||
-                ''
-            )
-                .toLowerCase()
+            p.username.toLowerCase() ===
+            String(username || '').toLowerCase()
     );
 }
 
@@ -689,7 +367,6 @@ function findSocketByUsername(
 // =========================================================
 
 function publicRoomList() {
-
     return Array.from(
         activeRoomsMap.values()
     ).map(
@@ -713,7 +390,6 @@ function publicRoomList() {
 
 
 function broadcastPublicRooms() {
-
     io.emit(
         'public_rooms_update',
         publicRoomList()
@@ -722,64 +398,44 @@ function broadcastPublicRooms() {
 
 
 // =========================================================
-// DELETE ALL EMPTY LOBBIES
-//
-// This applies to:
-// 1v1
-// 2v2
-// FFA
-// public rooms
-// friend rooms
-//
-// At 0 players the LIVE lobby disappears immediately.
-// Saved history stays.
+// DELETE ANY LIVE LOBBY AT ZERO PLAYERS
 // =========================================================
 
 function leaveLiveRoom(
     socket,
     roomId
 ) {
-
     const room =
         activeRoomsMap.get(
             roomId
         );
 
-
     if (
         !room ||
         !room.players.some(
             p =>
-                p.id ===
-                socket.id
+                p.id === socket.id
         )
     ) {
         return;
     }
 
-
     socket.leave(
         roomId
     );
 
-
     room.players =
         room.players.filter(
             p =>
-                p.id !==
-                socket.id
+                p.id !== socket.id
         );
 
-
     if (
-        room.players.length ===
-        0
+        room.players.length === 0
     ) {
-
         activeRoomsMap.delete(
             roomId
         );
-
 
         io.emit(
             'lobby_deleted',
@@ -789,7 +445,6 @@ function leaveLiveRoom(
         );
 
     } else {
-
         io.to(
             roomId
         ).emit(
@@ -797,7 +452,6 @@ function leaveLiveRoom(
             room
         );
     }
-
 
     broadcastPublicRooms();
 }
@@ -807,35 +461,28 @@ function addParticipantToHistory(
     room,
     username
 ) {
-
     const old =
         matchHistory[
             room.roomId
         ];
 
-
     if (!old) {
         return;
     }
-
 
     if (
         !Array.isArray(
             old.participants
         )
     ) {
-
-        old.participants =
-            [];
+        old.participants = [];
     }
-
 
     if (
         !old.participants.includes(
             username
         )
     ) {
-
         old.participants.push(
             username
         );
@@ -854,7 +501,6 @@ io.on(
         connectedPlayers[
             socket.id
         ] = {
-
             id:
                 socket.id,
 
@@ -879,7 +525,7 @@ io.on(
 
 
         // =================================================
-        // SESSION
+        // USER SESSION
         // =================================================
 
         socket.on(
@@ -893,58 +539,47 @@ io.on(
                     return;
                 }
 
-
                 const player =
                     connectedPlayers[
                         socket.id
                     ];
 
-
                 if (!player) {
                     return;
                 }
-
 
                 const username =
                     sanitizeUsername(
                         userData.username
                     );
 
-
                 const profile =
                     profileFor(
                         username
                     );
 
-
                 player.username =
                     username;
-
 
                 player.email =
                     userData.email ||
                     null;
 
-
                 player.isAuthenticated =
                     true;
-
 
                 player.friends =
                     new Set(
                         profile.friends
                     );
 
-
                 player.friendRequests =
                     new Set(
                         profile.requests
                     );
 
-
                 player.isOnline =
                     profile.isOnline;
-
 
                 socket.emit(
                     'saved_friends',
@@ -957,7 +592,6 @@ io.on(
                     }
                 );
 
-
                 socket.emit(
                     'friend_requests_update',
                     Array.from(
@@ -965,18 +599,15 @@ io.on(
                     )
                 );
 
-
                 if (
                     !playerStats[
                         username
                     ]
                 ) {
-
                     playerStats[
                         username
                     ] = 0;
                 }
-
 
                 saveHistory();
 
@@ -1000,20 +631,16 @@ io.on(
                         socket.id
                     ];
 
-
                 if (!player) {
                     return;
                 }
 
-
                 player.isOnline =
                     !!isOnline;
-
 
                 savePlayer(
                     player
                 );
-
 
                 saveHistory();
 
@@ -1037,12 +664,10 @@ io.on(
                         socket.id
                     ];
 
-
                 const target =
                     connectedPlayers[
                         targetSocketId
                     ];
-
 
                 if (
                     !sender ||
@@ -1052,7 +677,6 @@ io.on(
                 ) {
                     return;
                 }
-
 
                 if (
                     sender.username ===
@@ -1064,23 +688,19 @@ io.on(
                     return;
                 }
 
-
                 target.friendRequests.add(
                     sender.username
                 );
 
-
                 savePlayer(
                     target
                 );
-
 
                 saveHistory();
 
                 syncFriends(
                     target.username
                 );
-
 
                 io.to(
                     targetSocketId
@@ -1094,7 +714,6 @@ io.on(
                             sender.username
                     }
                 );
-
 
                 io.to(
                     targetSocketId
@@ -1119,7 +738,6 @@ io.on(
                         socket.id
                     ];
 
-
                 if (
                     !user ||
                     !user.isAuthenticated
@@ -1127,23 +745,19 @@ io.on(
                     return;
                 }
 
-
                 user.friendRequests.delete(
                     challengerUsername
                 );
 
-
                 savePlayer(
                     user
                 );
-
 
                 saveHistory();
 
                 syncFriends(
                     user.username
                 );
-
 
                 socket.emit(
                     'friend_requests_update',
@@ -1166,7 +780,6 @@ io.on(
                         socket.id
                     ];
 
-
                 if (
                     !user ||
                     !user.isAuthenticated ||
@@ -1177,47 +790,38 @@ io.on(
                     return;
                 }
 
-
                 user.friends.add(
                     challengerUsername
                 );
 
-
                 user.friendRequests.delete(
                     challengerUsername
                 );
-
 
                 const other =
                     profileFor(
                         challengerUsername
                     );
 
-
                 if (
                     !other.friends.includes(
                         user.username
                     )
                 ) {
-
                     other.friends.push(
                         user.username
                     );
                 }
 
-
                 other.requests =
                     other.requests.filter(
                         name =>
-                            name !==
-                            user.username
+                            name !== user.username
                     );
-
 
                 savePlayer(
                     user
                 );
-
 
                 saveHistory();
 
@@ -1225,26 +829,21 @@ io.on(
                     user.username
                 );
 
-
                 syncFriends(
                     challengerUsername
                 );
-
 
                 const challenger =
                     findSocketByUsername(
                         challengerUsername
                     );
 
-
                 if (
                     challenger
                 ) {
-
                     challenger.friends.add(
                         user.username
                     );
-
 
                     io.to(
                         challenger.id
@@ -1257,14 +856,12 @@ io.on(
                     );
                 }
 
-
                 socket.emit(
                     'friend_requests_update',
                     Array.from(
                         user.friendRequests
                     )
                 );
-
 
                 socket.emit(
                     'friend_request_accepted',
@@ -1273,7 +870,6 @@ io.on(
                             challengerUsername
                     }
                 );
-
 
                 broadcastOnlineUsers();
             }
@@ -1296,7 +892,6 @@ io.on(
                         socket.id
                     ];
 
-
                 if (
                     !sender ||
                     !sender.isAuthenticated ||
@@ -1306,19 +901,16 @@ io.on(
                     return;
                 }
 
-
                 const targetName =
                     sanitizeUsername(
                         targetUsername
                     );
-
 
                 if (
                     !sender.friends.has(
                         targetName
                     )
                 ) {
-
                     return socket.emit(
                         'dm_error',
                         {
@@ -1328,28 +920,23 @@ io.on(
                     );
                 }
 
-
                 const key =
                     getDMKey(
                         sender.username,
                         targetName
                     );
 
-
                 if (
                     !directMessageStore[
                         key
                     ]
                 ) {
-
                     directMessageStore[
                         key
                     ] = [];
                 }
 
-
                 const msg = {
-
                     senderUsername:
                         sender.username,
 
@@ -1362,27 +949,22 @@ io.on(
                         Date.now()
                 };
 
-
                 directMessageStore[
                     key
                 ].push(
                     msg
                 );
 
-
                 saveHistory();
-
 
                 const target =
                     findSocketByUsername(
                         targetName
                     );
 
-
                 if (
                     target
                 ) {
-
                     io.to(
                         target.id
                     ).emit(
@@ -1404,7 +986,6 @@ io.on(
                         }
                     );
                 }
-
 
                 socket.emit(
                     'dm_sent_success',
@@ -1433,7 +1014,6 @@ io.on(
                         socket.id
                     ];
 
-
                 if (
                     !sender ||
                     !sender.isAuthenticated
@@ -1441,12 +1021,10 @@ io.on(
                     return;
                 }
 
-
                 const targetName =
                     sanitizeUsername(
                         targetUsername
                     );
-
 
                 if (
                     !sender.friends.has(
@@ -1456,13 +1034,11 @@ io.on(
                     return;
                 }
 
-
                 const key =
                     getDMKey(
                         sender.username,
                         targetName
                     );
-
 
                 socket.emit(
                     'load_dm_history',
@@ -1493,7 +1069,6 @@ io.on(
                         socket.id
                     ];
 
-
                 if (
                     !player ||
                     !player.isAuthenticated
@@ -1501,14 +1076,12 @@ io.on(
                     return;
                 }
 
-
                 if (
                     player.username !==
                         'Player' &&
                     player.username !==
                         'Guest'
                 ) {
-
                     playerStats[
                         player.username
                     ] =
@@ -1517,7 +1090,6 @@ io.on(
                                 player.username
                             ] || 0
                         ) + 1;
-
 
                     saveHistory();
 
@@ -1546,7 +1118,6 @@ io.on(
                         socket.id
                     ];
 
-
                 const target =
                     targetSocketId
                         ? connectedPlayers[
@@ -1555,7 +1126,6 @@ io.on(
                         : findSocketByUsername(
                             targetUsername
                         );
-
 
                 if (
                     !sender ||
@@ -1567,15 +1137,12 @@ io.on(
                     return;
                 }
 
-
                 const cleanUrl =
                     extractSmashUrl(
                         smashUrl
                     );
 
-
                 if (!cleanUrl) {
-
                     return socket.emit(
                         'room_error',
                         {
@@ -1584,7 +1151,6 @@ io.on(
                         }
                     );
                 }
-
 
                 io.to(
                     target.id
@@ -1624,9 +1190,7 @@ io.on(
                         smashUrl
                     );
 
-
                 if (!cleanUrl) {
-
                     return socket.emit(
                         'room_error',
                         {
@@ -1636,17 +1200,14 @@ io.on(
                     );
                 }
 
-
                 const challenger =
                     connectedPlayers[
                         challengerSocketId
                     ];
 
-
                 if (
                     !challenger
                 ) {
-
                     return socket.emit(
                         'room_error',
                         {
@@ -1656,13 +1217,10 @@ io.on(
                     );
                 }
 
-
                 const roomId =
                     crypto.randomUUID();
 
-
                 const room = {
-
                     roomId,
 
                     hostName:
@@ -1681,7 +1239,6 @@ io.on(
                         2,
 
                     players: [
-
                         {
                             id:
                                 socket.id,
@@ -1708,57 +1265,47 @@ io.on(
                         []
                 };
 
-
                 activeRoomsMap.set(
                     roomId,
                     room
                 );
 
-
                 matchHistory[
                     roomId
                 ] = {
-
                     ...room,
 
                     createdAt:
                         Date.now(),
 
-                    participants:
-                        [
-                            ...new Set(
-                                room.players.map(
-                                    p =>
-                                        p.name
-                                )
+                    participants: [
+                        ...new Set(
+                            room.players.map(
+                                p =>
+                                    p.name
                             )
-                        ]
+                        )
+                    ]
                 };
 
-
                 saveHistory();
-
 
                 socket.join(
                     roomId
                 );
-
 
                 const challengerSocket =
                     io.sockets.sockets.get(
                         challengerSocketId
                     );
 
-
                 if (
                     challengerSocket
                 ) {
-
                     challengerSocket.join(
                         roomId
                     );
                 }
-
 
                 io.to(
                     roomId
@@ -1767,14 +1314,13 @@ io.on(
                     room
                 );
 
-
                 broadcastPublicRooms();
             }
         );
 
 
         // =================================================
-        // CREATE NORMAL 1v1 / 2v2 ROOM
+        // CREATE NORMAL 1V1 / 2V2 ROOM
         // =================================================
 
         socket.on(
@@ -1786,7 +1332,6 @@ io.on(
                         socket.id
                     ];
 
-
                 if (
                     !player ||
                     !player.isAuthenticated
@@ -1794,15 +1339,12 @@ io.on(
                     return;
                 }
 
-
                 const cleanUrl =
                     extractSmashUrl(
                         data.smashUrl
                     );
 
-
                 if (!cleanUrl) {
-
                     return socket.emit(
                         'room_error',
                         {
@@ -1812,20 +1354,17 @@ io.on(
                     );
                 }
 
-
                 for (
                     const oldId of
                     Array.from(
                         activeRoomsMap.keys()
                     )
                 ) {
-
                     leaveLiveRoom(
                         socket,
                         oldId
                     );
                 }
-
 
                 const mode =
                     data.mode ===
@@ -1833,13 +1372,10 @@ io.on(
                         ? '2v2'
                         : '1v1';
 
-
                 const roomId =
                     crypto.randomUUID();
 
-
                 const room = {
-
                     roomId,
 
                     hostName:
@@ -1879,17 +1415,14 @@ io.on(
                         []
                 };
 
-
                 activeRoomsMap.set(
                     roomId,
                     room
                 );
 
-
                 matchHistory[
                     roomId
                 ] = {
-
                     ...room,
 
                     createdAt:
@@ -1900,20 +1433,16 @@ io.on(
                     ]
                 };
 
-
                 saveHistory();
-
 
                 socket.join(
                     roomId
                 );
 
-
                 socket.emit(
                     'room_created',
                     room
                 );
-
 
                 broadcastPublicRooms();
             }
@@ -1941,33 +1470,29 @@ io.on(
 
 
         // =================================================
-        // FFA LOBBIES
+        // FFA
         // =================================================
 
         function joinFFARoom(
             room,
             player
         ) {
-
             for (
                 const oldId of
                 Array.from(
                     activeRoomsMap.keys()
                 )
             ) {
-
                 if (
                     oldId !==
                     room.roomId
                 ) {
-
                     leaveLiveRoom(
                         socket,
                         oldId
                     );
                 }
             }
-
 
             if (
                 !room.players.some(
@@ -1976,12 +1501,10 @@ io.on(
                         socket.id
                 )
             ) {
-
                 if (
                     room.players.length >=
                     room.maxPlayers
                 ) {
-
                     socket.emit(
                         'room_error',
                         {
@@ -1993,7 +1516,6 @@ io.on(
                     return false;
                 }
 
-
                 room.players.push({
                     id:
                         socket.id,
@@ -2003,26 +1525,21 @@ io.on(
                 });
             }
 
-
             addParticipantToHistory(
                 room,
                 player.username
             );
 
-
             socket.join(
                 room.roomId
             );
 
-
             saveHistory();
-
 
             socket.emit(
                 'ffa_lobby_ready',
                 room
             );
-
 
             io.to(
                 room.roomId
@@ -2031,16 +1548,13 @@ io.on(
                 room
             );
 
-
             broadcastPublicRooms();
-
 
             return true;
         }
 
 
-        // PLAY FFA joins an existing lobby.
-        // It does NOT auto-create one.
+        // PLAY FFA joins an existing FFA lobby.
         socket.on(
             'play_ffa',
             () => {
@@ -2050,12 +1564,10 @@ io.on(
                         socket.id
                     ];
 
-
                 if (
                     !player ||
                     !player.isAuthenticated
                 ) {
-
                     return socket.emit(
                         'room_error',
                         {
@@ -2064,7 +1576,6 @@ io.on(
                         }
                     );
                 }
-
 
                 const room =
                     Array.from(
@@ -2077,9 +1588,7 @@ io.on(
                                 r.maxPlayers
                     );
 
-
                 if (!room) {
-
                     return socket.emit(
                         'ffa_no_lobby',
                         {
@@ -2089,7 +1598,6 @@ io.on(
                     );
                 }
 
-
                 joinFFARoom(
                     room,
                     player
@@ -2098,7 +1606,7 @@ io.on(
         );
 
 
-        // CREATE LOBBY creates a fresh FFA website lobby.
+        // CREATE LOBBY creates a new FFA lobby.
         socket.on(
             'create_ffa_lobby',
             () => {
@@ -2108,12 +1616,10 @@ io.on(
                         socket.id
                     ];
 
-
                 if (
                     !player ||
                     !player.isAuthenticated
                 ) {
-
                     return socket.emit(
                         'room_error',
                         {
@@ -2123,34 +1629,27 @@ io.on(
                     );
                 }
 
-
                 for (
                     const oldId of
                     Array.from(
                         activeRoomsMap.keys()
                     )
                 ) {
-
                     leaveLiveRoom(
                         socket,
                         oldId
                     );
                 }
 
-
                 const roomId =
                     crypto.randomUUID();
 
-
                 const room = {
-
                     roomId,
 
                     hostName:
                         player.username,
 
-                    // Opens Smash Karts normally.
-                    // A real room code can then be pasted from in-game.
                     smashUrl:
                         'https://smashkarts.io',
 
@@ -2173,17 +1672,14 @@ io.on(
                         []
                 };
 
-
                 activeRoomsMap.set(
                     roomId,
                     room
                 );
 
-
                 matchHistory[
                     roomId
                 ] = {
-
                     ...room,
 
                     createdAt:
@@ -2192,7 +1688,6 @@ io.on(
                     participants:
                         []
                 };
-
 
                 joinFFARoom(
                     room,
@@ -2203,7 +1698,7 @@ io.on(
 
 
         // =================================================
-        // PASTE CODE INTO CURRENT WEBSITE LOBBY
+        // UPDATE / PASTE GAME CODE
         // =================================================
 
         socket.on(
@@ -2218,19 +1713,16 @@ io.on(
                         socket.id
                     ];
 
-
                 const room =
                     activeRoomsMap.get(
                         roomId
                     );
-
 
                 if (
                     !player ||
                     !player.isAuthenticated ||
                     !room
                 ) {
-
                     return socket.emit(
                         'room_error',
                         {
@@ -2240,7 +1732,6 @@ io.on(
                     );
                 }
 
-
                 if (
                     !room.players.some(
                         p =>
@@ -2248,7 +1739,6 @@ io.on(
                             socket.id
                     )
                 ) {
-
                     return socket.emit(
                         'room_error',
                         {
@@ -2258,15 +1748,12 @@ io.on(
                     );
                 }
 
-
                 const cleanUrl =
                     extractVerifiedLookingRoomUrl(
                         code
                     );
 
-
                 if (!cleanUrl) {
-
                     return socket.emit(
                         'room_error',
                         {
@@ -2276,36 +1763,29 @@ io.on(
                     );
                 }
 
-
                 room.smashUrl =
                     cleanUrl;
-
 
                 room.gameCodeUpdatedBy =
                     player.username;
 
-
                 room.gameCodeUpdatedAt =
                     Date.now();
-
 
                 if (
                     matchHistory[
                         roomId
                     ]
                 ) {
-
                     matchHistory[
                         roomId
                     ].smashUrl =
                         cleanUrl;
 
-
                     matchHistory[
                         roomId
                     ].gameCodeUpdatedBy =
                         player.username;
-
 
                     matchHistory[
                         roomId
@@ -2313,9 +1793,7 @@ io.on(
                         room.gameCodeUpdatedAt;
                 }
 
-
                 saveHistory();
-
 
                 io.to(
                     roomId
@@ -2323,7 +1801,6 @@ io.on(
                     'saved_room_update',
                     room
                 );
-
 
                 io.to(
                     roomId
@@ -2359,12 +1836,10 @@ io.on(
                         roomId
                     );
 
-
                 const player =
                     connectedPlayers[
                         socket.id
                     ];
-
 
                 if (
                     !room ||
@@ -2377,7 +1852,6 @@ io.on(
                     return;
                 }
 
-
                 if (
                     typeof message !==
                         'string' ||
@@ -2386,9 +1860,7 @@ io.on(
                     return;
                 }
 
-
                 const msg = {
-
                     roomId,
 
                     senderName:
@@ -2403,27 +1875,22 @@ io.on(
                         Date.now()
                 };
 
-
                 room.messages.push(
                     msg
                 );
-
 
                 if (
                     matchHistory[
                         roomId
                     ]
                 ) {
-
                     matchHistory[
                         roomId
                     ].messages =
                         room.messages;
                 }
 
-
                 saveHistory();
-
 
                 io.to(
                     roomId
@@ -2450,7 +1917,6 @@ io.on(
                         socket.id
                     ];
 
-
                 if (
                     !player ||
                     !player.isAuthenticated ||
@@ -2461,12 +1927,10 @@ io.on(
                     return;
                 }
 
-
                 for (
                     const name of
                     friends
                 ) {
-
                     if (
                         typeof name !==
                         'string'
@@ -2474,12 +1938,10 @@ io.on(
                         continue;
                     }
 
-
                     const targetName =
                         sanitizeUsername(
                             name
                         );
-
 
                     if (
                         targetName ===
@@ -2491,30 +1953,25 @@ io.on(
                         continue;
                     }
 
-
                     const target =
                         profileFor(
                             targetName
                         );
-
 
                     if (
                         !target.requests.includes(
                             player.username
                         )
                     ) {
-
                         target.requests.push(
                             player.username
                         );
                     }
 
-
                     syncFriends(
                         targetName
                     );
                 }
-
 
                 saveHistory();
             }
@@ -2522,7 +1979,7 @@ io.on(
 
 
         // =================================================
-        // SAVED MATCH HISTORY
+        // SAVED HISTORY
         // =================================================
 
         socket.on(
@@ -2534,7 +1991,6 @@ io.on(
                         socket.id
                     ];
 
-
                 if (
                     !player ||
                     !player.isAuthenticated
@@ -2542,14 +1998,12 @@ io.on(
                     return;
                 }
 
-
                 socket.emit(
                     'saved_match_history',
 
                     Object.values(
                         matchHistory
                     )
-
                         .filter(
                             room =>
                                 Array.isArray(
@@ -2559,7 +2013,6 @@ io.on(
                                     player.username
                                 )
                         )
-
                         .sort(
                             (a, b) =>
                                 (
@@ -2577,7 +2030,7 @@ io.on(
 
 
         // =================================================
-        // JOIN PUBLIC ROOM
+        // JOIN PUBLIC LOBBY
         // =================================================
 
         socket.on(
@@ -2591,19 +2044,16 @@ io.on(
                         socket.id
                     ];
 
-
                 const room =
                     activeRoomsMap.get(
                         roomId
                     );
-
 
                 if (
                     !player ||
                     !player.isAuthenticated ||
                     !room
                 ) {
-
                     return socket.emit(
                         'room_error',
                         {
@@ -2613,26 +2063,22 @@ io.on(
                     );
                 }
 
-
                 for (
                     const oldId of
                     Array.from(
                         activeRoomsMap.keys()
                     )
                 ) {
-
                     if (
                         oldId !==
                         roomId
                     ) {
-
                         leaveLiveRoom(
                             socket,
                             oldId
                         );
                     }
                 }
-
 
                 if (
                     !room.players.some(
@@ -2641,12 +2087,10 @@ io.on(
                             socket.id
                     )
                 ) {
-
                     if (
                         room.players.length >=
                         room.maxPlayers
                     ) {
-
                         return socket.emit(
                             'room_error',
                             {
@@ -2655,7 +2099,6 @@ io.on(
                             }
                         );
                     }
-
 
                     room.players.push({
                         id:
@@ -2666,20 +2109,16 @@ io.on(
                     });
                 }
 
-
                 addParticipantToHistory(
                     room,
                     player.username
                 );
 
-
                 saveHistory();
-
 
                 socket.join(
                     roomId
                 );
-
 
                 socket.emit(
                     room.mode ===
@@ -2690,14 +2129,12 @@ io.on(
                     room
                 );
 
-
                 io.to(
                     roomId
                 ).emit(
                     'saved_room_update',
                     room
                 );
-
 
                 broadcastPublicRooms();
             }
@@ -2718,18 +2155,15 @@ io.on(
                         activeRoomsMap.keys()
                     )
                 ) {
-
                     leaveLiveRoom(
                         socket,
                         roomId
                     );
                 }
 
-
                 delete connectedPlayers[
                     socket.id
                 ];
-
 
                 broadcastOnlineUsers();
 
@@ -2745,18 +2179,15 @@ io.on(
 // =========================================================
 
 function broadcastOnlineUsers() {
-
     const users =
         Object.values(
             connectedPlayers
         )
-
             .filter(
                 p =>
                     p.isAuthenticated &&
                     p.isOnline
             )
-
             .map(
                 p => ({
                     id:
@@ -2771,7 +2202,6 @@ function broadcastOnlineUsers() {
                         )
                 })
             );
-
 
     io.emit(
         'online_users_update',
@@ -2790,12 +2220,10 @@ function broadcastOnlineUsers() {
 // =========================================================
 
 function broadcastLeaderboard() {
-
     const topPlayers =
         Object.entries(
             playerStats
         )
-
             .map(
                 ([
                     username,
@@ -2805,7 +2233,6 @@ function broadcastLeaderboard() {
                     matches
                 })
             )
-
             .filter(
                 p =>
                     p.username !==
@@ -2813,18 +2240,15 @@ function broadcastLeaderboard() {
                     p.username !==
                         'Guest'
             )
-
             .sort(
                 (a, b) =>
                     b.matches -
                     a.matches
             )
-
             .slice(
                 0,
                 5
             );
-
 
     io.emit(
         'leaderboard_update',
@@ -2841,11 +2265,9 @@ const PORT =
     process.env.PORT ||
     3000;
 
-
 server.listen(
     PORT,
     () => {
-
         console.log(
             `Smashkarts1v1s Arena running on port ${PORT}`
         );
@@ -2855,20 +2277,11 @@ server.listen(
 
 // =========================================================
 // BROWSER-SIDE EXTRAS
-//
-// This automatically runs AFTER your existing script.js
-// or script(1).js.
 // =========================================================
 
 function installArenaExtras() {
 
-
-    // =====================================================
-    // SAVED SETTINGS
-    // =====================================================
-
     const defaults = {
-
         gameplay:
             'popup',
 
@@ -2885,21 +2298,21 @@ function installArenaExtras() {
             null
     };
 
-
     let preferences = {
         ...defaults
     };
-
 
     let settingsWarningShown =
         false;
 
 
-    function storageKey() {
+    // =====================================================
+    // SAVED SETTINGS
+    // =====================================================
 
+    function storageKey() {
         const user =
             AuthSession.getUser();
-
 
         return (
             'smash_preferences_v1:' +
@@ -2908,8 +2321,7 @@ function installArenaExtras() {
                     ? String(
                         user.email ||
                         user.username
-                    )
-                        .toLowerCase()
+                    ).toLowerCase()
 
                     : 'guest'
             )
@@ -2918,23 +2330,18 @@ function installArenaExtras() {
 
 
     function readPreferences() {
-
         try {
-
             return {
-
                 ...defaults,
 
                 ...JSON.parse(
                     localStorage.getItem(
                         storageKey()
-                    ) ||
-                    '{}'
+                    ) || '{}'
                 )
             };
 
         } catch {
-
             return {
                 ...defaults
             };
@@ -2943,9 +2350,7 @@ function installArenaExtras() {
 
 
     function savePreferences() {
-
         try {
-
             localStorage.setItem(
                 storageKey(),
                 JSON.stringify(
@@ -2954,17 +2359,14 @@ function installArenaExtras() {
             );
 
         } catch {
-
             if (
                 !settingsWarningShown
             ) {
-
                 showToast(
                     'Browser storage is full or disabled; settings could not be saved.',
                     '⚠️'
                 );
             }
-
 
             settingsWarningShown =
                 true;
@@ -2977,10 +2379,8 @@ function installArenaExtras() {
 
 
     function restorePreferences() {
-
         preferences =
             readPreferences();
-
 
         currentGameplayMode =
             preferences.gameplay ===
@@ -2988,37 +2388,30 @@ function installArenaExtras() {
                 ? 'embed'
                 : 'popup';
 
-
         const gameplaySelect =
             document.getElementById(
                 'gameplayModeSelect'
             );
 
-
         if (
             gameplaySelect
         ) {
-
             gameplaySelect.value =
                 currentGameplayMode;
         }
-
 
         const onlineToggle =
             document.getElementById(
                 'onlineStatusToggle'
             );
 
-
         if (
             onlineToggle
         ) {
-
             onlineToggle.checked =
                 preferences.online !==
                 false;
         }
-
 
         originalSwitchMode(
             preferences.mode ===
@@ -3027,17 +2420,14 @@ function installArenaExtras() {
                 : '1v1'
         );
 
-
         const win =
             document.getElementById(
                 'winCondition'
             );
 
-
         if (
             win
         ) {
-
             win.value =
                 [
                     'First to 3',
@@ -3050,26 +2440,21 @@ function installArenaExtras() {
                     : 'First to 3';
         }
 
-
         activeDMTargetUser =
             preferences.lastFriend;
-
 
         const dmHeader =
             document.getElementById(
                 'activeDMChatHeader'
             );
 
-
         if (
             activeDMTargetUser &&
             dmHeader
         ) {
-
             dmHeader.textContent =
                 '💬 MESSAGE WITH ' +
-                activeDMTargetUser
-                    .toUpperCase();
+                activeDMTargetUser.toUpperCase();
         }
     }
 
@@ -3081,10 +2466,8 @@ function installArenaExtras() {
                 mode
             );
 
-
             preferences.mode =
                 mode;
-
 
             savePreferences();
         };
@@ -3099,10 +2482,8 @@ function installArenaExtras() {
                     ? 'embed'
                     : 'popup';
 
-
             preferences.gameplay =
                 currentGameplayMode;
-
 
             savePreferences();
         };
@@ -3118,9 +2499,7 @@ function installArenaExtras() {
             preferences.online =
                 !!online;
 
-
             savePreferences();
-
 
             originalOnlineStatus(
                 online
@@ -3137,14 +2516,12 @@ function installArenaExtras() {
     if (
         winCondition
     ) {
-
         winCondition.addEventListener(
             'change',
             e => {
 
                 preferences.win =
                     e.target.value;
-
 
                 savePreferences();
             }
@@ -3161,25 +2538,20 @@ function installArenaExtras() {
 
             restorePreferences();
 
-
             originalUpdateUserUI();
-
 
             if (
                 AuthSession.getUser()
             ) {
-
                 socket.emit(
                     'toggle_online_status',
                     preferences.online !==
                         false
                 );
 
-
                 if (
                     activeDMTargetUser
                 ) {
-
                     socket.emit(
                         'get_dm_history',
                         {
@@ -3199,7 +2571,6 @@ function installArenaExtras() {
             if (
                 AuthSession.getUser()
             ) {
-
                 updateUserUI();
             }
         }
@@ -3207,7 +2578,7 @@ function installArenaExtras() {
 
 
     // =====================================================
-    // SAVED DMs / FRIENDS
+    // DIRECT MESSAGE HISTORY
     // =====================================================
 
     const originalOpenDM =
@@ -3220,23 +2591,18 @@ function installArenaExtras() {
             preferences.lastFriend =
                 username;
 
-
             savePreferences();
-
 
             const messages =
                 document.getElementById(
                     'tabDMMessages'
                 );
 
-
             if (
                 messages
             ) {
-
                 messages.replaceChildren();
             }
-
 
             originalOpenDM(
                 username
@@ -3252,50 +2618,40 @@ function installArenaExtras() {
                     'tabDMMessages'
                 );
 
-
             if (
                 !container
             ) {
                 return;
             }
 
-
             const user =
                 AuthSession.getUser();
 
-
             container.replaceChildren();
-
 
             for (
                 const message of
-                history ||
-                []
+                history || []
             ) {
-
                 const own =
                     user &&
                     message.senderUsername ===
                         user.username;
-
 
                 const row =
                     document.createElement(
                         'div'
                     );
 
-
                 row.className =
                     own
                         ? 'text-right'
                         : 'text-left';
 
-
                 const bubble =
                     document.createElement(
                         'span'
                     );
-
 
                 bubble.className =
                     (
@@ -3305,10 +2661,8 @@ function installArenaExtras() {
                     ) +
                     ' font-bold px-2.5 py-1 rounded-xl inline-block text-[11px] mb-1';
 
-
                 bubble.style.overflowWrap =
                     'anywhere';
-
 
                 bubble.textContent =
                     (
@@ -3319,28 +2673,23 @@ function installArenaExtras() {
                     ': ' +
                     message.message;
 
-
                 if (
                     message.timestamp
                 ) {
-
                     bubble.title =
                         new Date(
                             message.timestamp
                         ).toLocaleString();
                 }
 
-
                 row.appendChild(
                     bubble
                 );
-
 
                 container.appendChild(
                     row
                 );
             }
-
 
             container.scrollTop =
                 container.scrollHeight;
@@ -3350,7 +2699,6 @@ function installArenaExtras() {
     socket.off(
         'dm_sent_success'
     );
-
 
     socket.off(
         'load_dm_history'
@@ -3365,7 +2713,6 @@ function installArenaExtras() {
                 data.targetUsername ===
                 activeDMTargetUser
             ) {
-
                 renderDMMessages(
                     data.history
                 );
@@ -3382,7 +2729,6 @@ function installArenaExtras() {
                 data.targetUsername ===
                 activeDMTargetUser
             ) {
-
                 renderDMMessages(
                     data.history
                 );
@@ -3391,6 +2737,10 @@ function installArenaExtras() {
     );
 
 
+    // =====================================================
+    // FRIENDS
+    // =====================================================
+
     socket.on(
         'saved_friends',
         data => {
@@ -3398,29 +2748,24 @@ function installArenaExtras() {
             const user =
                 AuthSession.getUser();
 
-
             if (
                 !user
             ) {
                 return;
             }
 
-
             const previous =
                 getLocalFriends(
                     user.username
                 );
-
 
             saveLocalFriends(
                 user.username,
                 data.friends
             );
 
-
             pendingFriendRequests =
                 data.requests;
-
 
             const cachedSelf =
                 onlineUsersCache.find(
@@ -3429,18 +2774,14 @@ function installArenaExtras() {
                         user.username
                 );
 
-
             if (
                 cachedSelf
             ) {
-
                 cachedSelf.friends =
                     data.friends;
             }
 
-
             updateFriendsTabList();
-
 
             const missing =
                 previous.filter(
@@ -3450,11 +2791,9 @@ function installArenaExtras() {
                         )
                 );
 
-
             if (
                 missing.length
             ) {
-
                 socket.emit(
                     'restore_legacy_friends',
                     {
@@ -3493,7 +2832,7 @@ function installArenaExtras() {
 
 
     // =====================================================
-    // ROOM CHAT / ACTIVE PLAYERS
+    // ROOM CHAT
     // =====================================================
 
     function renderRoomMessages(
@@ -3506,12 +2845,10 @@ function installArenaExtras() {
                 'preGameChatMessages'
             ]
         ) {
-
             const container =
                 document.getElementById(
                     id
                 );
-
 
             if (
                 !container
@@ -3519,41 +2856,32 @@ function installArenaExtras() {
                 continue;
             }
 
-
             container.replaceChildren();
-
 
             for (
                 const message of
-                messages ||
-                []
+                messages || []
             ) {
-
                 const row =
                     document.createElement(
                         'div'
                     );
 
-
                 row.className =
                     'bg-blue-950/80 p-1.5 rounded-xl border border-white/10';
 
-
                 row.style.overflowWrap =
                     'anywhere';
-
 
                 row.textContent =
                     message.senderName +
                     ': ' +
                     message.message;
 
-
                 container.appendChild(
                     row
                 );
             }
-
 
             container.scrollTop =
                 container.scrollHeight;
@@ -3564,15 +2892,12 @@ function installArenaExtras() {
     function extractRoomCode(
         url
     ) {
-
         const match =
             String(
-                url ||
-                ''
+                url || ''
             ).match(
                 /[?&]room=([A-Za-z0-9]+)/i
             );
-
 
         return match
             ? match[1]
@@ -3580,19 +2905,16 @@ function installArenaExtras() {
     }
 
 
+    // =====================================================
+    // SAFE LOBBY UI UPDATE
+    // =====================================================
+
     function refreshLobbyUI(
         room
     ) {
-
-        if (
-            !room
-        ) {
+        if (!room) {
             return;
         }
-
-
-        ensureGameToolbarExtras();
-
 
         const players =
             Array.isArray(
@@ -3601,125 +2923,117 @@ function installArenaExtras() {
                 ? room.players
                 : [];
 
-
-        // =================================================
-        // LIVE LOBBY COUNT
-        // =================================================
-
         const count =
             document.getElementById(
                 'gameLobbyPlayerCount'
             );
 
+        const newCountText =
+            `👥 ${players.length} IN LOBBY`;
 
         if (
-            count
+            count &&
+            count.textContent !==
+                newCountText
         ) {
-
             count.textContent =
-                `👥 ${players.length} IN LOBBY`;
+                newCountText;
         }
-
-
-        // =================================================
-        // PLAYER NAMES NEXT TO COUNT
-        // =================================================
 
         const names =
             document.getElementById(
                 'gameLobbyPlayerNames'
             );
 
+        const namesText =
+            players.length
+                ? players
+                    .map(
+                        player =>
+                            player.name
+                    )
+                    .join(', ')
+                : 'No active players';
 
         if (
-            names
+            names &&
+            names.textContent !==
+                namesText
         ) {
-
-            names.replaceChildren();
-
-
-            const text =
-                players.length
-                    ? players
-                        .map(
-                            p =>
-                                p.name
-                        )
-                        .join(
-                            ', '
-                        )
-
-                    : 'No active players';
-
-
             names.textContent =
-                text;
-
+                namesText;
 
             names.title =
-                text;
+                namesText;
         }
-
-
-        // Refresh the full players list
-        // inside the Lobby page too.
-        if (
-            typeof updatePreGameLobbyUI ===
-            'function'
-        ) {
-
-            updatePreGameLobbyUI(
-                room
-            );
-        }
-
 
         const badge =
             document.getElementById(
                 'gameModeBadge'
             );
 
+        const modeText =
+            String(
+                room.mode || ''
+            ).toUpperCase();
 
         if (
             badge &&
-            room.mode
+            badge.textContent !==
+                modeText
         ) {
-
             badge.textContent =
-                String(
-                    room.mode
-                ).toUpperCase();
+                modeText;
         }
-
 
         const code =
             extractRoomCode(
                 room.smashUrl
             );
 
-
         currentRoomCode =
             code;
-
 
         const codeDisplay =
             document.getElementById(
                 'gameRoomCodeDisplay'
             );
 
+        const codeText =
+            code ||
+            (
+                room.mode ===
+                'ffa'
+                    ? 'NOT SET'
+                    : '------'
+            );
 
         if (
-            codeDisplay
+            codeDisplay &&
+            codeDisplay.textContent !==
+                codeText
         ) {
-
             codeDisplay.textContent =
-                code ||
-                (
-                    room.mode ===
-                    'ffa'
-                        ? 'NOT SET'
-                        : '------'
-                );
+                codeText;
+        }
+
+        // Only rebuild the full player list if the lobby panel is open.
+        const lobbyModal =
+            document.getElementById(
+                'preGameLobbyModal'
+            );
+
+        if (
+            lobbyModal &&
+            !lobbyModal.classList.contains(
+                'hidden'
+            ) &&
+            typeof updatePreGameLobbyUI ===
+                'function'
+        ) {
+            updatePreGameLobbyUI(
+                room
+            );
         }
     }
 
@@ -3733,16 +3047,14 @@ function installArenaExtras() {
                 activeRoomData.roomId ===
                     room.roomId
             ) {
-
                 activeRoomData =
                     room;
 
-
                 renderRoomMessages(
-                    room.messages ||
-                    []
+                    room.messages || []
                 );
 
+                ensureGameToolbarExtras();
 
                 refreshLobbyUI(
                     room
@@ -3763,36 +3075,29 @@ function installArenaExtras() {
                 activeRoomData.roomId ===
                     roomId
             ) {
-
                 activeRoomData =
                     null;
-
 
                 const count =
                     document.getElementById(
                         'gameLobbyPlayerCount'
                     );
 
-
                 if (
                     count
                 ) {
-
                     count.textContent =
                         '👥 0 IN LOBBY';
                 }
-
 
                 const names =
                     document.getElementById(
                         'gameLobbyPlayerNames'
                     );
 
-
                 if (
                     names
                 ) {
-
                     names.textContent =
                         'No active players';
                 }
@@ -3821,20 +3126,16 @@ function installArenaExtras() {
                 return;
             }
 
-
             if (
                 !activeRoomData.messages
             ) {
-
                 activeRoomData.messages =
                     [];
             }
 
-
             activeRoomData.messages.push(
                 message
             );
-
 
             renderRoomMessages(
                 activeRoomData.messages
@@ -3858,28 +3159,31 @@ function installArenaExtras() {
                 room
             );
 
-
             renderRoomMessages(
-                room.messages ||
-                    []
+                room.messages || []
             );
-
 
             refreshLobbyUI(
                 room
             );
 
+            if (
+                typeof updatePreGameLobbyUI ===
+                'function'
+            ) {
+                updatePreGameLobbyUI(
+                    room
+                );
+            }
 
             const title =
                 document.querySelector(
                     '#preGameLobbyModal h3'
                 );
 
-
             if (
                 title
             ) {
-
                 title.textContent =
                     room.mode ===
                     'ffa'
@@ -3887,55 +3191,42 @@ function installArenaExtras() {
                         : '👥 MATCH LOBBY';
             }
 
-
             const headings =
                 document.querySelectorAll(
                     '#preGameLobbyModal h4'
                 );
 
-
             if (
-                headings[
-                    0
-                ]
+                headings[0]
             ) {
-
                 headings[
                     0
                 ].textContent =
                     `👥 ACTIVE PLAYERS (${room.players.length})`;
             }
 
-
             if (
-                headings[
-                    1
-                ]
+                headings[1]
             ) {
-
                 headings[
                     1
                 ].textContent =
                     '💬 LOBBY CHAT';
             }
 
-
             const playButton =
                 document.querySelector(
                     '#preGameLobbyModal button[onclick="enterGameFromLobby()"]'
                 );
-
 
             const gameScreen =
                 document.getElementById(
                     'gameScreen'
                 );
 
-
             if (
                 playButton
             ) {
-
                 playButton.textContent =
                     gameScreen &&
                     !gameScreen.classList.contains(
@@ -3948,14 +3239,13 @@ function installArenaExtras() {
 
 
     // =====================================================
-    // HISTORY
+    // HISTORY BESIDE LOGOUT
     // =====================================================
 
     const historyDialog =
         document.createElement(
             'dialog'
         );
-
 
     historyDialog.style.cssText =
         'width:min(720px,94vw);' +
@@ -3973,17 +3263,14 @@ function installArenaExtras() {
             'button'
         );
 
-
     historyClose.textContent =
         '✕ Close history';
-
 
     historyClose.style.cssText =
         'float:right;' +
         'padding:8px;' +
         'color:#ffe238;' +
         'font-weight:bold';
-
 
     historyClose.onclick =
         () =>
@@ -3995,10 +3282,8 @@ function installArenaExtras() {
             'h2'
         );
 
-
     historyTitle.textContent =
         'Saved match history';
-
 
     historyTitle.style.cssText =
         'font-size:20px;' +
@@ -4018,25 +3303,20 @@ function installArenaExtras() {
         historyList
     );
 
-
     document.body.appendChild(
         historyDialog
     );
 
 
     function openHistory() {
-
         historyList.textContent =
             'Loading saved matches…';
-
 
         if (
             !historyDialog.open
         ) {
-
             historyDialog.showModal();
         }
-
 
         socket.emit(
             'get_saved_match_history'
@@ -4044,64 +3324,65 @@ function installArenaExtras() {
     }
 
 
-    const historyButton =
-        document.createElement(
-            'button'
-        );
+    function installHistoryButton() {
+        if (
+            document.getElementById(
+                'headerHistoryButton'
+            )
+        ) {
+            return;
+        }
 
+        const mainHeader =
+            document.querySelector(
+                '#mainDashboard header'
+            );
 
-    historyButton.id =
-        'headerHistoryButton';
+        if (
+            !mainHeader
+        ) {
+            return;
+        }
 
+        const historyButton =
+            document.createElement(
+                'button'
+            );
 
-    historyButton.textContent =
-        '📜 History';
+        historyButton.id =
+            'headerHistoryButton';
 
+        historyButton.textContent =
+            '📜 History';
 
-    historyButton.className =
-        'bg-blue-800 hover:bg-blue-700 text-yellow-300 text-xs font-bold px-4 py-2 rounded-xl';
+        historyButton.className =
+            'bg-blue-800 hover:bg-blue-700 text-yellow-300 text-xs font-bold px-4 py-2 rounded-xl';
 
-
-    historyButton.onclick =
-        openHistory;
-
-
-    // Put History directly beside Logout.
-    const mainHeader =
-        document.querySelector(
-            '#mainDashboard header'
-        );
-
-
-    if (
-        mainHeader &&
-        !document.getElementById(
-            'headerHistoryButton'
-        )
-    ) {
+        historyButton.onclick =
+            openHistory;
 
         const logoutButton =
             mainHeader.querySelector(
                 'button[onclick*="AuthSession.logout"]'
             );
 
-
         if (
             logoutButton
         ) {
-
             mainHeader.insertBefore(
                 historyButton,
                 logoutButton
             );
 
         } else {
-
             mainHeader.appendChild(
                 historyButton
             );
         }
     }
+
+
+    installHistoryButton();
 
 
     socket.on(
@@ -4110,26 +3391,21 @@ function installArenaExtras() {
 
             historyList.replaceChildren();
 
-
             if (
                 !rooms.length
             ) {
-
                 historyList.textContent =
                     'No saved matches yet.';
             }
-
 
             for (
                 const room of
                 rooms
             ) {
-
                 const details =
                     document.createElement(
                         'details'
                     );
-
 
                 details.style.cssText =
                     'padding:12px;' +
@@ -4137,16 +3413,13 @@ function installArenaExtras() {
                     'background:#102653;' +
                     'border-radius:12px';
 
-
                 const summary =
                     document.createElement(
                         'summary'
                     );
 
-
                 summary.style.cursor =
                     'pointer';
-
 
                 summary.textContent =
                     new Date(
@@ -4159,44 +3432,34 @@ function installArenaExtras() {
                     (
                         room.participants ||
                         []
-                    ).join(
-                        ', '
-                    );
-
+                    ).join(', ');
 
                 details.appendChild(
                     summary
                 );
 
-
                 for (
                     const message of
-                    room.messages ||
-                    []
+                    room.messages || []
                 ) {
-
                     const row =
                         document.createElement(
                             'p'
                         );
 
-
                     row.style.cssText =
                         'margin-top:8px;' +
                         'overflow-wrap:anywhere';
-
 
                     row.textContent =
                         message.senderName +
                         ': ' +
                         message.message;
 
-
                     details.appendChild(
                         row
                     );
                 }
-
 
                 if (
                     !(
@@ -4204,22 +3467,18 @@ function installArenaExtras() {
                         []
                     ).length
                 ) {
-
                     const empty =
                         document.createElement(
                             'p'
                         );
 
-
                     empty.textContent =
                         'No chat messages in this match.';
-
 
                     details.appendChild(
                         empty
                     );
                 }
-
 
                 historyList.appendChild(
                     details
@@ -4230,25 +3489,27 @@ function installArenaExtras() {
 
 
     // =====================================================
-    // FFA REAL PAGE
-    //
-    // This is NOT an overlay.
-    // It uses the same center-page tab system as 1v1 / 2v2.
+    // FFA TAB
     // =====================================================
 
     function installFFATab() {
+        if (
+            document.getElementById(
+                'btnNavFFA'
+            )
+        ) {
+            return;
+        }
 
         const oneVOneButton =
             document.getElementById(
                 'btnNav1v1'
             );
 
-
         const setupTab =
             document.getElementById(
                 'setupTab'
             );
-
 
         if (
             !oneVOneButton ||
@@ -4257,171 +3518,119 @@ function installArenaExtras() {
             return;
         }
 
+        const ffaNav =
+            document.createElement(
+                'button'
+            );
 
-        // ---------------------------------------------
-        // SIDEBAR FFA BUTTON
-        // ---------------------------------------------
+        ffaNav.id =
+            'btnNavFFA';
 
-        let ffaNav =
-            document.getElementById(
-                'btnNavFFA'
+        ffaNav.type =
+            'button';
+
+        ffaNav.title =
+            'FFA Matchmaking';
+
+        ffaNav.textContent =
+            '🔥';
+
+        ffaNav.className =
+            'sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg';
+
+        oneVOneButton
+            .parentElement
+            .insertBefore(
+                ffaNav,
+                oneVOneButton
             );
 
 
-        if (
-            !ffaNav
-        ) {
-
-            ffaNav =
-                document.createElement(
-                    'button'
-                );
-
-
-            ffaNav.id =
-                'btnNavFFA';
-
-
-            ffaNav.type =
-                'button';
-
-
-            ffaNav.title =
-                'FFA Matchmaking';
-
-
-            ffaNav.textContent =
-                '🔥';
-
-
-            ffaNav.className =
-                'sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg';
-
-
-            // Exact order:
-            //
-            // 🏆 Leaderboard
-            // 🔥 FFA
-            // 🎮 1v1
-            // ⚔️ 2v2
-            // 💬 Messages
-            oneVOneButton
-                .parentElement
-                .insertBefore(
-                    ffaNav,
-                    oneVOneButton
-                );
-        }
-
-
-        // ---------------------------------------------
-        // FFA PAGE
-        // ---------------------------------------------
-
-        let ffaTab =
-            document.getElementById(
-                'ffaTab'
+        const ffaTab =
+            document.createElement(
+                'div'
             );
 
+        ffaTab.id =
+            'ffaTab';
 
-        if (
-            !ffaTab
-        ) {
+        ffaTab.className =
+            'tab-content hidden space-y-6';
 
-            ffaTab =
-                document.createElement(
-                    'div'
-                );
+        ffaTab.innerHTML = `
+            <div class="flex justify-between items-center border-b border-white/10 pb-4 gap-4">
 
+                <div>
+                    <h2 class="font-bungee text-2xl text-white">
+                        FFA MATCHMAKING
+                    </h2>
 
-            ffaTab.id =
-                'ffaTab';
-
-
-            ffaTab.className =
-                'tab-content hidden space-y-6';
-
-
-            ffaTab.innerHTML = `
-                <div class="flex justify-between items-center border-b border-white/10 pb-4 gap-4">
-
-                    <div>
-                        <h2 class="font-bungee text-2xl text-white">
-                            FFA MATCHMAKING
-                        </h2>
-
-                        <p class="text-xs text-blue-200">
-                            Join an open FFA lobby or create a new one
-                        </p>
-                    </div>
-
-                    <button
-                        id="ffaPublicLobbyButton"
-                        type="button"
-                        class="text-xs bg-emerald-500 hover:bg-emerald-400 text-white font-black px-5 py-2.5 rounded-xl uppercase"
-                    >
-                        🔍 Public Lobbies
-                    </button>
-
-                </div>
-
-
-                <div class="space-y-4">
-
-                    <button
-                        id="ffaPlayButton"
-                        type="button"
-                        class="btn-smash w-full py-4 rounded-2xl font-bungee text-xl text-white"
-                    >
-                        🔥 PLAY FFA
-                    </button>
-
-
-                    <button
-                        id="ffaCreateButton"
-                        type="button"
-                        class="bg-emerald-500 hover:bg-emerald-400 w-full py-4 rounded-2xl font-bungee text-xl text-white shadow-lg"
-                    >
-                        + CREATE LOBBY
-                    </button>
-
-                </div>
-
-
-                <div class="bg-blue-900/60 border border-white/10 rounded-2xl p-4">
-
-                    <p class="text-xs text-blue-100 leading-relaxed">
-
-                        PLAY FFA joins an existing FFA lobby.
-
-                        CREATE LOBBY makes a new one.
-
-                        Once you are playing, use
-
-                        <strong class="text-yellow-300">
-                            PASTE CODE
-                        </strong>
-
-                        in the blue game bar to share the Smash Karts room code.
-
+                    <p class="text-xs text-blue-200">
+                        Join an open FFA lobby or create a new one
                     </p>
-
                 </div>
-            `;
+
+                <button
+                    id="ffaPublicLobbyButton"
+                    type="button"
+                    class="text-xs bg-emerald-500 hover:bg-emerald-400 text-white font-black px-5 py-2.5 rounded-xl uppercase"
+                >
+                    🔍 Public Lobbies
+                </button>
+
+            </div>
 
 
-            setupTab
-                .parentElement
-                .insertBefore(
-                    ffaTab,
-                    setupTab
-                );
-        }
+            <div class="space-y-4">
+
+                <button
+                    id="ffaPlayButton"
+                    type="button"
+                    class="btn-smash w-full py-4 rounded-2xl font-bungee text-xl text-white"
+                >
+                    🔥 PLAY FFA
+                </button>
 
 
-        // ---------------------------------------------
-        // SHOW FFA PAGE
-        // ---------------------------------------------
+                <button
+                    id="ffaCreateButton"
+                    type="button"
+                    class="bg-emerald-500 hover:bg-emerald-400 w-full py-4 rounded-2xl font-bungee text-xl text-white shadow-lg"
+                >
+                    + CREATE LOBBY
+                </button>
+
+            </div>
+
+
+            <div class="bg-blue-900/60 border border-white/10 rounded-2xl p-4">
+
+                <p class="text-xs text-blue-100 leading-relaxed">
+
+                    PLAY FFA joins an existing FFA lobby.
+
+                    CREATE LOBBY makes a new one.
+
+                    Once you are playing, use
+
+                    <strong class="text-yellow-300">
+                        PASTE CODE
+                    </strong>
+
+                    in the blue game bar to share the Smash Karts room code.
+
+                </p>
+
+            </div>
+        `;
+
+        setupTab
+            .parentElement
+            .insertBefore(
+                ffaTab,
+                setupTab
+            );
+
 
         ffaNav.onclick =
             () => {
@@ -4437,7 +3646,6 @@ function installArenaExtras() {
                             )
                     );
 
-
                 document
                     .querySelectorAll(
                         '.sidebar-btn'
@@ -4449,11 +3657,9 @@ function installArenaExtras() {
                             )
                     );
 
-
                 ffaNav.classList.add(
                     'active'
                 );
-
 
                 ffaTab.classList.remove(
                     'hidden'
@@ -4466,12 +3672,10 @@ function installArenaExtras() {
                 'ffaPlayButton'
             );
 
-
         const create =
             document.getElementById(
                 'ffaCreateButton'
             );
-
 
         const publicBtn =
             document.getElementById(
@@ -4482,7 +3686,6 @@ function installArenaExtras() {
         if (
             publicBtn
         ) {
-
             publicBtn.onclick =
                 () =>
                     openFindGameModal();
@@ -4490,29 +3693,24 @@ function installArenaExtras() {
 
 
         function requireUser() {
-
             if (
                 AuthSession.getUser()
             ) {
                 return true;
             }
 
-
             const modal =
                 document.getElementById(
                     'authModal'
                 );
 
-
             if (
                 modal
             ) {
-
                 modal.classList.remove(
                     'hidden'
                 );
             }
-
 
             return false;
         }
@@ -4521,7 +3719,6 @@ function installArenaExtras() {
         if (
             play
         ) {
-
             play.onclick =
                 () => {
 
@@ -4531,17 +3728,14 @@ function installArenaExtras() {
                         return;
                     }
 
-
                     if (
                         !socket.connected
                     ) {
-
                         return showToast(
                             'Connecting to the server. Try again in a moment.',
                             'ℹ️'
                         );
                     }
-
 
                     socket.emit(
                         'play_ffa'
@@ -4553,7 +3747,6 @@ function installArenaExtras() {
         if (
             create
         ) {
-
             create.onclick =
                 () => {
 
@@ -4563,17 +3756,14 @@ function installArenaExtras() {
                         return;
                     }
 
-
                     if (
                         !socket.connected
                     ) {
-
                         return showToast(
                             'Connecting to the server. Try again in a moment.',
                             'ℹ️'
                         );
                     }
-
 
                     socket.emit(
                         'create_ffa_lobby'
@@ -4584,6 +3774,24 @@ function installArenaExtras() {
 
 
     installFFATab();
+
+
+    if (
+        document.readyState ===
+        'loading'
+    ) {
+        document.addEventListener(
+            'DOMContentLoaded',
+            () => {
+
+                installHistoryButton();
+
+                installFFATab();
+
+                ensureGameToolbarExtras();
+            }
+        );
+    }
 
 
     socket.on(
@@ -4609,20 +3817,16 @@ function installArenaExtras() {
             activeRoomData =
                 room;
 
-
             renderRoomMessages(
-                room.messages ||
-                []
+                room.messages || []
             );
 
+            ensureGameToolbarExtras();
 
             refreshLobbyUI(
                 room
             );
 
-
-            // Show the website lobby first.
-            // Do not instantly enter the game.
             openPreGameLobby(
                 room
             );
@@ -4631,17 +3835,15 @@ function installArenaExtras() {
 
 
     // =====================================================
-    // VALIDATE CODE IN BROWSER BEFORE SENDING
+    // CLIENT CODE VALIDATION
     // =====================================================
 
     function clientValidRoomCode(
         raw
     ) {
-
         if (!raw) {
             return null;
         }
-
 
         const text =
             String(
@@ -4653,13 +3855,12 @@ function installArenaExtras() {
                     ''
                 );
 
-
-        function valid(code) {
-
+        function valid(
+            code
+        ) {
             return (
                 /^[A-Za-z0-9]{6,12}$/.test(
-                    code ||
-                    ''
+                    code || ''
                 ) &&
                 /[A-Za-z]/.test(
                     code
@@ -4670,7 +3871,6 @@ function installArenaExtras() {
             );
         }
 
-
         if (
             valid(
                 text
@@ -4679,12 +3879,10 @@ function installArenaExtras() {
             return text;
         }
 
-
         const roomLabel =
             text.match(
                 /^Room:\s*([A-Za-z0-9]+)$/i
             );
-
 
         if (
             roomLabel &&
@@ -4692,23 +3890,17 @@ function installArenaExtras() {
                 roomLabel[1]
             )
         ) {
-
             return roomLabel[1];
         }
 
-
         try {
-
             const url =
                 new URL(
                     text
                 );
 
-
             const host =
-                url.hostname
-                    .toLowerCase();
-
+                url.hostname.toLowerCase();
 
             if (
                 host !==
@@ -4716,16 +3908,13 @@ function installArenaExtras() {
                 host !==
                     'www.smashkarts.io'
             ) {
-
                 return null;
             }
-
 
             const code =
                 url.searchParams.get(
                     'room'
                 );
-
 
             return valid(
                 code
@@ -4734,7 +3923,6 @@ function installArenaExtras() {
                 : null;
 
         } catch {
-
             return null;
         }
     }
@@ -4745,23 +3933,19 @@ function installArenaExtras() {
     // =====================================================
 
     function promptPasteCode() {
-
         if (
             !activeRoomData
         ) {
-
             return showToast(
                 'You are not currently in a lobby.',
                 '⚠️'
             );
         }
 
-
         const pasted =
             window.prompt(
                 'Paste a Smash Karts room code or official room link:'
             );
-
 
         if (
             pasted ===
@@ -4770,24 +3954,21 @@ function installArenaExtras() {
             return;
         }
 
-
         const code =
             clientValidRoomCode(
                 pasted
             );
 
-
-        if (!code) {
-
+        if (
+            !code
+        ) {
             showToast(
                 'That does not look like a Smash Karts room code. Nothing was pasted.',
                 '❌'
             );
 
-
             return;
         }
-
 
         socket.emit(
             'update_lobby_game_code',
@@ -4806,17 +3987,14 @@ function installArenaExtras() {
     // =====================================================
 
     function openCurrentLobby() {
-
         if (
             !activeRoomData
         ) {
-
             return showToast(
                 'You are not currently in a lobby.',
                 '⚠️'
             );
         }
-
 
         openPreGameLobby(
             activeRoomData
@@ -4826,15 +4004,6 @@ function installArenaExtras() {
 
     // =====================================================
     // GAME TOOLBAR
-    //
-    // LEFT:
-    //
-    // 🎮 SMASH KARTS | FFA | 👥 3 IN LOBBY | Player1, Player2
-    //
-    // RIGHT:
-    //
-    // 📋 PASTE CODE | 👥 LOBBY | 💬 SHOW CHAT | ⚙️ OPTIONS
-    //
     // =====================================================
 
     function ensureGameToolbarExtras() {
@@ -4844,18 +4013,15 @@ function installArenaExtras() {
                 '.game-actions'
             );
 
-
         const brand =
             document.querySelector(
                 '.game-brand'
             );
 
-
         const chatButton =
             document.getElementById(
                 'gameChatToggle'
             );
-
 
         if (
             !toolbar ||
@@ -4866,29 +4032,25 @@ function installArenaExtras() {
         }
 
 
-        // =================================================
-        // LEFT-SIDE LOBBY INFO
-        // =================================================
+        // ---------------------------------------------
+        // LOBBY COUNT / ACTIVE PLAYERS
+        // ---------------------------------------------
 
         let lobbyInfo =
             document.getElementById(
                 'gameLobbyInfo'
             );
 
-
         if (
             !lobbyInfo
         ) {
-
             lobbyInfo =
                 document.createElement(
                     'div'
                 );
 
-
             lobbyInfo.id =
                 'gameLobbyInfo';
-
 
             lobbyInfo.style.cssText =
                 'display:flex;' +
@@ -4907,14 +4069,11 @@ function installArenaExtras() {
                     'span'
                 );
 
-
             count.id =
                 'gameLobbyPlayerCount';
 
-
             count.textContent =
                 '👥 0 IN LOBBY';
-
 
             count.style.cssText =
                 'font:900 12px sans-serif;' +
@@ -4927,14 +4086,11 @@ function installArenaExtras() {
                     'span'
                 );
 
-
             names.id =
                 'gameLobbyPlayerNames';
 
-
             names.textContent =
                 'No active players';
-
 
             names.style.cssText =
                 'font:800 11px sans-serif;' +
@@ -4949,179 +4105,175 @@ function installArenaExtras() {
                 names
             );
 
-
             brand.appendChild(
                 lobbyInfo
             );
         }
 
 
-        // =================================================
+        // ---------------------------------------------
         // PASTE CODE BUTTON
-        // =================================================
+        // ---------------------------------------------
 
         let paste =
             document.getElementById(
                 'gamePasteCodeButton'
             );
 
-
         if (
             !paste
         ) {
-
             paste =
                 document.createElement(
                     'button'
                 );
 
-
             paste.id =
                 'gamePasteCodeButton';
-
 
             paste.type =
                 'button';
 
-
             paste.className =
                 'game-control';
 
-
             paste.textContent =
                 '📋 PASTE CODE';
-
 
             paste.onclick =
                 promptPasteCode;
         }
 
 
-        // =================================================
+        // ---------------------------------------------
         // LOBBY BUTTON
-        // =================================================
+        // ---------------------------------------------
 
         let lobby =
             document.getElementById(
                 'gameLobbyButton'
             );
 
-
         if (
             !lobby
         ) {
-
             lobby =
                 document.createElement(
                     'button'
                 );
 
-
             lobby.id =
                 'gameLobbyButton';
-
 
             lobby.type =
                 'button';
 
-
             lobby.className =
                 'game-control';
 
-
             lobby.textContent =
                 '👥 LOBBY';
-
 
             lobby.onclick =
                 openCurrentLobby;
         }
 
 
-        // =================================================
-        // FORCE EXACT BUTTON ORDER
+        // Exact order:
+        // PASTE CODE -> LOBBY -> SHOW CHAT -> OPTIONS
         //
-        // PASTE CODE
-        // LOBBY
-        // SHOW CHAT
-        // OPTIONS
-        // =================================================
+        // Only touch the DOM if it is actually wrong.
+        if (
+            paste.parentElement !==
+                toolbar ||
+            lobby.parentElement !==
+                toolbar ||
+            paste.nextElementSibling !==
+                lobby ||
+            lobby.nextElementSibling !==
+                chatButton
+        ) {
+            toolbar.insertBefore(
+                paste,
+                chatButton
+            );
 
-        toolbar.insertBefore(
-            paste,
-            chatButton
-        );
+            toolbar.insertBefore(
+                lobby,
+                chatButton
+            );
+        }
 
 
-        toolbar.insertBefore(
-            lobby,
-            chatButton
-        );
-
-
-        // =================================================
-        // MOVE SHOW / HIDE MENU A LITTLE LEFT
-        // Original = right:22px
-        // New = right:32px
-        // =================================================
-
+        // Move Show / Hide Menu a tiny bit left.
         const menuToggle =
             document.getElementById(
                 'gameToolbarToggle'
             );
 
-
         if (
             menuToggle
         ) {
-
             menuToggle.style.right =
                 '32px';
         }
     }
 
 
-    // Install now.
+    // =====================================================
+    // SAFE TOOLBAR CHECK
+    //
+    // IMPORTANT:
+    // NO MutationObserver.
+    //
+    // The old MutationObserver was causing the FFA lobby
+    // create button to trigger a DOM-update loop and freeze.
+    // =====================================================
+
+    let toolbarCheckTimer =
+        null;
+
+
+    function startSafeToolbarCheck() {
+        if (
+            toolbarCheckTimer
+        ) {
+            return;
+        }
+
+        toolbarCheckTimer =
+            setInterval(
+                () => {
+
+                    const gameScreen =
+                        document.getElementById(
+                            'gameScreen'
+                        );
+
+                    if (
+                        !gameScreen ||
+                        gameScreen.classList.contains(
+                            'hidden'
+                        )
+                    ) {
+                        return;
+                    }
+
+                    ensureGameToolbarExtras();
+
+                },
+                1000
+            );
+    }
+
+
     ensureGameToolbarExtras();
 
-
-    // Keep forcing the buttons back in if any other code
-    // changes/re-renders the blue top toolbar.
-    const toolbarObserver =
-        new MutationObserver(
-            () => {
-
-                ensureGameToolbarExtras();
-
-
-                if (
-                    activeRoomData
-                ) {
-
-                    refreshLobbyUI(
-                        activeRoomData
-                    );
-                }
-            }
-        );
-
-
-    toolbarObserver.observe(
-        document.body,
-        {
-            childList: true,
-            subtree: true
-        }
-    );
+    startSafeToolbarCheck();
 
 
     // =====================================================
-    // OPEN LOBBY WHILE PLAYING
-    //
-    // Clicking LOBBY does not restart the game.
-    //
-    // When you click BACK TO GAME in the lobby,
-    // it simply closes the lobby window.
+    // LOBBY WHILE PLAYING
     // =====================================================
 
     const originalEnterGame =
@@ -5136,7 +4288,6 @@ function installArenaExtras() {
                     'gameScreen'
                 );
 
-
             if (
                 screen &&
                 !screen.classList.contains(
@@ -5146,26 +4297,20 @@ function installArenaExtras() {
                     'game-fade-exit'
                 )
             ) {
-
                 closePreGameLobbyModal();
 
-
                 ensureGameToolbarExtras();
-
 
                 if (
                     activeRoomData
                 ) {
-
                     refreshLobbyUI(
                         activeRoomData
                     );
                 }
 
-
                 return;
             }
-
 
             const result =
                 originalEnterGame.apply(
@@ -5173,30 +4318,24 @@ function installArenaExtras() {
                     args
                 );
 
-
             ensureGameToolbarExtras();
-
 
             if (
                 activeRoomData
             ) {
-
                 refreshLobbyUI(
                     activeRoomData
                 );
             }
-
 
             requestAnimationFrame(
                 () => {
 
                     ensureGameToolbarExtras();
 
-
                     if (
                         activeRoomData
                     ) {
-
                         refreshLobbyUI(
                             activeRoomData
                         );
@@ -5204,13 +4343,12 @@ function installArenaExtras() {
                 }
             );
 
-
             return result;
         };
 
 
     // =====================================================
-    // LOBBY GAME CODE UPDATED
+    // LOBBY CODE UPDATED
     // =====================================================
 
     socket.on(
@@ -5225,21 +4363,17 @@ function installArenaExtras() {
                 return;
             }
 
-
             activeRoomData.smashUrl =
                 data.smashUrl;
-
 
             refreshLobbyUI(
                 activeRoomData
             );
 
-
             const code =
                 extractRoomCode(
                     data.smashUrl
                 );
-
 
             showToast(
                 code
@@ -5251,17 +4385,14 @@ function installArenaExtras() {
     );
 
 
-    // Make floating match chat say Lobby Chat.
     const chatTitle =
         document.querySelector(
             '#chatOverlay .font-bungee'
         );
 
-
     if (
         chatTitle
     ) {
-
         chatTitle.textContent =
             '💬 LOBBY CHAT';
     }
