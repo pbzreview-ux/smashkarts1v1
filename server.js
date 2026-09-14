@@ -176,34 +176,56 @@ function extractSmashUrl(rawInput) {
 
 function extractVerifiedLookingRoomUrl(rawInput) {
     if (!rawInput) return null;
-    const text = String(rawInput).trim().replace(/["']+/g, '');
+
+    const text = String(rawInput)
+        .trim()
+        .replace(/["']/g, '');
 
     function validCode(code) {
         return typeof code === 'string' &&
-            /^[A-Za-z0-9]{6,12}$/.test(code) &&
+            /^[A-Za-z0-9]{4,16}$/.test(code) &&
             /[A-Za-z]/.test(code) &&
             /\d/.test(code);
+    }
+
+    function normalizeOfficialUrl(candidate) {
+        if (!candidate) return null;
+        try {
+            const url = new URL(candidate);
+            const host = url.hostname.toLowerCase();
+            if (host !== 'smashkarts.io' && host !== 'www.smashkarts.io') return null;
+            const room = url.searchParams.get('room');
+            if (!validCode(room)) return null;
+            url.protocol = 'https:';
+            url.hostname = 'smashkarts.io';
+            return url.toString();
+        } catch {
+            return null;
+        }
+    }
+
+    // Whole share messages are accepted. Prefer the full official URL so
+    // popup users keep arena/rules/weapon parameters from Smash Karts.
+    const linkMatch = text.match(/https?:\/\/(?:www\.)?smashkarts\.io\/link\/?\?[^\s]+/i)
+        || text.match(/https?:\/\/(?:www\.)?smashkarts\.io\/?\?[^\s]+/i);
+    if (linkMatch) {
+        const full = normalizeOfficialUrl(linkMatch[0]);
+        if (full) return full;
+    }
+
+    const direct = normalizeOfficialUrl(text);
+    if (direct) return direct;
+
+    const labeled = text.match(/Room:\s*([A-Za-z0-9]+)/i);
+    if (labeled && validCode(labeled[1])) {
+        return 'https://smashkarts.io/link/?room=' + encodeURIComponent(labeled[1]);
     }
 
     if (validCode(text)) {
         return 'https://smashkarts.io/link/?room=' + encodeURIComponent(text);
     }
 
-    const labeled = text.match(/^Room:\s*([A-Za-z0-9]+)$/i);
-    if (labeled && validCode(labeled[1])) {
-        return 'https://smashkarts.io/link/?room=' + encodeURIComponent(labeled[1]);
-    }
-
-    try {
-        const url = new URL(text);
-        const host = url.hostname.toLowerCase();
-        if (host !== 'smashkarts.io' && host !== 'www.smashkarts.io') return null;
-        const code = url.searchParams.get('room');
-        if (!validCode(code)) return null;
-        return 'https://smashkarts.io/link/?room=' + encodeURIComponent(code);
-    } catch {
-        return null;
-    }
+    return null;
 }
 
 function moderateText(text) {
@@ -220,6 +242,63 @@ function findSocketByUsername(username) {
     return Object.values(connectedPlayers).find(
         p => String(p.username || '').toLowerCase() === target
     );
+}
+
+function canonicalFriendName(list, targetName) {
+    const target = String(targetName || '').toLowerCase();
+    return (list || []).find(name => String(name || '').toLowerCase() === target) || null;
+}
+
+function ensureMutualFriendship(usernameA, usernameB) {
+    const a = sanitizeUsername(usernameA);
+    const b = sanitizeUsername(usernameB);
+    if (!a || !b || a === b) return false;
+
+    const profileA = profileFor(a);
+    const profileB = profileFor(b);
+    let changed = false;
+
+    if (!canonicalFriendName(profileA.friends, b)) {
+        profileA.friends.push(b);
+        changed = true;
+    }
+    if (!canonicalFriendName(profileB.friends, a)) {
+        profileB.friends.push(a);
+        changed = true;
+    }
+
+    profileA.requests = (profileA.requests || []).filter(name => String(name).toLowerCase() !== b.toLowerCase());
+    profileB.requests = (profileB.requests || []).filter(name => String(name).toLowerCase() !== a.toLowerCase());
+
+    const socketA = findSocketByUsername(a);
+    const socketB = findSocketByUsername(b);
+    if (socketA && !socketA.isGuest) socketA.friends.add(b);
+    if (socketB && !socketB.isGuest) socketB.friends.add(a);
+
+    if (changed) saveHistory();
+    syncFriends(a);
+    syncFriends(b);
+    return true;
+}
+
+function usersAreFriends(usernameA, usernameB) {
+    const a = sanitizeUsername(usernameA);
+    const b = sanitizeUsername(usernameB);
+    if (!a || !b || a === b) return false;
+
+    const profileA = profileFor(a);
+    const profileB = profileFor(b);
+    const aHasB = !!canonicalFriendName(profileA.friends, b);
+    const bHasA = !!canonicalFriendName(profileB.friends, a);
+
+    // Older versions occasionally left one side of a friendship out of sync.
+    // If either account already has the other saved, heal both sides.
+    if (aHasB || bHasA) {
+        ensureMutualFriendship(a, b);
+        return true;
+    }
+
+    return false;
 }
 
 function roomSummary(room) {
@@ -484,7 +563,7 @@ io.on('connection', socket => {
                 message: 'Log in to use friends and direct messages.'
             });
         }
-        if (sender.username === target.username || sender.friends.has(target.username)) return;
+        if (sender.username === target.username || usersAreFriends(sender.username, target.username)) return;
 
         target.friendRequests.add(sender.username);
         savePlayer(target);
@@ -515,14 +594,9 @@ io.on('connection', socket => {
         user.friends.add(challengerUsername);
         user.friendRequests.delete(challengerUsername);
 
-        const otherProfile = profileFor(challengerUsername);
-        if (!otherProfile.friends.includes(user.username)) otherProfile.friends.push(user.username);
-        otherProfile.requests = (otherProfile.requests || []).filter(name => name !== user.username);
-
         savePlayer(user);
+        ensureMutualFriendship(user.username, challengerUsername);
         saveHistory();
-        syncFriends(user.username);
-        syncFriends(challengerUsername);
 
         const challenger = findSocketByUsername(challengerUsername);
         if (challenger) {
@@ -546,7 +620,7 @@ io.on('connection', socket => {
         }
 
         const targetName = sanitizeUsername(targetUsername);
-        if (!sender.friends.has(targetName)) {
+        if (!usersAreFriends(sender.username, targetName)) {
             return socket.emit('dm_error', { message: 'You can only message users on your friends list.' });
         }
 
@@ -581,7 +655,9 @@ io.on('connection', socket => {
         const sender = connectedPlayers[socket.id];
         if (!sender || sender.isGuest) return;
         const targetName = sanitizeUsername(targetUsername);
-        if (!sender.friends.has(targetName)) return;
+        if (!usersAreFriends(sender.username, targetName)) {
+            return socket.emit('dm_error', { message: 'You can only message users on your friends list.' });
+        }
         const key = getDMKey(sender.username, targetName);
         socket.emit('load_dm_history', {
             targetUsername: targetName,
@@ -613,7 +689,7 @@ io.on('connection', socket => {
         if (sender.isGuest) {
             return socket.emit('account_required', { message: 'Log in to challenge friends directly.' });
         }
-        if (!sender.friends.has(target.username)) return;
+        if (!usersAreFriends(sender.username, target.username)) return;
 
         const cleanUrl = extractSmashUrl(smashUrl);
         if (!cleanUrl) return socket.emit('room_error', { message: 'A valid Smash Karts room link or code is required.' });
@@ -912,15 +988,21 @@ io.on('connection', socket => {
     socket.on('restore_legacy_friends', ({ friends }) => {
         const player = connectedPlayers[socket.id];
         if (!player || player.isGuest || !Array.isArray(friends)) return;
-        for (const name of friends) {
+
+        // Migrate friendships accepted in older browser-only builds into the
+        // server profiles. This prevents the false "you have to be friends"
+        // error when both players already show as friends in the UI.
+        for (const name of friends.slice(0, 250)) {
             if (typeof name !== 'string') continue;
             const targetName = sanitizeUsername(name);
-            if (targetName === player.username || player.friends.has(targetName)) continue;
-            const target = profileFor(targetName);
-            if (!target.requests.includes(player.username)) target.requests.push(player.username);
-            syncFriends(targetName);
+            if (!targetName || targetName === player.username) continue;
+            ensureMutualFriendship(player.username, targetName);
         }
+
+        savePlayer(player);
         saveHistory();
+        syncFriends(player.username);
+        broadcastOnlineUsers();
     });
 
     socket.on('disconnect', () => {
@@ -1455,6 +1537,34 @@ function installMegaArena() {
         }
         originalSendFriendRequest(targetSocketId, username);
     };
+
+    // Synchronize old browser-saved friends with the server. This also keeps
+    // the Discord-style DM list and the server permission check identical.
+    socket.on('saved_friends', data => {
+        const account = getAccountSession();
+        const user = AuthSession.getUser();
+        if (!account || !user) return;
+
+        const oldLocal = getLocalFriends(user.username).slice();
+        const serverFriends = Array.isArray(data?.friends) ? data.friends : [];
+        const serverRequests = Array.isArray(data?.requests) ? data.requests : [];
+
+        saveLocalFriends(user.username, serverFriends);
+        pendingFriendRequests = serverRequests;
+
+        const self = onlineUsersCache.find(person => person.username === user.username);
+        if (self) self.friends = serverFriends.slice();
+
+        const missingOnServer = oldLocal.filter(name =>
+            !serverFriends.some(serverName => String(serverName).toLowerCase() === String(name).toLowerCase())
+        );
+        if (missingOnServer.length) {
+            socket.emit('restore_legacy_friends', { friends: missingOnServer });
+        }
+
+        updateFriendsTabList();
+        renderOnlineUsersList(onlineUsersCache);
+    });
 
     // ---------------------------------------------------------------------
     // NORMAL DASHBOARD PAGES
@@ -2067,32 +2177,60 @@ function installMegaArena() {
         socket.emit('lobby_reaction', { roomId: activeRoomData.roomId, reaction });
     };
 
-    function validRoomCode(raw) {
+    function parseSmashShareInput(raw) {
         if (!raw) return null;
         const text = String(raw).trim().replace(/["']/g, '');
-        const valid = code => /^[A-Za-z0-9]{6,12}$/.test(code || '') && /[A-Za-z]/.test(code) && /\d/.test(code);
-        if (valid(text)) return text;
-        const label = text.match(/^Room:\s*([A-Za-z0-9]+)$/i);
-        if (label && valid(label[1])) return label[1];
-        try {
-            const url = new URL(text);
-            if (!['open.spotify.com'].includes(url.hostname.toLowerCase()) && ['smashkarts.io', 'www.smashkarts.io'].includes(url.hostname.toLowerCase())) {
+        const valid = code => /^[A-Za-z0-9]{4,16}$/.test(code || '') && /[A-Za-z]/.test(code) && /\d/.test(code);
+
+        const fullLink = text.match(/https?:\/\/(?:www\.)?smashkarts\.io\/link\/?\?[^\s]+/i)
+            || text.match(/https?:\/\/(?:www\.)?smashkarts\.io\/?\?[^\s]+/i);
+
+        if (fullLink) {
+            try {
+                const url = new URL(fullLink[0]);
                 const code = url.searchParams.get('room');
-                if (valid(code)) return code;
-            }
-            const code = url.searchParams.get('room');
-            if (['smashkarts.io', 'www.smashkarts.io'].includes(url.hostname.toLowerCase()) && valid(code)) return code;
-        } catch {}
+                if (['smashkarts.io', 'www.smashkarts.io'].includes(url.hostname.toLowerCase()) && valid(code)) {
+                    return { code, url: fullLink[0] };
+                }
+            } catch {}
+        }
+
+        const label = text.match(/Room:\s*([A-Za-z0-9]+)/i);
+        if (label && valid(label[1])) {
+            return {
+                code: label[1],
+                url: `https://smashkarts.io/link/?room=${encodeURIComponent(label[1])}`
+            };
+        }
+
+        if (valid(text)) {
+            return {
+                code: text,
+                url: `https://smashkarts.io/link/?room=${encodeURIComponent(text)}`
+            };
+        }
+
         return null;
     }
 
     window.pasteCodeIntoCurrentLobby = function () {
         if (!activeRoomData) return showToast('You are not currently in a lobby.', '⚠️');
-        const raw = window.prompt('Paste a Smash Karts room code or official room link:');
+        const raw = window.prompt(
+            'Paste the room code, full Smash Karts link, or the whole “Come play Smash Karts” share message:'
+        );
         if (raw == null) return;
-        const code = validRoomCode(raw);
-        if (!code) return showToast('That does not look like a valid Smash Karts room code. Nothing changed.', '❌');
-        socket.emit('update_lobby_game_code', { roomId: activeRoomData.roomId, code });
+
+        const parsed = parseSmashShareInput(raw);
+        if (!parsed) {
+            return showToast('I could not find a valid Smash Karts room in that paste. Nothing changed.', '❌');
+        }
+
+        // The server keeps the FULL link for popup mode (arena/rules/etc.)
+        // while the blue toolbar continues to show only the room code.
+        socket.emit('update_lobby_game_code', {
+            roomId: activeRoomData.roomId,
+            code: raw
+        });
     };
 
     // Better copy behavior for FFA before a real code has been pasted.
@@ -3075,7 +3213,7 @@ function installMegaArena() {
         if (!activeRoomData || activeRoomData.roomId !== data.roomId) return;
         activeRoomData.smashUrl = data.smashUrl;
         refreshRoomUI(activeRoomData);
-        showToast(`Lobby room code updated by ${data.updatedBy}.`, '📋');
+        showToast(`Lobby updated by ${data.updatedBy}. Code: ${roomCodeFromUrl(data.smashUrl) || 'set'}`, '📋');
     });
     socket.on('ready_state_changed', data => {
         if (!activeRoomData || activeRoomData.roomId !== data.roomId) return;
