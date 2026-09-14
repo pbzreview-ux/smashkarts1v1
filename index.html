@@ -9,20 +9,24 @@
     <link rel="stylesheet" href="style.css">
 
     <style>
-        #gameScreen {
-            --menu-height: 76px;
+        :root {
+            --arena-blue: #203d88;
+            --arena-deep: #102653;
+            --arena-panel: #173477;
+            --arena-yellow: #ffe238;
+            --arena-dock-width: 380px;
         }
 
-        #gameScreen #gameTopBar {
+        #gameScreen { --menu-height: 76px; }
+        #gameScreen [hidden] { display: none !important; }
+
+        /* =========================
+           GAME TOP BAR
+           ========================= */
+        #gameTopBar {
             position: absolute;
             inset: 0 0 auto;
             z-index: 150;
-            transform: none !important;
-            transition: none;
-        }
-
-        #gameScreen [hidden] {
-            display: none !important;
         }
 
         #arenaToolbar {
@@ -34,9 +38,9 @@
             justify-content: space-between;
             flex-wrap: wrap;
             gap: 12px;
-            background: #203d88;
+            background: var(--arena-blue);
             border-bottom: 1px solid #ffffff30;
-            color: #ffe238;
+            color: var(--arena-yellow);
         }
 
         .arena-brand,
@@ -44,165 +48,349 @@
             display: flex;
             align-items: center;
             flex-wrap: wrap;
-            gap: 12px;
+            gap: 10px;
         }
 
         .arena-brand {
             font-family: "Bungee", sans-serif;
-            font-size: 24px;
+            font-size: 22px;
         }
 
         #gameModeBadge {
-            padding: 4px 14px;
-            border-radius: 24px;
+            padding: 4px 13px;
+            border-radius: 999px;
             background: #ffd318;
             color: #142f75;
-            font: 900 16px "Inter", sans-serif;
+            font: 900 14px "Inter", sans-serif;
             text-transform: uppercase;
         }
 
+        #gameLobbyInfo {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            min-width: 0;
+            max-width: 420px;
+            padding: 7px 10px;
+            border: 1px solid #ffffff32;
+            border-radius: 16px;
+            background: var(--arena-deep);
+        }
+
+        #gameLobbyPlayerCount {
+            color: var(--arena-yellow);
+            font: 900 11px "Inter", sans-serif;
+            white-space: nowrap;
+        }
+
+        #gameLobbyPlayerNames {
+            color: white;
+            font: 800 10px "Inter", sans-serif;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
         .arena-button {
-            padding: 11px 16px;
+            padding: 10px 13px;
             border: 1px solid #ffda25;
-            border-radius: 20px;
+            border-radius: 18px;
             background: #ffffff15;
-            color: #ffe238;
-            font: 900 14px "Inter", sans-serif;
+            color: var(--arena-yellow);
+            font: 900 12px "Inter", sans-serif;
             cursor: pointer;
+            transition: .15s ease;
         }
 
-        #arenaChatButton {
-            background: #ffd318;
-            color: #142f75;
-        }
-
-        #arenaOptionsButton {
-            background: #234caa;
-            border-color: #7f99d7;
-        }
+        .arena-button:hover { transform: translateY(-1px); background: #ffffff22; }
+        .arena-button.active { background: #ffd318; color: #142f75; }
+        #arenaChatButton { background: #ffd318; color: #142f75; }
+        #arenaOptionsButton { background: #234caa; border-color: #7f99d7; }
 
         #arenaMenuToggle {
             position: absolute;
             top: 100%;
-            right: 18px;
+            right: 30px;
             padding: 7px 14px;
             border: 1px solid #ffd318;
             border-top: 0;
             border-radius: 0 0 12px 12px;
-            background: #203d88;
-            color: #ffe238;
-            font: 900 12px "Inter", sans-serif;
+            background: var(--arena-blue);
+            color: var(--arena-yellow);
+            font: 900 11px "Inter", sans-serif;
             cursor: pointer;
             box-shadow: 0 5px 12px #0004;
         }
 
-        #arenaOptions {
+        /* Old options element stays for compatibility, but is never floated. */
+        #arenaOptions { display: none !important; }
+
+        /* =========================
+           GAME STAGE + DOCK
+           The dock SHRINKS the game.
+           It does not pile over it.
+           ========================= */
+        #gameStage {
             position: absolute;
-            top: calc(100% + 38px);
-            right: 16px;
-            width: min(280px, calc(100vw - 32px));
-            max-height: calc(100dvh - var(--menu-height) - 55px);
-            overflow-y: auto;
-            padding: 8px;
-            border: 1px solid #ffd318;
-            border-radius: 16px;
-            background: #173477;
-            box-shadow: 0 12px 30px #0008;
+            inset: 0;
         }
 
-        #arenaOptions button {
-            display: block;
-            width: 100%;
-            padding: 12px;
-            border: 0;
-            border-radius: 10px;
-            background: transparent;
-            color: white;
-            text-align: left;
-            font-weight: 800;
-            cursor: pointer;
+        #gameScreen.arena-menu-open #gameStage {
+            top: var(--menu-height);
         }
 
-        #arenaOptions button:hover {
-            background: #ffffff20;
-        }
-
-        #arenaOptions .arena-exit {
-            color: #ffb7b7;
-        }
-
-        #gameScreen #smashFrame {
+        #smashFrame {
             position: absolute;
             inset: 0;
             width: 100%;
             height: 100%;
             border: 0;
-            z-index: 0;
+            transition: width .18s ease;
         }
 
-        #gameScreen.arena-menu-open #smashFrame {
-            top: var(--menu-height);
-            height: calc(100% - var(--menu-height));
-        }
-
-        #gameScreen #chatOverlay {
+        #gameDock {
             position: absolute;
-            top: 48px;
-            bottom: auto;
-            right: 16px;
-            width: min(320px, calc(100vw - 32px));
-            max-height: calc(100dvh - 64px);
-            box-sizing: border-box;
+            right: 0;
+            top: 0;
+            bottom: 0;
+            width: var(--arena-dock-width);
+            display: none;
+            flex-direction: column;
+            background: #0d2258;
+            border-left: 2px solid #ffffff22;
+            color: white;
+            z-index: 20;
+        }
+
+        #gameScreen.game-dock-open #gameDock { display: flex; }
+        #gameScreen.game-dock-open #smashFrame { width: calc(100% - var(--arena-dock-width)); }
+
+        #gameDockHeader {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            padding: 11px 12px;
+            border-bottom: 1px solid #ffffff1f;
+            background: #173477;
+        }
+
+        #gameDockTitle {
+            font-family: "Bungee", sans-serif;
+            color: var(--arena-yellow);
+            font-size: 13px;
+        }
+
+        #gameDockTabs {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 6px;
+            padding: 8px;
+            background: #132e70;
+            border-bottom: 1px solid #ffffff1f;
+        }
+
+        .dock-tab-button {
+            border: 1px solid #ffffff20;
+            border-radius: 10px;
+            padding: 8px 4px;
+            color: #dbe7ff;
+            font-size: 10px;
+            font-weight: 900;
+            background: #ffffff0d;
+            cursor: pointer;
+        }
+
+        .dock-tab-button.active {
+            color: #142f75;
+            background: var(--arena-yellow);
+            border-color: var(--arena-yellow);
+        }
+
+        #gameDockBody {
+            flex: 1;
+            min-height: 0;
             overflow: hidden;
-            z-index: 140;
-            background: #173477f5;
         }
 
-        #gameScreen.arena-menu-open #chatOverlay {
-            top: calc(var(--menu-height) + 48px);
-            max-height: calc(100dvh - var(--menu-height) - 64px);
-        }
-
-        #gameScreen #chatOverlay.hidden-overlay {
-            display: none !important;
-        }
-
-        #matchChatMessages {
-            min-height: 35px;
-            flex-shrink: 1;
+        .game-dock-panel {
+            height: 100%;
+            padding: 12px;
             overflow-y: auto;
         }
 
-        #matchChatInput {
-            min-width: 0;
+        .game-dock-panel.hidden { display: none !important; }
+
+        .dock-card {
+            background: #173477;
+            border: 1px solid #ffffff1f;
+            border-radius: 14px;
+            padding: 11px;
+            margin-bottom: 10px;
         }
 
-        #gameTopBar button:focus-visible {
-            outline: 3px solid white;
-            outline-offset: 3px;
+        .dock-label {
+            display: block;
+            color: #9db8f5;
+            font-size: 9px;
+            font-weight: 900;
+            text-transform: uppercase;
+            margin-bottom: 6px;
         }
 
-        body:has(#gameScreen:not(.hidden)) {
-            overflow: hidden;
+        .dock-action {
+            width: 100%;
+            border: 1px solid #ffffff20;
+            border-radius: 11px;
+            padding: 9px 10px;
+            color: white;
+            background: #264fa7;
+            font-size: 11px;
+            font-weight: 900;
+            cursor: pointer;
         }
 
-        @media (max-width: 700px) {
-            #arenaToolbar {
-                padding: 10px 12px;
-            }
+        .dock-action:hover { filter: brightness(1.08); }
+        .dock-action.yellow { background: #ffd318; color: #142f75; }
+        .dock-action.green { background: #10b981; }
+        .dock-action.red { background: #dc2626; }
 
-            .arena-brand {
-                font-size: 18px;
-            }
+        #gameDockPlayerList,
+        #matchChatMessages {
+            display: flex;
+            flex-direction: column;
+            gap: 7px;
+        }
 
-            .arena-actions {
-                gap: 6px;
-            }
+        #matchChatMessages {
+            height: calc(100% - 100px);
+            overflow-y: auto;
+            padding-right: 4px;
+        }
 
-            .arena-button {
-                padding: 9px 10px;
-                font-size: 12px;
-            }
+        #chatOverlay {
+            position: static !important;
+            width: 100% !important;
+            max-height: none !important;
+            background: transparent !important;
+            border: 0 !important;
+            box-shadow: none !important;
+            padding: 0 !important;
+            backdrop-filter: none !important;
+        }
+
+        #chatOverlay.hidden-overlay { display: block !important; }
+
+        #spotifyEmbedFrame,
+        #hubSpotifyEmbedFrame {
+            width: 100%;
+            border: 0;
+            border-radius: 14px;
+            background: #121212;
+        }
+
+        #spotifyEmbedFrame { height: 500px; }
+        #hubSpotifyEmbedFrame { height: 480px; }
+
+        /* =========================
+           HEADER ORGANIZATION
+           ========================= */
+        #headerRightActions {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+        }
+
+        #connectionPill {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 7px 10px;
+            border: 1px solid #ffffff2a;
+            border-radius: 12px;
+            background: #12316e;
+            color: white;
+            font-size: 10px;
+            font-weight: 900;
+        }
+
+        #connectionDot {
+            width: 8px;
+            height: 8px;
+            border-radius: 999px;
+            background: #22c55e;
+        }
+
+        #settingsFloatingBtn { display: none !important; }
+
+        /* =========================
+           ARENA HUB
+           Normal dashboard page - NOT overlay
+           ========================= */
+        #hubSubnav {
+            display: flex;
+            gap: 7px;
+            flex-wrap: wrap;
+            margin-bottom: 14px;
+        }
+
+        .hub-sub-button {
+            border: 1px solid #ffffff20;
+            border-radius: 12px;
+            padding: 8px 11px;
+            color: white;
+            background: #173477;
+            font-size: 10px;
+            font-weight: 900;
+            cursor: pointer;
+        }
+
+        .hub-sub-button.active {
+            background: #ffd318;
+            color: #142f75;
+            border-color: #ffd318;
+        }
+
+        .hub-panel.hidden { display: none !important; }
+
+        .hub-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 12px;
+        }
+
+        .hub-card {
+            background: #173477b8;
+            border: 1px solid #ffffff1f;
+            border-radius: 16px;
+            padding: 14px;
+        }
+
+        /* =========================
+           ONE-AT-A-TIME MODALS
+           ========================= */
+        .exclusive-modal { isolation: isolate; }
+
+        body:has(#gameScreen:not(.hidden)) { overflow: hidden; }
+
+        @media (max-width: 980px) {
+            :root { --arena-dock-width: 330px; }
+            #gameLobbyPlayerNames { max-width: 130px; }
+        }
+
+        @media (max-width: 760px) {
+            #arenaToolbar { padding: 9px 10px; }
+            .arena-brand { font-size: 17px; }
+            .arena-actions { gap: 5px; }
+            .arena-button { padding: 8px 9px; font-size: 10px; }
+            #gameLobbyInfo { max-width: 200px; }
+            #gameLobbyPlayerNames { max-width: 90px; }
+            .hub-grid { grid-template-columns: 1fr; }
+
+            #gameScreen.game-dock-open #smashFrame { display: none; }
+            #gameDock { width: 100%; }
         }
     </style>
 </head>
@@ -211,46 +399,19 @@
 
     <div id="toastContainer"></div>
 
-    <button id="settingsFloatingBtn" onclick="openSettingsModal()" title="Settings">⚙️</button>
-
-    <div id="settingsModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
+    <!-- Compatibility settings modal. The new Settings button opens Arena Hub instead. -->
+    <div id="settingsModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4 exclusive-modal">
         <div class="w-full max-w-sm bg-blue-900 border-2 border-yellow-400 rounded-3xl p-6 shadow-2xl">
             <div class="flex justify-between items-center mb-4">
                 <h3 class="font-bungee text-lg text-yellow-300">⚙️ SETTINGS</h3>
                 <button onclick="closeSettingsModal()" class="text-white hover:text-red-400 font-bold text-lg">✕</button>
             </div>
-
-            <div class="space-y-4">
-                <div class="flex justify-between items-center bg-blue-950/80 p-3.5 rounded-2xl border border-white/10">
-                    <div>
-                        <span class="block text-xs font-bold text-white">Online Status</span>
-                        <span class="text-[10px] text-blue-200">Show visible in player list</span>
-                    </div>
-                    <label class="relative inline-flex items-center cursor-pointer">
-                        <input type="checkbox" id="onlineStatusToggle" onchange="toggleOnlineStatus(this.checked)" checked class="sr-only peer">
-                        <div class="w-11 h-6 bg-gray-750 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500"></div>
-                    </label>
-                </div>
-
-                <div class="flex justify-between items-center bg-blue-950/80 p-3.5 rounded-2xl border border-white/10">
-                    <div>
-                        <span class="block text-xs font-bold text-white">Gameplay Mode</span>
-                        <span class="text-[10px] text-blue-200">Popup window or type-in-code embed</span>
-                    </div>
-                    <select id="gameplayModeSelect" onchange="updateGameplayMode(this.value)" class="smash-input px-3 py-1.5 rounded-xl text-xs font-bold text-yellow-300 bg-blue-900 border border-yellow-400/50">
-                        <option value="popup">Popup Window</option>
-                        <option value="embed">Type in Code</option>
-                    </select>
-                </div>
-
-                <button onclick="promptEditUsername(); closeSettingsModal();" class="w-full bg-blue-800 hover:bg-blue-700 text-white font-bold py-3 rounded-2xl text-xs flex items-center justify-center gap-2">
-                    ✏️ Edit Username
-                </button>
-            </div>
+            <p class="text-xs text-blue-200 mb-4">Settings now live inside Arena Hub so they do not pile over other windows.</p>
+            <button onclick="closeSettingsModal(); openHubPage('settings');" class="w-full bg-yellow-400 text-blue-950 font-black py-3 rounded-xl text-xs">OPEN ARENA HUB SETTINGS</button>
         </div>
     </div>
 
-    <div id="editUsernameModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
+    <div id="editUsernameModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4 exclusive-modal">
         <div class="w-full max-w-sm bg-blue-900 border-2 border-yellow-400 rounded-3xl p-6 shadow-2xl">
             <h3 class="font-bungee text-lg text-yellow-300 mb-3">✏️ CHANGE USERNAME</h3>
             <input type="text" id="newUsernameInput" placeholder="Enter new username..." class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold mb-4">
@@ -261,8 +422,17 @@
         </div>
     </div>
 
-    <div id="authModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
+    <!-- Optional account login. No forced login. -->
+    <div id="authModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4 exclusive-modal">
         <div class="w-full max-w-md bg-blue-900 border-2 border-yellow-400 rounded-3xl p-6 shadow-2xl">
+            <div class="flex justify-between items-start gap-3 mb-5">
+                <div>
+                    <h3 class="font-bungee text-lg text-yellow-300">SAVE YOUR STATS</h3>
+                    <p class="text-[11px] text-blue-200 mt-1">Playing as a guest is free. Log in only if you want permanent stats, history, friends and progression.</p>
+                </div>
+                <button onclick="closeAuthModalOptional()" class="text-white hover:text-red-400 font-bold text-lg">✕</button>
+            </div>
+
             <div class="flex border-b border-white/20 mb-6 pb-2 gap-4 justify-center">
                 <button id="tabLoginBtn" onclick="toggleAuthTab('login')" class="font-bungee text-lg text-yellow-300 border-b-2 border-yellow-300 pb-1">LOG IN</button>
                 <button id="tabRegisterBtn" onclick="toggleAuthTab('register')" class="font-bungee text-lg text-white/50 pb-1 hover:text-white">CREATE ACCOUNT</button>
@@ -271,7 +441,7 @@
             <form id="loginForm" onsubmit="handleAuthSubmit(event, 'login')" class="space-y-4">
                 <div>
                     <label class="block text-xs font-bold uppercase text-blue-200 mb-1">Username</label>
-                    <input type="text" id="loginUsername" required placeholder="Choose a Username..." class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
+                    <input type="text" id="loginUsername" placeholder="Username" class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
                 </div>
                 <div>
                     <label class="block text-xs font-bold uppercase text-blue-200 mb-1">Email Address</label>
@@ -281,12 +451,12 @@
                     <label class="block text-xs font-bold uppercase text-blue-200 mb-1">Password</label>
                     <input type="password" id="loginPassword" required placeholder="••••••••" class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
                 </div>
-                <button type="submit" class="btn-smash w-full py-3.5 rounded-2xl font-bungee text-lg text-white">LOG IN & PLAY</button>
+                <button type="submit" class="btn-smash w-full py-3.5 rounded-2xl font-bungee text-lg text-white">LOG IN & SAVE STATS</button>
             </form>
 
             <form id="registerForm" onsubmit="handleAuthSubmit(event, 'register')" class="space-y-4 hidden">
                 <div>
-                    <label class="block text-xs font-bold uppercase text-blue-200 mb-1">Username (Visible to others)</label>
+                    <label class="block text-xs font-bold uppercase text-blue-200 mb-1">Username</label>
                     <input type="text" id="regUsername" required placeholder="SpeedRacer99" class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
                 </div>
                 <div>
@@ -302,7 +472,7 @@
         </div>
     </div>
 
-    <div id="onlineUsersModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
+    <div id="onlineUsersModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4 exclusive-modal">
         <div class="w-full max-w-md bg-blue-900 border-2 border-emerald-400 rounded-3xl p-6 shadow-2xl">
             <div class="flex justify-between items-center mb-4">
                 <h3 class="font-bungee text-lg text-emerald-300">🟢 ONLINE PLAYERS</h3>
@@ -312,116 +482,189 @@
         </div>
     </div>
 
+    <!-- =========================================================
+         GAME SCREEN
+         ========================================================= -->
     <div id="gameScreen" class="hidden fixed inset-0 z-40 bg-black overflow-hidden">
-        <iframe
-            id="smashFrame"
-            src=""
-            title="Smash Karts game"
-            class="w-full h-full border-0 absolute inset-0 z-0"
-            allow="autoplay; fullscreen 'none'">
-        </iframe>
 
         <div id="gameTopBar">
             <div id="arenaToolbar" hidden>
                 <div class="arena-brand">
                     <span>🎮 SMASH KARTS</span>
                     <span id="gameModeBadge">1v1</span>
+                    <div id="gameLobbyInfo">
+                        <span id="gameLobbyPlayerCount">👥 0 IN LOBBY</span>
+                        <span id="gameLobbyPlayerNames">No active players</span>
+                    </div>
                 </div>
 
                 <div class="arena-actions">
-                    <div id="gameRoomCodeContainer">
-                        <button
-                            id="copyRoomCodeBtn"
-                            class="arena-button"
-                            onclick="copyActiveRoomCode()"
-                            title="Copy room code">
-                            Code: (<span id="gameRoomCodeDisplay">------</span>)
-                        </button>
-                    </div>
-
-                    <button
-                        id="arenaChatButton"
-                        class="arena-button"
-                        onclick="toggleOverlayChat()"
-                        aria-controls="chatOverlay"
-                        aria-expanded="false">
-                        💬 <span id="toggleChatBtnLabel">Show Chat</span>
+                    <button id="copyRoomCodeBtn" class="arena-button" onclick="copyActiveRoomCode()" title="Copy room code">
+                        Code: (<span id="gameRoomCodeDisplay">------</span>)
                     </button>
-
-                    <button
-                        id="arenaOptionsButton"
-                        class="arena-button"
-                        aria-controls="arenaOptions"
-                        aria-expanded="false">
-                        ⚙️ OPTIONS ▾
-                    </button>
+                    <button id="gamePasteCodeButton" class="arena-button" onclick="pasteCodeIntoCurrentLobby()">📋 PASTE CODE</button>
+                    <button id="gameLobbyButton" class="arena-button" onclick="openGameDock('lobby')">👥 LOBBY</button>
+                    <button id="gameMusicButton" class="arena-button" onclick="openGameDock('music')">🎵 MUSIC</button>
+                    <button id="arenaChatButton" class="arena-button" onclick="toggleOverlayChat()">💬 <span id="toggleChatBtnLabel">Show Chat</span></button>
+                    <button id="arenaOptionsButton" class="arena-button" onclick="openGameDock('tools')">⚡ TOOLS</button>
                 </div>
             </div>
 
-            <button
-                id="arenaMenuToggle"
-                aria-controls="arenaToolbar"
-                aria-expanded="false">
+            <button id="arenaMenuToggle" aria-controls="arenaToolbar" aria-expanded="false">
                 <span id="topBarTabIcon">▼</span>
-                <span id="arenaMenuLabel">OPTIONS & CHAT</span>
+                <span id="arenaMenuLabel">SHOW MENU</span>
             </button>
 
-            <div id="arenaOptions" hidden>
-                <button data-action="chat">💬 Show / hide chat</button>
-                <button data-action="copy">📋 Copy room code</button>
-                <button data-action="settings">⚙️ Settings</button>
-                <button data-action="online">🟢 Online players</button>
-                <button data-action="fullscreen" id="arenaFullscreen">⛶ Full screen</button>
-                <button data-action="exit" class="arena-exit">✕ Exit game</button>
-            </div>
+            <div id="arenaOptions" hidden></div>
         </div>
 
-        <div id="chatOverlay" class="hidden-overlay absolute top-16 right-4 z-30 bg-blue-900/90 border-2 border-yellow-400 rounded-2xl p-3 shadow-2xl flex flex-col w-72 backdrop-blur-md">
-            <div class="flex justify-between items-center mb-2 border-b border-white/10 pb-1">
-                <span class="font-bungee text-xs text-yellow-300">💬 IN-GAME CHAT</span>
-                <button onclick="toggleOverlayChat()" aria-label="Close chat" class="text-white hover:text-red-400 font-bold text-xs">✕</button>
-            </div>
-            <div id="matchChatMessages" class="h-36 overflow-y-auto space-y-1.5 text-xs mb-2 pr-1"></div>
-            <div class="flex gap-1.5">
-                <input type="text" id="matchChatInput" placeholder="Type..." onkeydown="if(event.key==='Enter') sendMatchChatMessage()" class="smash-input flex-1 px-2.5 py-1.5 rounded-xl text-xs">
-                <button onclick="sendMatchChatMessage()" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 font-black px-3 py-1.5 rounded-xl text-xs">Send</button>
-            </div>
+        <div id="gameStage">
+            <iframe
+                id="smashFrame"
+                src=""
+                title="Smash Karts game"
+                allow="autoplay; fullscreen 'none'">
+            </iframe>
+
+            <!-- ONE organized dock. Nothing stacks on top of it. -->
+            <aside id="gameDock">
+                <div id="gameDockHeader">
+                    <span id="gameDockTitle">👥 LOBBY</span>
+                    <button onclick="closeGameDock()" class="arena-button" style="padding:6px 9px">✕</button>
+                </div>
+
+                <div id="gameDockTabs">
+                    <button class="dock-tab-button" data-dock-tab="lobby" onclick="openGameDock('lobby')">👥 Lobby</button>
+                    <button class="dock-tab-button" data-dock-tab="chat" onclick="openGameDock('chat')">💬 Chat</button>
+                    <button class="dock-tab-button" data-dock-tab="music" onclick="openGameDock('music')">🎵 Spotify</button>
+                    <button class="dock-tab-button" data-dock-tab="tools" onclick="openGameDock('tools')">⚡ Tools</button>
+                </div>
+
+                <div id="gameDockBody">
+                    <section id="dockLobbyPanel" class="game-dock-panel">
+                        <div class="dock-card">
+                            <span class="dock-label">Lobby status</span>
+                            <div id="dockLobbySummary" class="font-bold text-sm text-white">Not in a lobby</div>
+                            <div id="dockReadySummary" class="text-[11px] text-blue-200 mt-1">0 ready</div>
+                        </div>
+                        <div class="dock-card">
+                            <span class="dock-label">Players</span>
+                            <div id="gameDockPlayerList"></div>
+                        </div>
+                        <div class="grid grid-cols-2 gap-2">
+                            <button id="dockReadyButton" class="dock-action green" onclick="toggleMyReadyStatus()">✓ READY</button>
+                            <button class="dock-action yellow" onclick="pasteCodeIntoCurrentLobby()">📋 PASTE CODE</button>
+                        </div>
+                        <div id="dockTeamControls" class="dock-card hidden mt-2">
+                            <span class="dock-label">2v2 team</span>
+                            <div class="grid grid-cols-2 gap-2">
+                                <button class="dock-action" onclick="chooseLobbyTeam('blue')">🔵 BLUE</button>
+                                <button class="dock-action red" onclick="chooseLobbyTeam('red')">🔴 RED</button>
+                            </div>
+                        </div>
+                        <div class="dock-card mt-2">
+                            <span class="dock-label">Quick reactions</span>
+                            <div class="grid grid-cols-5 gap-1">
+                                <button class="dock-action" onclick="sendLobbyReaction('🔥')">🔥</button>
+                                <button class="dock-action" onclick="sendLobbyReaction('😂')">😂</button>
+                                <button class="dock-action" onclick="sendLobbyReaction('🏁')">🏁</button>
+                                <button class="dock-action" onclick="sendLobbyReaction('💀')">💀</button>
+                                <button class="dock-action" onclick="sendLobbyReaction('GG')">GG</button>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section id="dockChatPanel" class="game-dock-panel hidden">
+                        <div id="chatOverlay">
+                            <div class="flex justify-between items-center mb-2">
+                                <span class="font-bungee text-xs text-yellow-300">💬 LOBBY CHAT</span>
+                                <span class="text-[10px] text-blue-200">same chat as lobby</span>
+                            </div>
+                            <div id="matchChatMessages"></div>
+                            <div class="flex gap-2 mt-3">
+                                <input type="text" id="matchChatInput" placeholder="Type..." onkeydown="if(event.key==='Enter') sendMatchChatMessage()" class="smash-input flex-1 px-3 py-2 rounded-xl text-xs">
+                                <button onclick="sendMatchChatMessage()" class="bg-yellow-400 text-blue-950 font-black px-3 py-2 rounded-xl text-xs">Send</button>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section id="dockMusicPanel" class="game-dock-panel hidden">
+                        <div class="dock-card">
+                            <span class="dock-label">Spotify Player</span>
+                            <p class="text-[11px] text-blue-200 mb-3">Listen while you play. This uses Spotify's official embedded player.</p>
+                            <iframe
+                                id="spotifyEmbedFrame"
+                                src="https://open.spotify.com/embed/playlist/37i9dQZF1DXcBWIGoYBM5M?utm_source=generator"
+                                title="Spotify"
+                                allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
+                                loading="lazy">
+                            </iframe>
+                        </div>
+                        <div class="grid grid-cols-2 gap-2">
+                            <button class="dock-action green" onclick="openSpotifyWebsite()">🔎 BROWSE SPOTIFY</button>
+                            <button class="dock-action" onclick="reloadSpotifyPlayer()">↻ RELOAD PLAYER</button>
+                        </div>
+                        <p class="text-[10px] text-blue-300 mt-3">The full Spotify website cannot reliably run inside another site's iframe. “Browse Spotify” opens the real web player, while this box stays available for playback.</p>
+                    </section>
+
+                    <section id="dockToolsPanel" class="game-dock-panel hidden">
+                        <div class="grid grid-cols-2 gap-2">
+                            <button class="dock-action" onclick="copyActiveRoomCode()">📋 COPY CODE</button>
+                            <button class="dock-action" onclick="openOnlineModal()">🟢 ONLINE</button>
+                            <button class="dock-action" onclick="toggleArenaFullscreen()">⛶ FULLSCREEN</button>
+                            <button class="dock-action" onclick="openHubPage('settings')">⚙️ SETTINGS</button>
+                            <button class="dock-action" onclick="rollArenaDice()">🎲 DICE</button>
+                            <button class="dock-action" onclick="flipArenaCoin()">🪙 COIN</button>
+                        </div>
+                        <button class="dock-action red mt-3" onclick="leaveEmbeddedGame()">✕ EXIT GAME</button>
+                    </section>
+                </div>
+            </aside>
         </div>
     </div>
 
+    <!-- =========================================================
+         DASHBOARD
+         ========================================================= -->
     <div id="mainDashboard" class="min-h-screen flex flex-col justify-between">
-        <header class="w-full px-6 py-4 flex justify-between items-center">
-            <div class="flex items-center gap-3">
+        <header class="w-full px-6 py-4 flex justify-between items-center gap-4 flex-wrap">
+            <div class="flex items-center gap-3 flex-wrap">
                 <div class="flex items-center gap-2 bg-blue-900/40 p-2 pr-4 rounded-2xl border border-white/20">
                     <div class="w-9 h-9 rounded-xl bg-yellow-400 flex items-center justify-center font-black text-blue-950 text-lg">👤</div>
                     <div>
-                        <span class="block text-[10px] font-bold uppercase text-blue-200">Username</span>
+                        <span id="accountModeLabel" class="block text-[10px] font-bold uppercase text-blue-200">Guest</span>
                         <div class="flex items-center gap-2">
-                            <span id="userDisplayTag" class="text-sm font-bold text-white">Player</span>
+                            <span id="userDisplayTag" class="text-sm font-bold text-white">Guest</span>
                             <button onclick="promptEditUsername()" title="Edit Username" class="text-xs text-yellow-300 hover:underline">✏️</button>
                         </div>
                     </div>
                 </div>
 
-                <button id="onlineCounterBtn" onclick="openOnlineModal()" class="bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/50 px-3 py-2 rounded-2xl flex items-center gap-2 transition-all">
+                <button id="onlineCounterBtn" onclick="openOnlineModal()" class="bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/50 px-3 py-2 rounded-2xl flex items-center gap-2">
                     <span class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
                     <span id="onlineCountBadge" class="text-xs font-bold text-emerald-300">0 Online</span>
                 </button>
+
+                <div id="connectionPill">
+                    <span id="connectionDot"></span>
+                    <span id="connectionText">Connected</span>
+                </div>
             </div>
 
-            <button onclick="AuthSession.logout()" class="bg-red-600 hover:bg-red-500 text-white text-xs font-bold px-4 py-2 rounded-xl">Logout</button>
+            <div id="headerRightActions">
+                <button id="headerAccountButton" onclick="openOptionalLogin()" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 text-xs font-black px-4 py-2 rounded-xl">LOG IN TO SAVE STATS</button>
+                <button onclick="openHubPage('settings')" class="bg-blue-800 hover:bg-blue-700 text-white text-xs font-bold px-4 py-2 rounded-xl">⚙️ SETTINGS</button>
+            </div>
         </header>
 
         <div class="flex flex-1 w-full max-w-7xl mx-auto px-4">
             <aside class="flex flex-col gap-4 py-6 pr-4 items-center">
                 <button id="btnNavLeaderboard" onclick="showTab('leaderboardTab')" title="Leaderboard" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg">🏆</button>
+                <button id="btnNavFFA" onclick="openFfaPage()" title="FFA" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg">🔥</button>
                 <button id="btnNav1v1" onclick="switchMatchMode('1v1')" title="1v1 Matchmaking" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg active">🎮</button>
                 <button id="btnNav2v2" onclick="switchMatchMode('2v2')" title="2v2 Matchmaking" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg">⚔️</button>
-
-                <button id="btnNavMessages" onclick="showMessagesTab()" title="Friends & Messages" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg">
-                    💬
-                    <span id="messagesBadge" class="unread-badge hidden">0</span>
-                </button>
+                <button id="btnNavMessages" onclick="showMessagesTab()" title="Friends & Messages" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg">💬<span id="messagesBadge" class="unread-badge hidden">0</span></button>
+                <button id="btnNavHub" onclick="openHubPage('profile')" title="Arena Hub" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg">⚡</button>
             </aside>
 
             <main class="flex-1 flex flex-col items-center">
@@ -433,12 +676,14 @@
 
                 <div class="w-full max-w-4xl bg-blue-950/40 border-2 border-white/20 backdrop-blur-xl rounded-3xl p-6 shadow-2xl mb-8">
                     <div id="leaderboardTab" class="tab-content hidden space-y-4">
-                        <h2 class="font-bungee text-xl text-yellow-300 mb-2">🏆 TOP 5 PLAYERS (MOST GAMES PLAYED)</h2>
+                        <h2 class="font-bungee text-xl text-yellow-300 mb-2">🏆 TOP PLAYERS</h2>
+                        <p id="guestLeaderboardNote" class="text-xs text-blue-200">Guest play works normally. Log in if you want your own matches added permanently.</p>
                         <div id="leaderboardList" class="space-y-2"></div>
                     </div>
 
                     <div id="messagesTab" class="tab-content hidden space-y-4">
                         <h2 class="font-bungee text-xl text-yellow-300 mb-2">💬 FRIENDS & DIRECT MESSAGES</h2>
+                        <div id="guestMessagesNotice" class="hidden bg-yellow-500/15 border border-yellow-400/40 rounded-xl p-3 text-xs text-yellow-100">Friends and saved DMs are account features. You can still use lobby chat as a guest.</div>
                         <div class="grid grid-cols-1 md:grid-cols-3 gap-4 h-80">
                             <div class="bg-blue-900/60 p-3 rounded-2xl border border-white/10 flex flex-col">
                                 <span class="font-bungee text-xs text-yellow-300 mb-2">YOUR FRIENDS</span>
@@ -456,7 +701,7 @@
                     </div>
 
                     <div id="setupTab" class="tab-content space-y-6">
-                        <div class="flex justify-between items-center border-b border-white/10 pb-4">
+                        <div class="flex justify-between items-center border-b border-white/10 pb-4 gap-3">
                             <div>
                                 <h2 id="arenaTitle" class="font-bungee text-2xl text-white">1v1 MATCHMAKING</h2>
                                 <p id="arenaSubtitle" class="text-xs text-blue-200">Start or join a match</p>
@@ -484,30 +729,184 @@
 
                         <button onclick="createLobby()" class="btn-smash w-full py-4 rounded-2xl font-bungee text-xl text-white">+ CREATE LOBBY & PRE-CHAT</button>
                     </div>
+
+                    <!-- FFA is now a normal page, never a floating overlay. -->
+                    <div id="ffaTab" class="tab-content hidden space-y-6">
+                        <div class="flex justify-between items-center border-b border-white/10 pb-4 gap-3">
+                            <div>
+                                <h2 class="font-bungee text-2xl text-white">FFA MATCHMAKING</h2>
+                                <p class="text-xs text-blue-200">Join an FFA lobby or create one</p>
+                            </div>
+                            <button onclick="openFindGameModal()" class="text-xs bg-emerald-500 hover:bg-emerald-400 text-white font-black px-5 py-2.5 rounded-xl uppercase">🔍 Public Lobbies</button>
+                        </div>
+
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div class="hub-card">
+                                <h3 class="font-bungee text-sm text-yellow-300 mb-2">JOIN</h3>
+                                <p class="text-xs text-blue-200 mb-4">Jump into an open public FFA lobby.</p>
+                                <button onclick="playFFAFromPage()" class="btn-smash w-full py-4 rounded-2xl font-bungee text-lg text-white">🔥 PLAY FFA</button>
+                            </div>
+                            <div class="hub-card">
+                                <h3 class="font-bungee text-sm text-yellow-300 mb-2">CREATE</h3>
+                                <div class="grid grid-cols-2 gap-2 mb-3">
+                                    <select id="ffaMaxPlayers" class="smash-input px-3 py-2 rounded-xl text-xs font-bold">
+                                        <option value="6">6 players</option>
+                                        <option value="8">8 players</option>
+                                        <option value="12" selected>12 players</option>
+                                        <option value="16">16 players</option>
+                                        <option value="20">20 players</option>
+                                    </select>
+                                    <select id="ffaPrivacy" class="smash-input px-3 py-2 rounded-xl text-xs font-bold">
+                                        <option value="public">Public</option>
+                                        <option value="private">Private</option>
+                                    </select>
+                                </div>
+                                <button onclick="createFFAFromPage()" class="bg-emerald-500 hover:bg-emerald-400 w-full py-4 rounded-2xl font-bungee text-lg text-white">+ CREATE LOBBY</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Organized Arena Hub: one page, sub-tabs, no piling panels. -->
+                    <div id="hubTab" class="tab-content hidden">
+                        <div class="border-b border-white/10 pb-4 mb-4">
+                            <h2 class="font-bungee text-2xl text-white">⚡ ARENA HUB</h2>
+                            <p class="text-xs text-blue-200">Everything extra lives here instead of opening a pile of floating windows.</p>
+                        </div>
+
+                        <div id="hubSubnav">
+                            <button class="hub-sub-button" data-hub="profile" onclick="openHubPanel('profile')">👤 Profile</button>
+                            <button class="hub-sub-button" data-hub="music" onclick="openHubPanel('music')">🎵 Spotify</button>
+                            <button class="hub-sub-button" data-hub="history" onclick="openHubPanel('history')">📜 History</button>
+                            <button class="hub-sub-button" data-hub="notes" onclick="openHubPanel('notes')">📝 Notes</button>
+                            <button class="hub-sub-button" data-hub="settings" onclick="openHubPanel('settings')">⚙️ Settings</button>
+                            <button class="hub-sub-button" data-hub="shortcuts" onclick="openHubPanel('shortcuts')">⌨️ Shortcuts</button>
+                        </div>
+
+                        <section id="hubProfilePanel" class="hub-panel">
+                            <div class="hub-grid">
+                                <div class="hub-card">
+                                    <span class="dock-label">Player</span>
+                                    <div id="hubProfileName" class="font-bungee text-xl text-yellow-300">Guest</div>
+                                    <div id="hubProfileMode" class="text-xs text-blue-200 mt-1">Guest Mode</div>
+                                    <button id="hubLoginButton" onclick="openOptionalLogin()" class="dock-action yellow mt-4">LOG IN TO SAVE STATS</button>
+                                </div>
+                                <div class="hub-card">
+                                    <span class="dock-label">Progress</span>
+                                    <div id="hubProgressText" class="text-sm font-bold text-white">Guest progress stays on this browser.</div>
+                                    <div id="hubSessionTime" class="text-xs text-blue-200 mt-2">Session: 0m</div>
+                                </div>
+                            </div>
+                        </section>
+
+                        <section id="hubMusicPanel" class="hub-panel hidden">
+                            <div class="hub-card">
+                                <span class="dock-label">Spotify</span>
+                                <p class="text-xs text-blue-200 mb-3">Official Spotify player embedded directly in Arena Hub.</p>
+                                <iframe
+                                    id="hubSpotifyEmbedFrame"
+                                    src="https://open.spotify.com/embed/playlist/37i9dQZF1DXcBWIGoYBM5M?utm_source=generator"
+                                    title="Spotify"
+                                    allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
+                                    loading="lazy">
+                                </iframe>
+                                <div class="grid grid-cols-2 gap-2 mt-3">
+                                    <button class="dock-action green" onclick="openSpotifyWebsite()">🔎 BROWSE SPOTIFY</button>
+                                    <button class="dock-action" onclick="reloadSpotifyPlayer()">↻ RELOAD</button>
+                                </div>
+                            </div>
+                        </section>
+
+                        <section id="hubHistoryPanel" class="hub-panel hidden">
+                            <div class="hub-card">
+                                <div class="flex justify-between items-center gap-2 mb-3">
+                                    <span class="dock-label" style="margin:0">Saved match history</span>
+                                    <button onclick="requestSavedHistory()" class="dock-action" style="width:auto">↻ REFRESH</button>
+                                </div>
+                                <div id="hubHistoryList" class="space-y-2 text-xs text-white">Log in to save permanent match history.</div>
+                            </div>
+                        </section>
+
+                        <section id="hubNotesPanel" class="hub-panel hidden">
+                            <div class="hub-card">
+                                <span class="dock-label">Match notes</span>
+                                <textarea id="hubNotesInput" rows="10" placeholder="Strategies, players, reminders..." class="smash-input w-full px-3 py-3 rounded-xl text-sm"></textarea>
+                                <div class="grid grid-cols-2 gap-2 mt-3">
+                                    <button onclick="saveArenaNotes()" class="dock-action green">SAVE NOTES</button>
+                                    <button onclick="clearArenaNotes()" class="dock-action red">CLEAR</button>
+                                </div>
+                            </div>
+                        </section>
+
+                        <section id="hubSettingsPanel" class="hub-panel hidden">
+                            <div class="hub-grid">
+                                <div class="hub-card">
+                                    <span class="dock-label">Gameplay</span>
+                                    <label class="text-xs text-blue-200">Gameplay mode</label>
+                                    <select id="hubGameplayMode" class="smash-input w-full px-3 py-2 rounded-xl text-xs mt-1">
+                                        <option value="popup">Popup Window</option>
+                                        <option value="embed">Type in Code / Embedded</option>
+                                    </select>
+                                    <button onclick="applyHubGameplayMode()" class="dock-action mt-3">SAVE GAMEPLAY MODE</button>
+                                </div>
+                                <div class="hub-card">
+                                    <span class="dock-label">Account</span>
+                                    <button onclick="promptEditUsername()" class="dock-action">✏️ CHANGE USERNAME</button>
+                                    <button id="hubAccountAction" onclick="openOptionalLogin()" class="dock-action yellow mt-2">LOG IN TO SAVE STATS</button>
+                                </div>
+                            </div>
+                        </section>
+
+                        <section id="hubShortcutsPanel" class="hub-panel hidden">
+                            <div class="hub-grid">
+                                <div class="hub-card text-xs text-white space-y-2">
+                                    <div><b class="text-yellow-300">L</b> · Lobby dock</div>
+                                    <div><b class="text-yellow-300">C</b> · Chat dock</div>
+                                    <div><b class="text-yellow-300">M</b> · Spotify dock</div>
+                                    <div><b class="text-yellow-300">R</b> · Ready / not ready</div>
+                                </div>
+                                <div class="hub-card text-xs text-white space-y-2">
+                                    <div><b class="text-yellow-300">1</b> · 1v1 page</div>
+                                    <div><b class="text-yellow-300">2</b> · 2v2 page</div>
+                                    <div><b class="text-yellow-300">3</b> · FFA page</div>
+                                    <div><b class="text-yellow-300">Esc</b> · Close current dock/modal</div>
+                                </div>
+                            </div>
+                        </section>
+                    </div>
                 </div>
             </main>
         </div>
     </div>
 
-    <div id="preGameLobbyModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
-        <div class="w-full max-w-2xl bg-blue-900 border-2 border-yellow-400 rounded-3xl p-6 shadow-2xl relative flex flex-col max-h-[90vh]">
+    <!-- =========================================================
+         PRE-GAME LOBBY - only one full modal at a time
+         ========================================================= -->
+    <div id="preGameLobbyModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4 exclusive-modal">
+        <div class="w-full max-w-3xl bg-blue-900 border-2 border-yellow-400 rounded-3xl p-6 shadow-2xl relative flex flex-col max-h-[90vh]">
             <div class="flex justify-between items-center border-b border-white/10 pb-3 mb-4">
-                <h3 class="font-bungee text-lg text-yellow-300">🎮 PRE-GAME LOBBY</h3>
+                <div>
+                    <h3 class="font-bungee text-lg text-yellow-300">👥 MATCH LOBBY</h3>
+                    <p id="preGameLobbyMeta" class="text-[10px] text-blue-200 mt-1"></p>
+                </div>
                 <button onclick="closePreGameLobbyModal()" class="text-white hover:text-red-400 font-bold text-lg">✕</button>
             </div>
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 flex-1">
-                <div class="bg-blue-950/80 rounded-2xl p-3 border border-white/10 flex flex-col justify-between">
-                    <div>
-                        <h4 class="font-bungee text-xs text-yellow-300 mb-2">PLAYERS</h4>
-                        <div id="preGamePlayerList" class="space-y-2 text-xs"></div>
-                    </div>
-                    <button onclick="enterGameFromLobby()" class="btn-smash w-full py-3 rounded-xl font-bungee text-sm text-white">🚀 JOIN GAME</button>
+
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 flex-1 min-h-0">
+                <div class="bg-blue-950/80 rounded-2xl p-3 border border-white/10 flex flex-col min-h-0">
+                    <h4 class="font-bungee text-xs text-yellow-300 mb-2">👥 PLAYERS (0)</h4>
+                    <div id="preGamePlayerList" class="space-y-2 text-xs overflow-y-auto flex-1"></div>
+                    <button id="preGameReadyButton" onclick="toggleMyReadyStatus()" class="bg-emerald-500 hover:bg-emerald-400 text-white font-black py-2 rounded-xl text-xs mt-3">✓ READY</button>
+                    <button onclick="enterGameFromLobby()" class="btn-smash w-full py-3 rounded-xl font-bungee text-sm text-white mt-2">🚀 JOIN GAME</button>
                 </div>
-                <div class="md:col-span-2 bg-blue-950/80 rounded-2xl p-3 border border-white/10 flex flex-col">
-                    <h4 class="font-bungee text-xs text-yellow-300 mb-2">💬 PRE-MATCH CHAT</h4>
+
+                <div class="md:col-span-2 bg-blue-950/80 rounded-2xl p-3 border border-white/10 flex flex-col min-h-0">
+                    <div class="flex justify-between items-center gap-2 mb-2">
+                        <h4 class="font-bungee text-xs text-yellow-300">💬 LOBBY CHAT</h4>
+                        <button onclick="openGameDock('music')" class="text-[10px] text-green-300 font-bold">🎵 Spotify</button>
+                    </div>
                     <div id="preGameChatMessages" class="flex-1 overflow-y-auto space-y-2 text-xs pr-1 mb-3 min-h-[160px]"></div>
                     <div class="flex gap-2">
-                        <input type="text" id="preGameChatInput" placeholder="Plan teams..." onkeydown="if(event.key==='Enter') sendPreGameChatMessage()" class="smash-input flex-1 px-3 py-2 rounded-xl text-xs">
+                        <input type="text" id="preGameChatInput" placeholder="Chat with lobby..." onkeydown="if(event.key==='Enter') sendPreGameChatMessage()" class="smash-input flex-1 px-3 py-2 rounded-xl text-xs">
                         <button onclick="sendPreGameChatMessage()" class="bg-yellow-400 text-blue-950 font-black px-4 py-2 rounded-xl text-xs uppercase">Send</button>
                     </div>
                 </div>
@@ -515,7 +914,7 @@
         </div>
     </div>
 
-    <div id="makeCodeModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
+    <div id="makeCodeModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4 exclusive-modal">
         <div class="w-full max-w-3xl bg-blue-900 border-2 border-white/30 rounded-3xl p-5 shadow-2xl flex flex-col h-[85vh]">
             <div class="flex justify-between items-center mb-3">
                 <h3 class="font-bungee text-base text-yellow-300">⚡ MAKE ROOM CODE IN SMASH KARTS</h3>
@@ -531,11 +930,18 @@
         </div>
     </div>
 
-    <div id="findGameModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4">
-        <div class="w-full max-w-md bg-blue-900 border-2 border-white/30 rounded-3xl p-6 shadow-2xl relative">
+    <div id="findGameModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4 exclusive-modal">
+        <div class="w-full max-w-lg bg-blue-900 border-2 border-white/30 rounded-3xl p-6 shadow-2xl relative">
             <div class="flex justify-between items-center mb-4">
-                <h3 class="font-bungee text-lg text-yellow-300">🎮 ACTIVE MATCHES</h3>
+                <div>
+                    <h3 class="font-bungee text-lg text-yellow-300">🎮 ACTIVE MATCHES</h3>
+                    <p class="text-[10px] text-blue-200">1v1, 2v2 and FFA</p>
+                </div>
                 <button onclick="closeFindGameModal()" class="text-white hover:text-red-400 font-bold text-lg">✕</button>
+            </div>
+            <div class="flex gap-2 mb-3">
+                <input id="publicRoomSearch" type="text" placeholder="Search host or mode..." class="smash-input flex-1 px-3 py-2 rounded-xl text-xs">
+                <button onclick="socket.emit('get_public_rooms')" class="bg-blue-700 text-white font-bold px-3 rounded-xl text-xs">↻</button>
             </div>
             <div id="publicRoomsList" class="max-h-80 overflow-y-auto space-y-2.5"></div>
         </div>
@@ -544,200 +950,38 @@
     <script src="script.js"></script>
 
     <script>
+        /*
+           Small layout controller only.
+           The full guest/lobby/hub logic comes from server.js after script.js.
+        */
         (() => {
-            const screen = document.getElementById("gameScreen");
-            const chat = document.getElementById("chatOverlay");
-            const chatInput = document.getElementById("matchChatInput");
-            const toolbar = document.getElementById("arenaToolbar");
-            const menuToggle = document.getElementById("arenaMenuToggle");
-            const options = document.getElementById("arenaOptions");
-            const optionsButton = document.getElementById("arenaOptionsButton");
-            const chatButton = document.getElementById("arenaChatButton");
-
-            function setOptionsOpen(open) {
-                options.hidden = !open;
-                optionsButton.setAttribute("aria-expanded", String(open));
-            }
+            const screen = document.getElementById('gameScreen');
+            const toolbar = document.getElementById('arenaToolbar');
+            const menuToggle = document.getElementById('arenaMenuToggle');
 
             function measureToolbar() {
-                const height = toolbar.getBoundingClientRect().height;
-
-                if (height > 0) {
-                    screen.style.setProperty("--menu-height", `${height}px`);
-                }
+                const h = toolbar.hidden ? 0 : toolbar.getBoundingClientRect().height;
+                if (h > 0) screen.style.setProperty('--menu-height', `${h}px`);
             }
 
-            function setToolbarOpen(open) {
+            window.setArenaToolbarOpen = function(open) {
                 toolbar.hidden = !open;
-                screen.classList.toggle("arena-menu-open", open);
-                menuToggle.setAttribute("aria-expanded", String(open));
-
-                document.getElementById("topBarTabIcon").textContent =
-                    open ? "▲" : "▼";
-
-                document.getElementById("arenaMenuLabel").textContent =
-                    open ? "HIDE MENU" : "OPTIONS & CHAT";
-
-                if (!open) {
-                    setOptionsOpen(false);
-                }
-
+                screen.classList.toggle('arena-menu-open', open);
+                menuToggle.setAttribute('aria-expanded', String(open));
+                document.getElementById('topBarTabIcon').textContent = open ? '▲' : '▼';
+                document.getElementById('arenaMenuLabel').textContent = open ? 'HIDE MENU' : 'SHOW MENU';
                 measureToolbar();
-            }
-
-            function setChatOpen(open) {
-                clearTimeout(chatInactivityTimer);
-                chatInactivityTimer = null;
-
-                chat.classList.toggle("hidden-overlay", !open);
-                chatButton.setAttribute("aria-expanded", String(open));
-
-                document.getElementById("toggleChatBtnLabel").textContent =
-                    open ? "Hide Chat" : "Show Chat";
-            }
-
-            // Replace the original five-second chat handler.
-            chatInput.removeEventListener("input", triggerChatActivityTimer);
-            clearTimeout(chatInactivityTimer);
-
-            triggerChatActivityTimer = function () {
-                setChatOpen(true);
-
-                chatInactivityTimer = setTimeout(() => {
-                    setChatOpen(false);
-                }, 5000);
             };
 
-            toggleOverlayChat = function () {
-                setOptionsOpen(false);
-
-                if (chat.classList.contains("hidden-overlay")) {
-                    triggerChatActivityTimer();
-                    chatInput.focus();
-                } else {
-                    setChatOpen(false);
-                }
+            window.toggleGameTopBar = function() {
+                setArenaToolbarOpen(toolbar.hidden);
             };
 
-            toggleGameTopBar = function () {
-                setToolbarOpen(toolbar.hidden);
-            };
-
-            chatInput.addEventListener("input", triggerChatActivityTimer);
-            menuToggle.addEventListener("click", toggleGameTopBar);
-
-            optionsButton.addEventListener("click", () => {
-                setOptionsOpen(options.hidden);
-            });
-
-            options.addEventListener("click", async (event) => {
-                const button = event.target.closest("button[data-action]");
-
-                if (!button) {
-                    return;
-                }
-
-                setOptionsOpen(false);
-
-                switch (button.dataset.action) {
-                    case "chat":
-                        toggleOverlayChat();
-                        break;
-
-                    case "copy":
-                        copyActiveRoomCode();
-                        break;
-
-                    case "settings":
-                        openSettingsModal();
-                        break;
-
-                    case "online":
-                        openOnlineModal();
-                        break;
-
-                    case "fullscreen":
-                        try {
-                            // Fullscreen the page to keep chat and controls visible.
-                            if (document.fullscreenElement) {
-                                await document.exitFullscreen();
-                            } else if (document.documentElement.requestFullscreen) {
-                                await document.documentElement.requestFullscreen();
-                            } else {
-                                showToast(
-                                    "Fullscreen is unavailable in this browser.",
-                                    "ℹ️"
-                                );
-                            }
-                        } catch {
-                            showToast("Could not change fullscreen mode.", "ℹ️");
-                        }
-                        break;
-
-                    case "exit":
-                        leaveEmbeddedGame();
-                        break;
-                }
-            });
-
-            document.addEventListener("click", (event) => {
-                if (!event.target.closest("#arenaOptions, #arenaOptionsButton")) {
-                    setOptionsOpen(false);
-                }
-            });
-
-            document.addEventListener("keydown", (event) => {
-                if (event.key === "Escape" && !options.hidden) {
-                    setOptionsOpen(false);
-                    optionsButton.focus();
-                }
-            });
-
-            document.addEventListener("fullscreenchange", () => {
-                document.getElementById("arenaFullscreen").textContent =
-                    document.fullscreenElement
-                        ? "⛶ Exit full screen"
-                        : "⛶ Full screen";
-
-                measureToolbar();
-            });
-
-            const originalEnterGame = enterGameFromLobby;
-
-            enterGameFromLobby = function (...args) {
-                const result = originalEnterGame.apply(this, args);
-
-                if (!screen.classList.contains("hidden")) {
-                    setToolbarOpen(true);
-                    setOptionsOpen(false);
-                }
-
-                return result;
-            };
-
-            const originalLeaveGame = leaveEmbeddedGame;
-
-            leaveEmbeddedGame = function (...args) {
-                setChatOpen(false);
-                setToolbarOpen(false);
-
-                if (document.fullscreenElement && document.exitFullscreen) {
-                    document.exitFullscreen().catch(() => {});
-                }
-
-                return originalLeaveGame.apply(this, args);
-            };
-
-            window.addEventListener("resize", measureToolbar);
-
-            if (typeof ResizeObserver !== "undefined") {
-                new ResizeObserver(measureToolbar).observe(toolbar);
-            }
-
-            setChatOpen(false);
-            setToolbarOpen(!screen.classList.contains("hidden"));
+            menuToggle.addEventListener('click', toggleGameTopBar);
+            window.addEventListener('resize', measureToolbar);
+            if (typeof ResizeObserver !== 'undefined') new ResizeObserver(measureToolbar).observe(toolbar);
+            setArenaToolbarOpen(false);
         })();
     </script>
-
 </body>
 </html>
