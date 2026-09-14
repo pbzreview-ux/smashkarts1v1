@@ -559,6 +559,67 @@
             font-weight: 1000;
         }
 
+
+
+        .profile-avatar-button,
+        .profile-avatar-preview {
+            width: 42px;
+            height: 42px;
+            border-radius: 9999px;
+            overflow: hidden;
+            flex: 0 0 auto;
+            display: grid;
+            place-items: center;
+            background: #ffd318;
+            border: 2px solid #ffffff55;
+            color: #142f75;
+            font-weight: 900;
+            position: relative;
+        }
+
+        .profile-avatar-preview {
+            width: 72px;
+            height: 72px;
+            margin: 0 auto 10px;
+        }
+
+        .profile-avatar-button img,
+        .profile-avatar-preview img,
+        .round-user-avatar img,
+        .discord-avatar img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            border-radius: 9999px;
+            display: block;
+        }
+
+        .round-user-avatar {
+            width: 38px;
+            height: 38px;
+            border-radius: 9999px;
+            overflow: hidden;
+            flex: 0 0 auto;
+            display: grid;
+            place-items: center;
+            background: #1e3a8a;
+            border: 1px solid #ffffff2f;
+            color: white;
+            font-weight: 900;
+            font-size: 12px;
+        }
+
+        .spotify-nav-icon {
+            width: 25px;
+            height: 25px;
+            display: block;
+        }
+
+        .sidebar-text-icon {
+            font-family: "Bungee", sans-serif;
+            font-size: 10px;
+            letter-spacing: -0.3px;
+        }
         .discord-avatar.big {
             width: 40px;
             height: 40px;
@@ -814,8 +875,13 @@
 
                 <div class="hub-card">
                     <span class="dock-label">Account</span>
-                    <button onclick="promptEditUsername()" class="dock-action">✏️ CHANGE USERNAME</button>
+                    <div id="settingsProfileAvatar" class="profile-avatar-preview"><span id="settingsProfileFallback">👤</span><img id="settingsProfileImage" class="hidden" alt="Profile picture"></div>
+                    <input id="profilePictureInput" type="file" accept="image/png,image/jpeg,image/webp" class="hidden" onchange="handleProfilePictureUpload(event)">
+                    <button id="uploadProfilePictureButton" onclick="openProfilePicturePicker()" class="dock-action">📷 UPLOAD PROFILE PICTURE</button>
+                    <button id="removeProfilePictureButton" onclick="removeProfilePicture()" class="dock-action mt-2 hidden">REMOVE PICTURE</button>
+                    <button onclick="promptEditUsername()" class="dock-action mt-2">✏️ CHANGE USERNAME</button>
                     <button id="settingsAccountButton" onclick="openOptionalLogin()" class="dock-action yellow mt-2">LOG IN TO SAVE STATS</button>
+                    <p id="profilePictureAccountNote" class="text-[10px] text-blue-200 mt-2">Profile pictures are saved with a logged-in account.</p>
                 </div>
             </div>
 
@@ -823,15 +889,15 @@
                 <div class="flex items-center justify-between gap-3">
                     <div>
                         <div class="flex items-center gap-2">
-                            <span class="dock-label" style="color:#1ed760">Spotify</span>
+                            <span class="dock-label" style="color:#1ed760">Spotify</span><button type="button" onclick="openSpotifySetupInfo()" title="Spotify setup help" style="width:22px;height:22px;border-radius:999px;border:1px solid #1ed760;color:#1ed760;font-weight:900;font-size:11px;line-height:1">i</button>
                             
                         </div>
-                        <p class="text-[11px] text-gray-300 mt-1">Spotify Free Mode works for regular Spotify users. No Premium, Client ID, or Render setup required.</p>
+                        <p class="text-[11px] text-gray-300 mt-1">Connect one Spotify account normally. Premium users get full in-site playback and skip controls; Free users get in-site search plus the official Spotify player.</p>
                     </div>
-                    <span id="spotifySettingsStatus" class="text-[10px] font-bold text-gray-300">Free mode · ready</span>
+                    <span id="spotifySettingsStatus" class="text-[10px] font-bold text-gray-300">Ready to connect</span>
                 </div>
                 <div class="grid grid-cols-2 gap-2 mt-3">
-                    <button id="spotifySettingsConnectButton" onclick="openMusicPage()" class="dock-action green">OPEN MUSIC</button>
+                    <button id="spotifySettingsConnectButton" onclick="spotifyConnect()" class="dock-action green">CONNECT SPOTIFY</button>
                     <button onclick="openSpotifyWebsite()" class="dock-action">OPEN SPOTIFY WEB</button>
                 </div>
             </div>
@@ -935,10 +1001,10 @@
                         <div class="spotify-mini-copy" onclick="openGameDock('music')">
                             <span id="spotifyMiniTrack" class="spotify-mini-track">🎵 Spotify</span>
                         </div>
-                        <button class="spotify-mini-skip" onclick="openGameDock('music')" title="Open Spotify player">♫</button>
+                        <button class="spotify-mini-skip" onclick="spotifyNextTrack()" title="Skip song">⏭</button>
                     </div>
                     <button id="arenaChatButton" class="arena-button" onclick="toggleOverlayChat()">💬 <span id="toggleChatBtnLabel">Show Chat</span></button>
-                    <button id="arenaOptionsButton" class="arena-button" onclick="openGameDock('tools')">⚡ TOOLS</button>
+                    <button id="arenaOptionsButton" class="arena-button" onclick="openGameDock('tools')">⚙ OPTIONS</button>
                 </div>
             </div>
 
@@ -969,7 +1035,7 @@
                     <button class="dock-tab-button" data-dock-tab="lobby" onclick="openGameDock('lobby')">👥 Lobby</button>
                     <button class="dock-tab-button" data-dock-tab="chat" onclick="openGameDock('chat')">💬 Chat</button>
                     <button class="dock-tab-button" data-dock-tab="music" onclick="openGameDock('music')">🎵 Spotify</button>
-                    <button class="dock-tab-button" data-dock-tab="tools" onclick="openGameDock('tools')">⚡ Tools</button>
+                    <button class="dock-tab-button" data-dock-tab="tools" onclick="openGameDock('tools')">⚙ Options</button>
                 </div>
 
                 <div id="gameDockBody">
@@ -986,13 +1052,6 @@
                         <div class="grid grid-cols-2 gap-2">
                             <button id="dockReadyButton" class="dock-action green" onclick="toggleMyReadyStatus()">✓ READY</button>
                             <button class="dock-action yellow" onclick="pasteCodeIntoCurrentLobby()">📋 PASTE CODE</button>
-                        </div>
-                        <div id="dockTeamControls" class="dock-card hidden mt-2">
-                            <span class="dock-label">2v2 team</span>
-                            <div class="grid grid-cols-2 gap-2">
-                                <button class="dock-action" onclick="chooseLobbyTeam('blue')">🔵 BLUE</button>
-                                <button class="dock-action red" onclick="chooseLobbyTeam('red')">🔴 RED</button>
-                            </div>
                         </div>
                         <div class="dock-card mt-2">
                             <span class="dock-label">Quick reactions</span>
@@ -1043,6 +1102,10 @@
                                     </div>
                                 </div>
 
+                                <div id="spotifyDockFreePlayerWrap" class="hidden mb-3">
+                                    <iframe id="spotifyDockEmbed" title="Spotify player" style="border-radius:14px;width:100%;height:152px;border:0" allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture" loading="lazy"></iframe>
+                                </div>
+
                                 <div class="spotify-search-row">
                                     <input id="spotifyDockSearchInput" type="text" placeholder="Search Spotify for any song..." onkeydown="if(event.key==='Enter') spotifySearch('dock')" class="smash-input flex-1 px-3 py-2 rounded-xl text-xs">
                                     <button onclick="spotifySearch('dock')" class="dock-action green" style="width:auto">SEARCH</button>
@@ -1075,7 +1138,10 @@
         <header class="w-full px-6 py-4 flex justify-between items-center gap-4 flex-wrap">
             <div class="flex items-center gap-3 flex-wrap">
                 <div class="flex items-center gap-2 bg-blue-900/40 p-2 pr-4 rounded-2xl border border-white/20">
-                    <div class="w-9 h-9 rounded-xl bg-yellow-400 flex items-center justify-center font-black text-blue-950 text-lg">👤</div>
+                    <button id="headerAvatarButton" class="profile-avatar-button" onclick="openProfilePicturePicker()" title="Profile picture">
+                        <span id="headerProfileFallback">👤</span>
+                        <img id="headerProfileImage" class="hidden" alt="Profile picture">
+                    </button>
                     <div>
                         <span id="accountModeLabel" class="block text-[10px] font-bold uppercase text-blue-200">Guest</span>
                         <div class="flex items-center gap-2">
@@ -1104,12 +1170,17 @@
 
         <div class="flex flex-1 w-full max-w-7xl mx-auto px-4">
             <aside class="flex flex-col gap-4 py-6 pr-4 items-center">
-                <button id="btnNavLeaderboard" onclick="showTab('leaderboardTab')" title="Leaderboard" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg">🏆</button>
-                <button id="btnNavFFA" onclick="openFfaPage()" title="FFA" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg">🔥</button>
+                <button id="btnNavFFA" onclick="openFfaPage()" title="FFA" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center shadow-lg"><span class="sidebar-text-icon">FFA</span></button>
                 <button id="btnNav1v1" onclick="switchMatchMode('1v1')" title="1v1 Matchmaking" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg active">🎮</button>
-                <button id="btnNav2v2" onclick="switchMatchMode('2v2')" title="2v2 Matchmaking" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg">⚔️</button>
                 <button id="btnNavMessages" onclick="showMessagesTab()" title="Friends & Messages" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg">💬<span id="messagesBadge" class="unread-badge hidden">0</span></button>
-                <button id="btnNavMusic" onclick="openMusicPage()" title="Spotify" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg">🎵</button>
+                <button id="btnNavMusic" onclick="openMusicPage()" title="Spotify" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center shadow-lg" aria-label="Spotify">
+                    <svg class="spotify-nav-icon" viewBox="0 0 24 24" aria-hidden="true">
+                        <circle cx="12" cy="12" r="11" fill="#1ED760"/>
+                        <path d="M6.6 9.1c3.6-1 7.7-.8 11.1.7" fill="none" stroke="#07140b" stroke-width="1.8" stroke-linecap="round"/>
+                        <path d="M7.2 12.2c3.1-.8 6.7-.6 9.7.6" fill="none" stroke="#07140b" stroke-width="1.6" stroke-linecap="round"/>
+                        <path d="M7.8 15.1c2.6-.6 5.4-.5 8 .5" fill="none" stroke="#07140b" stroke-width="1.45" stroke-linecap="round"/>
+                    </svg>
+                </button>
             </aside>
 
             <main class="flex-1 flex flex-col items-center">
@@ -1120,12 +1191,6 @@
                 </div>
 
                 <div class="w-full max-w-4xl bg-blue-950/40 border-2 border-white/20 backdrop-blur-xl rounded-3xl p-6 shadow-2xl mb-8">
-                    <div id="leaderboardTab" class="tab-content hidden space-y-4">
-                        <h2 class="font-bungee text-xl text-yellow-300 mb-2">🏆 TOP PLAYERS</h2>
-                        <p id="guestLeaderboardNote" class="text-xs text-blue-200">Guest play works normally. Log in if you want your own matches added permanently.</p>
-                        <div id="leaderboardList" class="space-y-2"></div>
-                    </div>
-
                     <div id="messagesTab" class="tab-content hidden space-y-4">
                         <div class="flex justify-between items-center gap-3">
                             <div>
@@ -1157,9 +1222,7 @@
                                             <div id="dmChatStatus" class="text-[10px] text-blue-200">Choose somebody from the left.</div>
                                         </div>
                                     </div>
-                                    <div class="flex gap-2">
-                                        <button id="dmChallengeButton" onclick="challengeActiveDMFriend()" class="hidden bg-yellow-400 hover:bg-yellow-300 text-blue-950 font-black text-[10px] px-3 py-2 rounded-lg">⚔️ 1v1</button>
-                                    </div>
+
                                 </div>
 
                                 <div id="tabDMMessages" class="discord-messages">
@@ -1243,12 +1306,12 @@
                     <div id="musicTab" class="tab-content hidden space-y-4">
                         <div class="flex justify-between items-center border-b border-white/10 pb-4 gap-3">
                             <div>
-                                <h2 class="font-bungee text-2xl text-white">🎵 SPOTIFY</h2>
-                                <p class="text-xs text-blue-200">Spotify Free Mode: listen in the official player, or search the full Spotify Web Player.</p>
+                                <h2 class="font-bungee text-2xl text-white">SPOTIFY</h2>
+                                <p class="text-xs text-blue-200">Connect Spotify for in-site search. Premium gets full playback controls; Free uses the official Spotify player.</p>
                             </div>
                             <div class="flex gap-2 items-center">
-                                <button id="spotifyPageConnectButton" onclick="openSpotifyWebsite()" class="dock-action green" style="width:auto">OPEN SPOTIFY WEB</button>
-                                <button onclick="openSpotifyWebsite()" class="dock-action" style="width:auto">OPEN FULL SPOTIFY</button>
+                                <button id="spotifyPageConnectButton" onclick="spotifyConnect()" class="dock-action green" style="width:auto">CONNECT SPOTIFY</button>
+                                <button onclick="openSpotifyWebsite()" class="dock-action" style="width:auto">OPEN SPOTIFY WEB</button>
                             </div>
                         </div>
 
@@ -1280,6 +1343,11 @@
                                                 <button onclick="spotifyNextTrack()" class="spotify-control">⏭</button>
                                             </div>
                                         </div>
+                                    </div>
+
+                                    <div id="spotifyFreePlayerWrap" class="hidden mb-4">
+                                        <div class="spotify-view-title mb-2">Spotify Player</div>
+                                        <iframe id="spotifyPageEmbed" title="Spotify player" style="border-radius:14px;width:100%;height:152px;border:0" allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture" loading="lazy"></iframe>
                                     </div>
 
                                     <div id="spotifySearchView">
@@ -1372,7 +1440,7 @@
             <div class="flex justify-between items-center mb-4">
                 <div>
                     <h3 class="font-bungee text-lg text-yellow-300">🎮 ACTIVE MATCHES</h3>
-                    <p class="text-[10px] text-blue-200">1v1, 2v2 and FFA</p>
+                    <p class="text-[10px] text-blue-200">1v1 and FFA</p>
                 </div>
                 <button onclick="closeFindGameModal()" class="text-white hover:text-red-400 font-bold text-lg">✕</button>
             </div>
@@ -1390,7 +1458,7 @@
             <div class="flex items-start justify-between gap-4 mb-4">
                 <div>
                     <h3 class="font-bungee text-lg text-[#1ed760]">🎵 SPOTIFY SETUP</h3>
-                    <p class="text-xs text-gray-300 mt-1">This setup is only for the website owner. Regular players never need a Client ID.</p>
+                    <p class="text-xs text-gray-300 mt-1">The website uses one Client ID. Players only click Connect Spotify and sign in.</p>
                 </div>
                 <button type="button" onclick="closeSpotifySetupInfo()" class="text-white hover:text-red-400 font-bold text-xl">✕</button>
             </div>
@@ -1433,7 +1501,7 @@
         </div>
     </div>
 
-    <script src="/script.js?v=9"></script>
+    <script src="/script.js?v=10"></script>
 
     <script>
         /*

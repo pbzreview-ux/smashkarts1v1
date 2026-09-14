@@ -101,9 +101,13 @@ function profileFor(username) {
             friends: [],
             requests: [],
             isOnline: true,
+            avatar: '',
             createdAt: Date.now()
         };
     }
+    profiles[username].friends ||= [];
+    profiles[username].requests ||= [];
+    if (typeof profiles[username].avatar !== 'string') profiles[username].avatar = '';
     return profiles[username];
 }
 
@@ -328,8 +332,9 @@ function joinRoom(socket, room, player, eventName = 'room_created') {
             id: socket.id,
             name: player.username,
             isGuest: !!player.isGuest,
+            avatar: player.avatar || '',
             ready: false,
-            team: room.mode === '2v2' ? null : null,
+            team: null,
             joinedAt: Date.now()
         };
         room.players.push(member);
@@ -361,6 +366,7 @@ io.on('connection', socket => {
         isAuthenticated: false,
         isGuest: true,
         isOnline: true,
+        avatar: '',
         friends: new Set(),
         friendRequests: new Set()
     };
@@ -381,11 +387,14 @@ io.on('connection', socket => {
         player.isOnline = true;
 
         if (isGuest) {
+            player.avatar = '';
             player.friends = new Set();
             player.friendRequests = new Set();
             socket.emit('saved_friends', { friends: [], requests: [] });
+            socket.emit('saved_profile', { avatar: '' });
         } else {
             const profile = profileFor(username);
+            player.avatar = profile.avatar || '';
             player.friends = new Set(profile.friends || []);
             player.friendRequests = new Set(profile.requests || []);
             player.isOnline = profile.isOnline !== false;
@@ -394,6 +403,7 @@ io.on('connection', socket => {
                 requests: profile.requests || []
             });
             socket.emit('friend_requests_update', Array.from(player.friendRequests));
+            socket.emit('saved_profile', { avatar: player.avatar || '' });
             if (!playerStats[username]) playerStats[username] = 0;
             saveHistory();
         }
@@ -404,6 +414,7 @@ io.on('connection', socket => {
             if (!member) continue;
             member.name = username;
             member.isGuest = isGuest;
+            member.avatar = player.avatar || '';
             if (room.hostSocketId === socket.id) room.hostName = username;
             io.to(room.roomId).emit('saved_room_update', room);
         }
@@ -425,6 +436,41 @@ io.on('connection', socket => {
         player.isOnline = !!isOnline;
         savePlayer(player);
         if (!player.isGuest) saveHistory();
+        broadcastOnlineUsers();
+    });
+
+    // ---------------- PROFILE PICTURE (ACCOUNT ONLY) ----------------
+    socket.on('update_profile_picture', ({ dataUrl }) => {
+        const player = connectedPlayers[socket.id];
+        if (!player || player.isGuest) {
+            return socket.emit('account_required', {
+                message: 'Log in to save a profile picture.'
+            });
+        }
+
+        const value = typeof dataUrl === 'string' ? dataUrl : '';
+        if (value) {
+            const valid = /^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(value);
+            if (!valid || value.length > 450000) {
+                return socket.emit('profile_picture_error', {
+                    message: 'Use a JPG, PNG, or WebP image under 8 MB.'
+                });
+            }
+        }
+
+        const profile = profileFor(player.username);
+        profile.avatar = value;
+        player.avatar = value;
+
+        for (const room of activeRoomsMap.values()) {
+            const member = room.players.find(p => p.id === socket.id);
+            if (!member) continue;
+            member.avatar = value;
+            io.to(room.roomId).emit('saved_room_update', room);
+        }
+
+        saveHistory();
+        socket.emit('profile_picture_updated', { avatar: value });
         broadcastOnlineUsers();
     });
 
@@ -604,8 +650,8 @@ io.on('connection', socket => {
             isPublic: false,
             createdAt: Date.now(),
             players: [
-                { id: challengerSocketId, name: challenger.username, isGuest: challenger.isGuest, ready: false, team: null, joinedAt: Date.now() },
-                { id: socket.id, name: sanitizeUsername(targetUsername || player.username), isGuest: player.isGuest, ready: false, team: null, joinedAt: Date.now() }
+                { id: challengerSocketId, name: challenger.username, isGuest: challenger.isGuest, avatar: challenger.avatar || '', ready: false, team: null, joinedAt: Date.now() },
+                { id: socket.id, name: sanitizeUsername(targetUsername || player.username), isGuest: player.isGuest, avatar: player.avatar || '', ready: false, team: null, joinedAt: Date.now() }
             ],
             messages: []
         };
@@ -621,7 +667,7 @@ io.on('connection', socket => {
         io.to(roomId).emit('challenge_game_start', room);
     });
 
-    // ---------------- NORMAL 1V1 / 2V2 ----------------
+    // ---------------- NORMAL 1V1 ----------------
     socket.on('create_room', data => {
         const player = connectedPlayers[socket.id];
         if (!player) return;
@@ -631,7 +677,7 @@ io.on('connection', socket => {
         }
 
         leaveAllRoomsExcept(socket);
-        const mode = data.mode === '2v2' ? '2v2' : '1v1';
+        const mode = '1v1';
         const roomId = crypto.randomUUID();
         const room = {
             roomId,
@@ -640,7 +686,7 @@ io.on('connection', socket => {
             smashUrl: cleanUrl,
             winCondition: escapeHTML(data.winCondition || 'First to 3'),
             mode,
-            maxPlayers: mode === '2v2' ? 4 : 2,
+            maxPlayers: 2,
             isPublic: data.isPublic !== false,
             createdAt: Date.now(),
             players: [],
@@ -739,14 +785,8 @@ io.on('connection', socket => {
         });
     });
 
-    socket.on('set_lobby_team', ({ roomId, team }) => {
-        const room = activeRoomsMap.get(roomId);
-        if (!room || room.mode !== '2v2') return;
-        const member = room.players.find(p => p.id === socket.id);
-        if (!member) return;
-        if (![null, 'blue', 'red'].includes(team)) return;
-        member.team = team;
-        io.to(roomId).emit('saved_room_update', room);
+    socket.on('set_lobby_team', () => {
+        // 2v2 was removed. Kept only so an old cached client cannot crash the server.
     });
 
     socket.on('toggle_room_privacy', ({ roomId, isPublic }) => {
@@ -900,6 +940,7 @@ function broadcastOnlineUsers() {
             id: p.id,
             username: p.username,
             isGuest: !!p.isGuest,
+            avatar: p.avatar || '',
             friends: p.isGuest ? [] : Array.from(p.friends || [])
         }));
 
@@ -1153,7 +1194,255 @@ function installMegaArena() {
         const guestMessage = document.getElementById('guestMessagesNotice');
         if (guestMessage) guestMessage.classList.toggle('hidden', !isGuest);
 
+        if (isGuest) currentProfileAvatar = '';
+        renderOwnProfilePicture();
     }
+
+    // ---------------------------------------------------------------------
+    // SAVED PROFILE PICTURE
+    // Account users can upload one circular PFP. The browser crops/compresses
+    // it before sending it to the server, so history.json does not get huge.
+    // ---------------------------------------------------------------------
+    const AVATAR_CACHE_KEY = 'smash_avatar_cache_v1';
+    let currentProfileAvatar = '';
+
+    function avatarCache() {
+        return readJSON(AVATAR_CACHE_KEY, {});
+    }
+
+    function cacheAvatar(username, avatar) {
+        if (!username) return;
+        const cache = avatarCache();
+        if (avatar) cache[username] = avatar;
+        else delete cache[username];
+        writeJSON(AVATAR_CACHE_KEY, cache);
+    }
+
+    function avatarFor(username) {
+        const self = AuthSession.getUser();
+        if (self?.username === username && currentProfileAvatar) return currentProfileAvatar;
+        const online = onlineUsersCache.find(user => user.username === username);
+        if (online?.avatar) return online.avatar;
+        return avatarCache()[username] || '';
+    }
+
+    function initialsFor(name) {
+        return String(name || '?')
+            .split(/[\s_-]+/)
+            .filter(Boolean)
+            .slice(0, 2)
+            .map(part => part[0]?.toUpperCase() || '')
+            .join('') || '?';
+    }
+
+    function fillAvatarBox(box, avatar, name, fallbackEmoji = null) {
+        if (!box) return;
+        box.replaceChildren();
+        if (avatar) {
+            const img = document.createElement('img');
+            img.src = avatar;
+            img.alt = `${name || 'User'} profile picture`;
+            box.appendChild(img);
+        } else {
+            box.textContent = fallbackEmoji || initialsFor(name);
+        }
+    }
+
+    function renderOwnProfilePicture() {
+        const user = AuthSession.getUser();
+        const account = getAccountSession();
+        const avatar = account ? currentProfileAvatar : '';
+
+        const headerImage = document.getElementById('headerProfileImage');
+        const headerFallback = document.getElementById('headerProfileFallback');
+        if (headerImage && headerFallback) {
+            if (avatar) {
+                headerImage.src = avatar;
+                headerImage.classList.remove('hidden');
+                headerFallback.classList.add('hidden');
+            } else {
+                headerImage.removeAttribute('src');
+                headerImage.classList.add('hidden');
+                headerFallback.classList.remove('hidden');
+            }
+        }
+
+        const settingsImage = document.getElementById('settingsProfileImage');
+        const settingsFallback = document.getElementById('settingsProfileFallback');
+        if (settingsImage && settingsFallback) {
+            if (avatar) {
+                settingsImage.src = avatar;
+                settingsImage.classList.remove('hidden');
+                settingsFallback.classList.add('hidden');
+            } else {
+                settingsImage.removeAttribute('src');
+                settingsImage.classList.add('hidden');
+                settingsFallback.classList.remove('hidden');
+            }
+        }
+
+        const upload = document.getElementById('uploadProfilePictureButton');
+        const remove = document.getElementById('removeProfilePictureButton');
+        const note = document.getElementById('profilePictureAccountNote');
+        if (upload) {
+            upload.disabled = !account;
+            upload.textContent = account ? '📷 UPLOAD PROFILE PICTURE' : '🔒 LOG IN TO ADD PFP';
+            upload.style.opacity = account ? '1' : '.6';
+        }
+        if (remove) remove.classList.toggle('hidden', !account || !avatar);
+        if (note) note.textContent = account
+            ? 'Your picture is saved with this account and shown as a circle.'
+            : 'Log in to a saved account before uploading a profile picture.';
+
+        if (user?.username && avatar) cacheAvatar(user.username, avatar);
+    }
+
+    window.openProfilePicturePicker = function () {
+        if (!isRealAccount()) {
+            showToast('Log in to save a profile picture.', '🔒');
+            openOptionalLogin();
+            return;
+        }
+        document.getElementById('profilePictureInput')?.click();
+    };
+
+    window.handleProfilePictureUpload = function (event) {
+        const input = event?.target;
+        const file = input?.files?.[0];
+        if (!file) return;
+        if (!isRealAccount()) {
+            if (input) input.value = '';
+            openOptionalLogin();
+            return;
+        }
+        if (!/^image\/(?:png|jpeg|webp)$/i.test(file.type || '') || file.size > 8 * 1024 * 1024) {
+            if (input) input.value = '';
+            showToast('Choose a JPG, PNG, or WebP image under 8 MB.', '❌');
+            return;
+        }
+
+        const objectUrl = URL.createObjectURL(file);
+        const img = new Image();
+        img.onload = () => {
+            try {
+                const size = Math.min(img.naturalWidth, img.naturalHeight);
+                const sx = Math.max(0, (img.naturalWidth - size) / 2);
+                const sy = Math.max(0, (img.naturalHeight - size) / 2);
+                const canvas = document.createElement('canvas');
+                canvas.width = 256;
+                canvas.height = 256;
+                const ctx = canvas.getContext('2d');
+                ctx.fillStyle = '#1e3a8a';
+                ctx.fillRect(0, 0, 256, 256);
+                ctx.drawImage(img, sx, sy, size, size, 0, 0, 256, 256);
+                let dataUrl = canvas.toDataURL('image/webp', 0.82);
+                if (!/^data:image\/webp;base64,/i.test(dataUrl)) {
+                    dataUrl = canvas.toDataURL('image/jpeg', 0.84);
+                }
+                socket.emit('update_profile_picture', { dataUrl });
+            } finally {
+                URL.revokeObjectURL(objectUrl);
+                if (input) input.value = '';
+            }
+        };
+        img.onerror = () => {
+            URL.revokeObjectURL(objectUrl);
+            if (input) input.value = '';
+            showToast('That image could not be opened.', '❌');
+        };
+        img.src = objectUrl;
+    };
+
+    window.removeProfilePicture = function () {
+        if (!isRealAccount()) return openOptionalLogin();
+        socket.emit('update_profile_picture', { dataUrl: '' });
+    };
+
+    socket.on('saved_profile', data => {
+        currentProfileAvatar = String(data?.avatar || '');
+        renderOwnProfilePicture();
+    });
+
+    socket.on('profile_picture_updated', data => {
+        currentProfileAvatar = String(data?.avatar || '');
+        renderOwnProfilePicture();
+        updateFriendsTabList();
+        showToast(currentProfileAvatar ? 'Profile picture saved.' : 'Profile picture removed.', '👤');
+    });
+
+    socket.on('profile_picture_error', data => {
+        showToast(data?.message || 'Could not save that profile picture.', '❌');
+    });
+
+    // Clean online-player list: friends show as FRIEND instead of another
+    // Message button. Messages live only in the Messages page.
+    renderOnlineUsersList = function (users) {
+        const container = document.getElementById('onlineUsersList');
+        if (!container) return;
+        container.replaceChildren();
+
+        const me = AuthSession.getUser()?.username || '';
+        (users || []).forEach(user => {
+            if (user.id === socket.id || user.username === me) return;
+            if (user.avatar) cacheAvatar(user.username, user.avatar);
+
+            const row = document.createElement('div');
+            row.className = 'flex justify-between items-center gap-3 bg-blue-950/80 p-3 rounded-2xl border border-white/10';
+
+            const identity = document.createElement('div');
+            identity.className = 'flex items-center gap-2 min-w-0';
+            const avatar = document.createElement('div');
+            avatar.className = 'round-user-avatar';
+            fillAvatarBox(avatar, user.avatar || avatarFor(user.username), user.username);
+            const copy = document.createElement('div');
+            copy.className = 'min-w-0';
+            const name = document.createElement('div');
+            name.className = 'font-bold text-xs text-white truncate';
+            name.textContent = user.username;
+            const meta = document.createElement('div');
+            meta.className = 'text-[9px] text-blue-200';
+            meta.textContent = user.isGuest ? 'Guest' : 'Saved account';
+            copy.append(name, meta);
+            identity.append(avatar, copy);
+
+            const action = document.createElement('div');
+            if (isUserFriend(user.username)) {
+                const friend = document.createElement('span');
+                friend.className = 'text-[10px] font-black text-emerald-300 px-2 py-1 rounded-lg bg-emerald-500/10 border border-emerald-400/30';
+                friend.textContent = '✓ FRIEND';
+                action.appendChild(friend);
+            } else if (user.isGuest) {
+                const guest = document.createElement('span');
+                guest.className = 'text-[9px] text-blue-300';
+                guest.textContent = 'Guest';
+                action.appendChild(guest);
+            } else {
+                const add = document.createElement('button');
+                add.className = 'bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold px-2.5 py-1.5 rounded-lg';
+                add.textContent = '+ ADD FRIEND';
+                add.onclick = () => sendFriendRequest(user.id, user.username);
+                action.appendChild(add);
+            }
+
+            row.append(identity, action);
+            container.appendChild(row);
+        });
+
+        if (!container.children.length) {
+            const empty = document.createElement('p');
+            empty.className = 'text-xs text-blue-200 text-center py-4';
+            empty.textContent = 'Nobody else is online right now.';
+            container.appendChild(empty);
+        }
+    };
+
+    // Keep a lightweight local avatar cache so an offline friend can still
+    // retain the last profile picture you saw for them in DMs.
+    socket.on('online_users_update', ({ users }) => {
+        (users || []).forEach(user => {
+            if (user.avatar) cacheAvatar(user.username, user.avatar);
+        });
+    });
 
     // Friend/DM actions explain account requirement immediately instead of
     // letting a guest think the button is broken.
@@ -1208,12 +1497,17 @@ function installMegaArena() {
         else openSettingsModal();
     };
 
-    // Keep original 1v1 / 2v2 switching, but clear FFA/Music active states.
-    const originalSwitchMatchMode = switchMatchMode;
-    switchMatchMode = function (mode) {
-        originalSwitchMatchMode(mode);
+    // Only 1v1 remains. FFA has its own page.
+    switchMatchMode = function () {
+        currentMode = '1v1';
+        showTab('setupTab');
+        document.getElementById('btnNav1v1')?.classList.add('active');
         document.getElementById('btnNavFFA')?.classList.remove('active');
         document.getElementById('btnNavMusic')?.classList.remove('active');
+        const title = document.getElementById('arenaTitle');
+        const subtitle = document.getElementById('arenaSubtitle');
+        if (title) title.textContent = '1v1 MATCHMAKING';
+        if (subtitle) subtitle.textContent = 'Start or join a 1v1 match';
     };
 
 
@@ -1345,7 +1639,7 @@ function installMegaArena() {
 
             const avatar = document.createElement('div');
             avatar.className = 'discord-avatar';
-            avatar.textContent = dmInitials(name);
+            fillAvatarBox(avatar, avatarFor(name), name);
             const dot = document.createElement('span');
             dot.className = `discord-status-dot${online ? ' online' : ''}`;
             avatar.appendChild(dot);
@@ -1393,25 +1687,13 @@ function installMegaArena() {
         if (status) status.textContent = dmIsOnline(username) ? '● Online' : '○ Offline';
 
         const avatar = document.getElementById('dmChatAvatar');
-        if (avatar) avatar.textContent = dmInitials(username);
-
-        const challenge = document.getElementById('dmChallengeButton');
-        if (challenge) challenge.classList.toggle('hidden', !dmIsOnline(username));
+        if (avatar) fillAvatarBox(avatar, avatarFor(username), username);
 
         const messages = document.getElementById('tabDMMessages');
         if (messages) messages.innerHTML = '<div class="h-full grid place-items-center text-xs text-blue-200">Loading messages…</div>';
 
         updateFriendsTabList();
         socket.emit('get_dm_history', { targetUsername: username });
-    };
-
-    window.challengeActiveDMFriend = function () {
-        if (!activeDMTargetUser) return;
-        if (!dmIsOnline(activeDMTargetUser)) {
-            showToast(`${activeDMTargetUser} is offline.`, 'ℹ️');
-            return;
-        }
-        initiateFriend1v1(activeDMTargetUser);
     };
 
     sendTabDM = function () {
@@ -1468,7 +1750,7 @@ function installMegaArena() {
 
             const avatar = document.createElement('div');
             avatar.className = 'discord-avatar big';
-            avatar.textContent = dmInitials(message.senderUsername);
+            fillAvatarBox(avatar, avatarFor(message.senderUsername), message.senderUsername);
 
             const body = document.createElement('div');
             body.className = 'min-w-0';
@@ -1541,7 +1823,7 @@ function installMegaArena() {
             lobby: '👥 LOBBY',
             chat: '💬 LOBBY CHAT',
             music: '🎵 SPOTIFY',
-            tools: '⚡ TOOLS'
+            tools: '⚙ OPTIONS'
         }[tab] || 'ARENA';
     }
 
@@ -1640,16 +1922,22 @@ function installMegaArena() {
         const wrap = document.createElement('div');
         wrap.className = 'bg-blue-900/60 p-2 rounded-xl border border-white/10 flex items-center justify-between gap-2';
 
+        const identity = document.createElement('div');
+        identity.className = 'flex items-center gap-2 min-w-0';
+        const avatar = document.createElement('div');
+        avatar.className = 'round-user-avatar';
+        fillAvatarBox(avatar, player.avatar || avatarFor(player.name), player.name);
         const left = document.createElement('div');
         left.className = 'min-w-0';
         const name = document.createElement('div');
         name.className = 'font-bold text-xs text-white truncate';
-        name.textContent = `${player.id === room.hostSocketId ? '👑 ' : '👤 '}${player.name}${player.isGuest ? ' · Guest' : ''}`;
+        name.textContent = `${player.id === room.hostSocketId ? '👑 ' : ''}${player.name}${player.isGuest ? ' · Guest' : ''}`;
         const meta = document.createElement('div');
         meta.className = 'text-[9px] text-blue-200';
-        meta.textContent = `${player.ready ? '✅ Ready' : '⏳ Not ready'}${player.team ? ` · ${player.team === 'blue' ? '🔵 Blue' : '🔴 Red'}` : ''}`;
+        meta.textContent = player.ready ? '✅ Ready' : '⏳ Not ready';
         left.append(name, meta);
-        wrap.appendChild(left);
+        identity.append(avatar, left);
+        wrap.appendChild(identity);
 
         if (hostView && player.id !== socket.id) {
             const kick = document.createElement('button');
@@ -1752,7 +2040,7 @@ function installMegaArena() {
         if (readyButton) readyButton.textContent = me?.ready ? '↩ NOT READY' : '✓ READY';
 
         const teamControls = document.getElementById('dockTeamControls');
-        if (teamControls) teamControls.classList.toggle('hidden', room.mode !== '2v2');
+        if (teamControls) teamControls.classList.add('hidden');
 
         renderDockPlayers(room);
         if (!document.getElementById('preGameLobbyModal')?.classList.contains('hidden')) {
@@ -1845,137 +2133,272 @@ function installMegaArena() {
     };
 
     // ---------------------------------------------------------------------
-    // SPOTIFY FREE MODE
-    // Works for regular Spotify users without Premium, OAuth, a Client ID,
-    // or per-user developer setup. Spotify's official Embed handles audio.
-    // Full Spotify Web search opens in a reusable Spotify window because
-    // Spotify does not allow the complete open.spotify.com site to be framed.
+    // SPOTIFY HYBRID MODE
+    // One normal Spotify connection for both account types:
+    // - Premium: Web Playback SDK + in-site play/pause/skip/search.
+    // - Free: same in-site search/library API, but songs load into Spotify's
+    //   official Embed player instead of the Premium-only playback SDK.
     // ---------------------------------------------------------------------
-    const SPOTIFY_FREE_EMBED_URL =
-        'https://open.spotify.com/embed/playlist/37i9dQZF1DXcBWIGoYBM5M?utm_source=generator&theme=0';
+    const SPOTIFY_TOKEN_KEY = 'sk_spotify_token_v3';
+    const SPOTIFY_VERIFIER_KEY = 'sk_spotify_pkce_verifier_v3';
+    const SPOTIFY_STATE_KEY = 'sk_spotify_oauth_state_v3';
+    const SPOTIFY_DEFAULT_EMBED = 'https://open.spotify.com/embed/playlist/37i9dQZF1DXcBWIGoYBM5M?utm_source=generator&theme=0';
 
-    let spotifyFreeUiReady = false;
+    let spotifyPlayer = null;
+    let spotifyDeviceId = null;
+    let spotifySdkLoading = false;
+    let spotifyCurrent = { track: null, paused: true };
+    let spotifyLastResults = [];
+    let spotifyFreeQueue = [];
+    let spotifyFreeQueueIndex = -1;
+    let spotifyFreeTrack = null;
+    let spotifyAccountProduct = null;
     let spotifyWebWindow = null;
+    let spotifyClientIdCache = String(window.__SPOTIFY_CLIENT_ID__ || '').trim();
 
-    function spotifyFreePanelHtml(surface) {
-        const isDock = surface === 'dock';
-        const inputId = isDock ? 'spotifyDockSearchInput' : 'spotifyPageSearchInput';
-        const height = isDock ? 352 : 420;
-
-        return `
-            <div class="spotify-web-top">
-                <div>
-                    <div class="spotify-logo-text">Spotify</div>
-                    <div class="text-[10px] text-gray-400 mt-1">Free mode · no Premium or account link required</div>
-                </div>
-                <button type="button" onclick="openSpotifyWebsite()" class="dock-action green" style="width:auto">OPEN SPOTIFY WEB</button>
-            </div>
-
-            <div class="spotify-web-body">
-                <iframe
-                    title="Spotify player"
-                    src="${SPOTIFY_FREE_EMBED_URL}"
-                    width="100%"
-                    height="${height}"
-                    frameborder="0"
-                    allowfullscreen
-                    allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
-                    loading="lazy"
-                    style="display:block;border:0;border-radius:14px;background:#121212">
-                </iframe>
-
-                <div class="spotify-search-row" style="margin-top:12px">
-                    <input
-                        id="${inputId}"
-                        type="text"
-                        placeholder="Search Spotify..."
-                        onkeydown="if(event.key==='Enter') spotifySearch('${surface}')"
-                        class="smash-input flex-1 px-3 py-2 rounded-xl text-xs">
-                    <button type="button" onclick="spotifySearch('${surface}')" class="dock-action green" style="width:auto">SEARCH</button>
-                </div>
-
-                <div class="text-[10px] text-gray-400 mt-2 leading-relaxed">
-                    Search opens the normal Spotify Web Player so Free and Premium users can browse anything.
-                    The player above works inside the site with Spotify's official Embed.
-                </div>
-            </div>
-        `;
+    function spotifyClientId() {
+        return spotifyClientIdCache || String(window.__SPOTIFY_CLIENT_ID__ || '').trim();
     }
 
-    function setupSpotifyFreeUI() {
-        if (spotifyFreeUiReady) return;
-        spotifyFreeUiReady = true;
+    async function ensureSpotifyClientId() {
+        const existing = spotifyClientId();
+        if (existing) return existing;
 
-        const pageShell = document.querySelector('#musicTab .spotify-web-shell');
-        if (pageShell) pageShell.innerHTML = spotifyFreePanelHtml('page');
-
-        const dockShell = document.querySelector('#dockMusicPanel .spotify-web-shell');
-        if (dockShell) dockShell.innerHTML = spotifyFreePanelHtml('dock');
-
-        const miniTrack = document.getElementById('spotifyMiniTrack');
-        if (miniTrack) {
-            miniTrack.textContent = '🎵 Spotify';
-            miniTrack.title = 'Open Spotify player';
+        try {
+            const response = await fetch('/api/spotify-config?ts=' + Date.now(), {
+                cache: 'no-store',
+                headers: { Accept: 'application/json' }
+            });
+            if (!response.ok) return '';
+            const data = await response.json();
+            spotifyClientIdCache = String(data?.clientId || '').trim();
+            window.__SPOTIFY_CLIENT_ID__ = spotifyClientIdCache;
+            return spotifyClientIdCache;
+        } catch {
+            return '';
         }
+    }
 
-        const miniButton = document.querySelector('#spotifyMiniPlayer .spotify-mini-skip');
-        if (miniButton) {
-            miniButton.textContent = '♫';
-            miniButton.title = 'Open Spotify player';
-            miniButton.onclick = () => openGameDock('music');
+    function spotifyRedirectUri() {
+        return `${location.origin}${location.pathname}`;
+    }
+
+    function spotifyReadTokens() {
+        return readJSON(SPOTIFY_TOKEN_KEY, null);
+    }
+
+    function spotifyWriteTokens(data) {
+        if (!data) {
+            localStorage.removeItem(SPOTIFY_TOKEN_KEY);
+            return;
         }
+        writeJSON(SPOTIFY_TOKEN_KEY, data);
+    }
 
-        const settingsStatus = document.getElementById('spotifySettingsStatus');
-        if (settingsStatus) settingsStatus.textContent = 'Free mode · ready';
+    function spotifyIsConnected() {
+        const token = spotifyReadTokens();
+        return !!(token && (token.access_token || token.refresh_token));
+    }
 
-        const settingsButton = document.getElementById('spotifySettingsConnectButton');
-        if (settingsButton) {
-            settingsButton.textContent = 'OPEN MUSIC';
-            settingsButton.onclick = () => openMusicPage();
+    function spotifyIsPremium() {
+        return spotifyAccountProduct === 'premium';
+    }
+
+    function spotifyRandomString(length = 64) {
+        const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~';
+        const bytes = new Uint8Array(length);
+        crypto.getRandomValues(bytes);
+        return Array.from(bytes, byte => chars[byte % chars.length]).join('');
+    }
+
+    async function spotifyChallenge(verifier) {
+        const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
+        return btoa(String.fromCharCode(...new Uint8Array(digest)))
+            .replace(/\+/g, '-')
+            .replace(/\//g, '_')
+            .replace(/=+$/, '');
+    }
+
+    async function spotifyAccessToken() {
+        let token = spotifyReadTokens();
+        if (!token) return null;
+        if (token.access_token && Number(token.expires_at || 0) > Date.now() + 60000) {
+            return token.access_token;
         }
+        if (!token.refresh_token) return null;
 
-        // Hide the old disconnect button in Settings.
-        if (settingsButton?.parentElement) {
-            const buttons = [...settingsButton.parentElement.querySelectorAll('button')];
-            for (const button of buttons) {
-                if (button !== settingsButton && /disconnect/i.test(button.textContent || '')) {
-                    button.style.display = 'none';
-                }
-            }
-        }
+        const clientId = await ensureSpotifyClientId();
+        if (!clientId) return null;
 
-        // Rewrite the old Spotify setup copy so nobody is told to touch Render.
-        document.querySelectorAll('button[onclick="openSpotifySetupInfo()"]')
-            .forEach(button => button.style.display = 'none');
-
-        const setupModal = document.getElementById('spotifySetupInfoModal');
-        if (setupModal) setupModal.classList.add('hidden');
-
-        const settingsCard = settingsStatus?.closest('.hub-card');
-        if (settingsCard) {
-            const paragraph = settingsCard.querySelector('p');
-            if (paragraph) {
-                paragraph.textContent = 'Spotify Free Mode works for regular Spotify users. No Client ID, Premium account, or Render setup is required.';
-            }
-        }
-
-        const musicSubtitle = document.querySelector('#musicTab h2 + p');
-        if (musicSubtitle) {
-            musicSubtitle.textContent = 'Listen with Spotify\'s official player. Search opens normal Spotify Web so anyone can browse music.';
-        }
-
-        // Hide legacy top buttons that referred to account connection.
-        document.querySelectorAll('#musicTab button').forEach(button => {
-            if (/connect spotify|disconnect/i.test(button.textContent || '')) {
-                button.style.display = 'none';
-            }
+        const body = new URLSearchParams({
+            client_id: clientId,
+            grant_type: 'refresh_token',
+            refresh_token: token.refresh_token
         });
+
+        const response = await fetch('https://accounts.spotify.com/api/token', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body
+        });
+
+        if (!response.ok) {
+            spotifyWriteTokens(null);
+            spotifyAccountProduct = null;
+            renderSpotifyEverywhere();
+            return null;
+        }
+
+        const fresh = await response.json();
+        token = {
+            ...token,
+            ...fresh,
+            refresh_token: fresh.refresh_token || token.refresh_token,
+            expires_at: Date.now() + Number(fresh.expires_in || 3600) * 1000
+        };
+        spotifyWriteTokens(token);
+        return token.access_token;
+    }
+
+    async function spotifyApi(path, options = {}) {
+        const token = await spotifyAccessToken();
+        if (!token) throw new Error('Spotify is not connected.');
+
+        const headers = new Headers(options.headers || {});
+        headers.set('Authorization', `Bearer ${token}`);
+        if (options.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
+
+        const response = await fetch(`https://api.spotify.com/v1${path}`, {
+            ...options,
+            headers
+        });
+
+        if (response.status === 204) return null;
+        if (!response.ok) {
+            let message = `Spotify request failed (${response.status})`;
+            try {
+                const body = await response.json();
+                message = body?.error?.message || message;
+            } catch {}
+            throw new Error(message);
+        }
+        return response.json();
+    }
+
+    async function spotifyDetectAccountProduct() {
+        if (!spotifyIsConnected()) {
+            spotifyAccountProduct = null;
+            return null;
+        }
+        try {
+            const me = await spotifyApi('/me');
+            spotifyAccountProduct = String(me?.product || 'free').toLowerCase();
+        } catch {
+            spotifyAccountProduct = spotifyAccountProduct || 'free';
+        }
+        renderSpotifyEverywhere();
+        return spotifyAccountProduct;
+    }
+
+    function spotifyStatusText() {
+        if (!spotifyClientId()) return 'Spotify setup needed by site owner';
+        if (!spotifyIsConnected()) return 'Connect Spotify · Free and Premium supported';
+        if (spotifyIsPremium()) {
+            return spotifyDeviceId ? 'Premium · full player connected' : 'Premium · starting player…';
+        }
+        return 'Free account · official Spotify player';
+    }
+
+    function spotifyActiveTrack() {
+        return spotifyIsPremium() ? spotifyCurrent.track : spotifyFreeTrack;
+    }
+
+    function spotifyTrackInfo() {
+        const track = spotifyActiveTrack();
+        return {
+            title: track?.name || 'Spotify',
+            artist: track?.artists?.map(a => a.name).join(', ') || (spotifyIsConnected() ? 'Search for something to play' : 'Connect Spotify to search your account'),
+            art: track?.album?.images?.[0]?.url || ''
+        };
+    }
+
+    function setImage(id, src) {
+        const img = document.getElementById(id);
+        if (!img) return;
+        if (src) {
+            img.src = src;
+            img.style.visibility = 'visible';
+        } else {
+            img.removeAttribute('src');
+            img.style.visibility = 'hidden';
+        }
+    }
+
+    function spotifyEmbedForTrack(track) {
+        const id = track?.id;
+        return id
+            ? `https://open.spotify.com/embed/track/${encodeURIComponent(id)}?utm_source=generator&theme=0`
+            : SPOTIFY_DEFAULT_EMBED;
+    }
+
+    function updateSpotifyEmbeds() {
+        const src = spotifyEmbedForTrack(spotifyFreeTrack);
+        for (const id of ['spotifyPageEmbed', 'spotifyDockEmbed']) {
+            const frame = document.getElementById(id);
+            if (frame && frame.src !== src) frame.src = src;
+        }
     }
 
     function renderSpotifyEverywhere() {
-        setupSpotifyFreeUI();
+        const info = spotifyTrackInfo();
+        const status = spotifyStatusText();
+        const connected = spotifyIsConnected();
+        const premium = spotifyIsPremium();
+        const playIcon = premium && !spotifyCurrent.paused ? '⏸' : '▶';
+
+        ['spotifyPageStatus', 'spotifyDockStatus', 'spotifySettingsStatus'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.textContent = status;
+        });
+
+        ['spotifyPageTrack', 'spotifyDockTrack'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.textContent = info.title;
+        });
+        ['spotifyPageArtist', 'spotifyDockArtist'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.textContent = info.artist;
+        });
+
         const miniTrack = document.getElementById('spotifyMiniTrack');
-        if (miniTrack) miniTrack.textContent = '🎵 Spotify';
+        if (miniTrack) {
+            miniTrack.textContent = `🎵 ${info.title}`;
+            miniTrack.title = connected ? `${info.title} — ${info.artist}` : 'Open Spotify';
+        }
+
+        setImage('spotifyPageArt', info.art);
+        setImage('spotifyDockArt', info.art);
+
+        ['spotifyPagePlayButton', 'spotifyDockPlayButton'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.textContent = playIcon;
+        });
+
+        ['spotifyPageConnectButton', 'spotifyDockConnectButton', 'spotifySettingsConnectButton'].forEach(id => {
+            const button = document.getElementById(id);
+            if (!button) return;
+            button.textContent = !connected
+                ? 'CONNECT SPOTIFY'
+                : premium
+                    ? 'PREMIUM CONNECTED'
+                    : 'FREE CONNECTED';
+        });
+
+        const pageFree = document.getElementById('spotifyFreePlayerWrap');
+        const dockFree = document.getElementById('spotifyDockFreePlayerWrap');
+        pageFree?.classList.toggle('hidden', premium);
+        dockFree?.classList.toggle('hidden', premium);
+        if (!premium) updateSpotifyEmbeds();
     }
 
     function syncMainSettings() {
@@ -1997,18 +2420,489 @@ function installMegaArena() {
         showToast('Settings saved.', '⚙️');
     };
 
-    window.spotifyConnect = function () {
-        openMusicPage();
-        showToast('Spotify Free Mode is ready — no account connection is required.', '🎵');
+    window.spotifyConnect = async function () {
+        const clientId = await ensureSpotifyClientId();
+        if (!clientId) {
+            showToast('Spotify needs the site-wide Client ID set once by the site owner.', '🎵');
+            if (typeof openSpotifySetupInfo === 'function') openSpotifySetupInfo();
+            return;
+        }
+
+        if (spotifyIsConnected()) {
+            await spotifyDetectAccountProduct();
+            if (spotifyIsPremium()) {
+                try { await ensureSpotifyPlayer(); } catch {}
+            }
+            renderSpotifyEverywhere();
+            return;
+        }
+
+        const verifier = spotifyRandomString(64);
+        const state = spotifyRandomString(24);
+        localStorage.setItem(SPOTIFY_VERIFIER_KEY, verifier);
+        localStorage.setItem(SPOTIFY_STATE_KEY, state);
+        const challenge = await spotifyChallenge(verifier);
+
+        const scopes = [
+            'streaming',
+            'user-read-email',
+            'user-read-private',
+            'user-read-playback-state',
+            'user-modify-playback-state',
+            'user-read-currently-playing',
+            'playlist-read-private',
+            'user-library-read',
+            'user-read-recently-played'
+        ].join(' ');
+
+        const params = new URLSearchParams({
+            client_id: clientId,
+            response_type: 'code',
+            redirect_uri: spotifyRedirectUri(),
+            scope: scopes,
+            code_challenge_method: 'S256',
+            code_challenge: challenge,
+            state
+        });
+        location.href = `https://accounts.spotify.com/authorize?${params}`;
     };
+
+    async function handleSpotifyOAuthCallback() {
+        const params = new URLSearchParams(location.search);
+        const code = params.get('code');
+        const returnedState = params.get('state');
+        if (!code) return;
+
+        const expectedState = localStorage.getItem(SPOTIFY_STATE_KEY);
+        const verifier = localStorage.getItem(SPOTIFY_VERIFIER_KEY);
+        const clientId = await ensureSpotifyClientId();
+
+        if (!clientId || !verifier || !expectedState || returnedState !== expectedState) {
+            showToast('Spotify login could not be verified. Try connecting again.', '❌');
+            return;
+        }
+
+        const body = new URLSearchParams({
+            client_id: clientId,
+            grant_type: 'authorization_code',
+            code,
+            redirect_uri: spotifyRedirectUri(),
+            code_verifier: verifier
+        });
+
+        try {
+            const response = await fetch('https://accounts.spotify.com/api/token', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body
+            });
+            if (!response.ok) throw new Error('Spotify token exchange failed.');
+            const token = await response.json();
+            spotifyWriteTokens({
+                ...token,
+                expires_at: Date.now() + Number(token.expires_in || 3600) * 1000
+            });
+            localStorage.removeItem(SPOTIFY_STATE_KEY);
+            localStorage.removeItem(SPOTIFY_VERIFIER_KEY);
+            history.replaceState({}, document.title, spotifyRedirectUri());
+            await spotifyDetectAccountProduct();
+            if (spotifyIsPremium()) {
+                try { await ensureSpotifyPlayer(); } catch {}
+            }
+            showToast(spotifyIsPremium()
+                ? 'Spotify Premium connected — full controls enabled.'
+                : 'Spotify Free connected — search and official player enabled.', '🎵');
+        } catch (error) {
+            showToast(error.message || 'Spotify connection failed.', '❌');
+        }
+        renderSpotifyEverywhere();
+    }
+
+    function loadSpotifySdk() {
+        if (window.Spotify?.Player) return Promise.resolve();
+        if (spotifySdkLoading) {
+            return new Promise(resolve => {
+                const wait = setInterval(() => {
+                    if (window.Spotify?.Player) {
+                        clearInterval(wait);
+                        resolve();
+                    }
+                }, 100);
+            });
+        }
+
+        spotifySdkLoading = true;
+        return new Promise((resolve, reject) => {
+            window.onSpotifyWebPlaybackSDKReady = () => {
+                spotifySdkLoading = false;
+                resolve();
+            };
+            const tag = document.createElement('script');
+            tag.src = 'https://sdk.scdn.co/spotify-player.js';
+            tag.async = true;
+            tag.onerror = () => {
+                spotifySdkLoading = false;
+                reject(new Error('Could not load Spotify Web Playback SDK.'));
+            };
+            document.head.appendChild(tag);
+        });
+    }
+
+    async function ensureSpotifyPlayer() {
+        if (!spotifyIsConnected() || !spotifyIsPremium()) return null;
+        if (spotifyPlayer) return spotifyPlayer;
+
+        await loadSpotifySdk();
+        const token = await spotifyAccessToken();
+        if (!token) return null;
+
+        spotifyPlayer = new window.Spotify.Player({
+            name: 'SmashKarts Arena Player',
+            getOAuthToken: async cb => cb(await spotifyAccessToken()),
+            volume: 0.65
+        });
+
+        spotifyPlayer.addListener('ready', async ({ device_id }) => {
+            spotifyDeviceId = device_id;
+            renderSpotifyEverywhere();
+            try {
+                await spotifyApi('/me/player', {
+                    method: 'PUT',
+                    body: JSON.stringify({ device_ids: [device_id], play: false })
+                });
+            } catch {}
+        });
+
+        spotifyPlayer.addListener('not_ready', ({ device_id }) => {
+            if (spotifyDeviceId === device_id) spotifyDeviceId = null;
+            renderSpotifyEverywhere();
+        });
+
+        spotifyPlayer.addListener('player_state_changed', state => {
+            if (!state) return;
+            spotifyCurrent = {
+                track: state.track_window?.current_track || null,
+                paused: !!state.paused
+            };
+            renderSpotifyEverywhere();
+        });
+
+        spotifyPlayer.addListener('account_error', ({ message }) => {
+            spotifyAccountProduct = 'free';
+            try { spotifyPlayer?.disconnect(); } catch {}
+            spotifyPlayer = null;
+            spotifyDeviceId = null;
+            renderSpotifyEverywhere();
+            showToast(message || 'Spotify switched to Free player mode.', '🎵');
+        });
+
+        for (const eventName of ['initialization_error', 'authentication_error', 'playback_error']) {
+            spotifyPlayer.addListener(eventName, ({ message }) => {
+                showToast(message || 'Spotify player error.', '❌');
+            });
+        }
+
+        await spotifyPlayer.connect();
+        return spotifyPlayer;
+    }
 
     window.spotifyDisconnect = function () {
-        showToast('Spotify Free Mode does not require an account connection.', '🎵');
+        try { spotifyPlayer?.disconnect(); } catch {}
+        spotifyPlayer = null;
+        spotifyDeviceId = null;
+        spotifyCurrent = { track: null, paused: true };
+        spotifyFreeTrack = null;
+        spotifyFreeQueue = [];
+        spotifyFreeQueueIndex = -1;
+        spotifyAccountProduct = null;
+        spotifyWriteTokens(null);
+        renderSpotifyEverywhere();
+        showToast('Spotify disconnected.', '🎵');
     };
 
-    window.openSpotifySetupInfo = function () {
-        showToast('No setup needed in Free Mode. Open Music and press play.', '🎵');
-        openMusicPage();
+    async function ensurePremiumSpotifyReady() {
+        if (!spotifyIsConnected()) {
+            spotifyConnect();
+            return false;
+        }
+        if (!spotifyIsPremium()) return false;
+        try {
+            await ensureSpotifyPlayer();
+            if (!spotifyDeviceId) {
+                showToast('Spotify is connecting. Try again in a moment.', '🎵');
+                return false;
+            }
+            return true;
+        } catch (error) {
+            showToast(error.message || 'Spotify is unavailable.', '❌');
+            return false;
+        }
+    }
+
+    function selectFreeTrack(track, queue = spotifyLastResults) {
+        if (!track) return;
+        spotifyFreeTrack = track;
+        spotifyFreeQueue = Array.isArray(queue) ? queue.slice() : [];
+        spotifyFreeQueueIndex = spotifyFreeQueue.findIndex(item => item?.id === track.id);
+        updateSpotifyEmbeds();
+        renderSpotifyEverywhere();
+    }
+
+    window.spotifyTogglePlayback = async function () {
+        if (!spotifyIsConnected()) return spotifyConnect();
+        if (!spotifyIsPremium()) {
+            if (document.getElementById('gameScreen')?.classList.contains('hidden')) openMusicPage();
+            else openGameDock('music');
+            showToast('Use the play button in the Spotify player.', '🎵');
+            return;
+        }
+        if (!(await ensurePremiumSpotifyReady())) return;
+        try {
+            if (spotifyCurrent.paused) await spotifyPlayer.resume();
+            else await spotifyPlayer.pause();
+        } catch (error) {
+            showToast(error.message || 'Could not change playback.', '❌');
+        }
+    };
+
+    window.spotifyNextTrack = async function () {
+        if (!spotifyIsConnected()) return spotifyConnect();
+        if (!spotifyIsPremium()) {
+            if (spotifyFreeQueue.length && spotifyFreeQueueIndex + 1 < spotifyFreeQueue.length) {
+                spotifyFreeQueueIndex += 1;
+                selectFreeTrack(spotifyFreeQueue[spotifyFreeQueueIndex], spotifyFreeQueue);
+                return;
+            }
+            if (document.getElementById('gameScreen')?.classList.contains('hidden')) openMusicPage();
+            else openGameDock('music');
+            showToast('Search a few songs first, then ⏭ moves through those results.', '🎵');
+            return;
+        }
+        if (!(await ensurePremiumSpotifyReady())) return;
+        try {
+            await spotifyApi(`/me/player/next?device_id=${encodeURIComponent(spotifyDeviceId)}`, { method: 'POST' });
+        } catch (error) {
+            showToast(error.message || 'Could not skip song.', '❌');
+        }
+    };
+
+    window.spotifyPreviousTrack = async function () {
+        if (!spotifyIsConnected()) return spotifyConnect();
+        if (!spotifyIsPremium()) {
+            if (spotifyFreeQueue.length && spotifyFreeQueueIndex > 0) {
+                spotifyFreeQueueIndex -= 1;
+                selectFreeTrack(spotifyFreeQueue[spotifyFreeQueueIndex], spotifyFreeQueue);
+                return;
+            }
+            if (document.getElementById('gameScreen')?.classList.contains('hidden')) openMusicPage();
+            else openGameDock('music');
+            return;
+        }
+        if (!(await ensurePremiumSpotifyReady())) return;
+        try {
+            await spotifyApi(`/me/player/previous?device_id=${encodeURIComponent(spotifyDeviceId)}`, { method: 'POST' });
+        } catch (error) {
+            showToast(error.message || 'Could not go to the previous song.', '❌');
+        }
+    };
+
+    window.spotifyPlayUri = async function (uri) {
+        if (!spotifyIsConnected()) return spotifyConnect();
+        if (!spotifyIsPremium()) {
+            const track = spotifyLastResults.find(item => item?.uri === uri);
+            if (track) selectFreeTrack(track, spotifyLastResults);
+            else openMusicPage();
+            return;
+        }
+        if (!(await ensurePremiumSpotifyReady())) return;
+        try {
+            await spotifyApi(`/me/player/play?device_id=${encodeURIComponent(spotifyDeviceId)}`, {
+                method: 'PUT',
+                body: JSON.stringify({ uris: [uri] })
+            });
+        } catch (error) {
+            showToast(error.message || 'Could not play that song.', '❌');
+        }
+    };
+
+    function renderSpotifyResults(targetId, tracks) {
+        const container = document.getElementById(targetId);
+        if (!container) return;
+        container.replaceChildren();
+
+        if (!tracks.length) {
+            const empty = document.createElement('div');
+            empty.className = 'text-xs text-gray-400 p-3';
+            empty.textContent = 'No songs found.';
+            container.appendChild(empty);
+            return;
+        }
+
+        tracks.forEach(track => {
+            const row = document.createElement('button');
+            row.type = 'button';
+            row.className = 'spotify-result text-left';
+            row.onclick = () => {
+                if (spotifyIsPremium()) spotifyPlayUri(track.uri);
+                else selectFreeTrack(track, tracks);
+            };
+
+            const image = document.createElement('img');
+            image.alt = '';
+            if (track.album?.images?.[0]?.url) image.src = track.album.images[0].url;
+
+            const copy = document.createElement('div');
+            copy.className = 'min-w-0';
+            const title = document.createElement('div');
+            title.className = 'spotify-result-title';
+            title.textContent = track.name || 'Unknown track';
+            const sub = document.createElement('div');
+            sub.className = 'spotify-result-sub';
+            sub.textContent = `${track.artists?.map(a => a.name).join(', ') || 'Unknown artist'} · ${track.album?.name || ''}`;
+            copy.append(title, sub);
+
+            const play = document.createElement('span');
+            play.className = 'spotify-control primary flex items-center justify-center';
+            play.textContent = '▶';
+
+            row.append(image, copy, play);
+            container.appendChild(row);
+        });
+    }
+
+    window.spotifySearch = async function (surface = 'page') {
+        const inputId = surface === 'dock' ? 'spotifyDockSearchInput' : 'spotifyPageSearchInput';
+        const resultId = surface === 'dock' ? 'spotifyDockResults' : 'spotifyPageResults';
+        const query = String(document.getElementById(inputId)?.value || '').trim();
+        if (!query) return;
+        if (!spotifyIsConnected()) {
+            spotifyConnect();
+            return;
+        }
+
+        const target = document.getElementById(resultId);
+        if (target) target.textContent = 'Searching Spotify…';
+
+        try {
+            const data = await spotifyApi(`/search?q=${encodeURIComponent(query)}&type=track&limit=12`);
+            spotifyLastResults = data?.tracks?.items || [];
+            renderSpotifyResults(resultId, spotifyLastResults);
+            const otherId = surface === 'dock' ? 'spotifyPageResults' : 'spotifyDockResults';
+            renderSpotifyResults(otherId, spotifyLastResults);
+        } catch (error) {
+            if (target) target.textContent = error.message || 'Spotify search failed.';
+        }
+    };
+
+    window.spotifyShowView = function (view = 'search') {
+        const ids = {
+            search: 'spotifySearchView',
+            playlists: 'spotifyPlaylistsView',
+            recent: 'spotifyRecentView'
+        };
+        Object.entries(ids).forEach(([key, id]) => {
+            document.getElementById(id)?.classList.toggle('hidden', key !== view);
+        });
+        const navIds = {
+            search: 'spotifyNavSearch',
+            playlists: 'spotifyNavPlaylists',
+            recent: 'spotifyNavRecent'
+        };
+        Object.entries(navIds).forEach(([key, id]) => {
+            document.getElementById(id)?.classList.toggle('active', key === view);
+        });
+        if (view === 'playlists') spotifyLoadPlaylists();
+        if (view === 'recent') spotifyLoadRecent();
+    };
+
+    function renderSpotifyPlaylists(playlists) {
+        const container = document.getElementById('spotifyPlaylistResults');
+        if (!container) return;
+        container.replaceChildren();
+        if (!playlists.length) {
+            const empty = document.createElement('div');
+            empty.className = 'text-xs text-gray-400 p-3';
+            empty.textContent = 'No playlists found.';
+            container.appendChild(empty);
+            return;
+        }
+
+        playlists.forEach(playlist => {
+            const row = document.createElement('button');
+            row.type = 'button';
+            row.className = 'spotify-playlist';
+            row.onclick = () => spotifyOpenPlaylist(playlist.id, playlist.name);
+
+            const image = document.createElement('img');
+            image.alt = '';
+            if (playlist.images?.[0]?.url) image.src = playlist.images[0].url;
+
+            const copy = document.createElement('div');
+            copy.className = 'min-w-0';
+            const title = document.createElement('div');
+            title.className = 'spotify-result-title';
+            title.textContent = playlist.name || 'Playlist';
+            const sub = document.createElement('div');
+            sub.className = 'spotify-result-sub';
+            sub.textContent = `${playlist.tracks?.total ?? 0} songs · ${playlist.owner?.display_name || 'Spotify'}`;
+            copy.append(title, sub);
+            row.append(image, copy);
+            container.appendChild(row);
+        });
+    }
+
+    window.spotifyLoadPlaylists = async function () {
+        const container = document.getElementById('spotifyPlaylistResults');
+        if (!spotifyIsConnected()) return spotifyConnect();
+        if (container) container.textContent = 'Loading your playlists…';
+        try {
+            const data = await spotifyApi('/me/playlists?limit=30');
+            renderSpotifyPlaylists(data?.items || []);
+        } catch (error) {
+            if (container) container.textContent = error.message || 'Could not load playlists.';
+        }
+    };
+
+    window.spotifyOpenPlaylist = async function (playlistId, playlistName = 'Playlist') {
+        const container = document.getElementById('spotifyPlaylistResults');
+        if (!playlistId || !container) return;
+        container.textContent = `Loading ${playlistName}…`;
+        try {
+            const data = await spotifyApi(`/playlists/${encodeURIComponent(playlistId)}/tracks?limit=50`);
+            const tracks = (data?.items || []).map(item => item.track).filter(Boolean);
+            spotifyLastResults = tracks;
+            renderSpotifyResults('spotifyPlaylistResults', tracks);
+            const back = document.createElement('button');
+            back.type = 'button';
+            back.className = 'spotify-nav-button';
+            back.style.marginBottom = '8px';
+            back.textContent = `← Back to playlists · ${playlistName}`;
+            back.onclick = () => spotifyLoadPlaylists();
+            container.prepend(back);
+        } catch (error) {
+            container.textContent = error.message || 'Could not open that playlist.';
+        }
+    };
+
+    window.spotifyLoadRecent = async function () {
+        const container = document.getElementById('spotifyRecentResults');
+        if (!spotifyIsConnected()) return spotifyConnect();
+        if (container) container.textContent = 'Loading recently played…';
+        try {
+            const data = await spotifyApi('/me/player/recently-played?limit=30');
+            const seen = new Set();
+            const tracks = [];
+            for (const item of data?.items || []) {
+                const track = item.track;
+                if (!track?.id || seen.has(track.id)) continue;
+                seen.add(track.id);
+                tracks.push(track);
+            }
+            spotifyLastResults = tracks;
+            renderSpotifyResults('spotifyRecentResults', tracks);
+        } catch (error) {
+            if (container) container.textContent = error.message || 'Could not load recently played music.';
+        }
     };
 
     window.openSpotifyWebsite = function (targetUrl = 'https://open.spotify.com/') {
@@ -2019,83 +2913,25 @@ function installMegaArena() {
                 return;
             }
         } catch {}
-
         spotifyWebWindow = window.open(
             targetUrl,
             'smashkarts_spotify_web',
             'width=1100,height=760,resizable=yes,scrollbars=yes'
         );
+        if (!spotifyWebWindow) window.open(targetUrl, '_blank', 'noopener,noreferrer');
+    };
 
-        if (!spotifyWebWindow) {
-            window.open(targetUrl, '_blank', 'noopener,noreferrer');
+    ensureSpotifyClientId().finally(() => renderSpotifyEverywhere());
+
+    handleSpotifyOAuthCallback().then(async () => {
+        if (spotifyIsConnected()) {
+            await spotifyDetectAccountProduct();
+            if (spotifyIsPremium()) {
+                try { await ensureSpotifyPlayer(); } catch {}
+            }
         }
-    };
-
-    window.spotifySearch = function (surface = 'page') {
-        setupSpotifyFreeUI();
-        const inputId = surface === 'dock' ? 'spotifyDockSearchInput' : 'spotifyPageSearchInput';
-        const query = String(document.getElementById(inputId)?.value || '').trim();
-        if (!query) return;
-        openSpotifyWebsite(`https://open.spotify.com/search/${encodeURIComponent(query)}`);
-    };
-
-    // Free Spotify embeds expose their own playback/skip controls. The site
-    // itself cannot remotely skip arbitrary Free-account playback, so these
-    // buttons simply take the player to the visible Music panel.
-    window.spotifyTogglePlayback = function () {
-        if (document.getElementById('gameScreen')?.classList.contains('hidden')) openMusicPage();
-        else openGameDock('music');
-    };
-
-    window.spotifyNextTrack = function () {
-        if (document.getElementById('gameScreen')?.classList.contains('hidden')) openMusicPage();
-        else openGameDock('music');
-        showToast('Use the ⏭ control inside the Spotify player.', '🎵');
-    };
-
-    window.spotifyPreviousTrack = function () {
-        if (document.getElementById('gameScreen')?.classList.contains('hidden')) openMusicPage();
-        else openGameDock('music');
-        showToast('Use the ⏮ control inside the Spotify player.', '🎵');
-    };
-
-    window.spotifyShowView = function () {
-        openMusicPage();
-    };
-
-    window.spotifyLoadPlaylists = function () {
-        openSpotifyWebsite('https://open.spotify.com/collection/playlists');
-    };
-
-    window.spotifyLoadRecent = function () {
-        openSpotifyWebsite('https://open.spotify.com/');
-    };
-
-    window.spotifyOpenPlaylist = function () {
-        openSpotifyWebsite('https://open.spotify.com/collection/playlists');
-    };
-
-    window.spotifyPlayUri = function () {
-        openMusicPage();
-    };
-
-    // Clean old OAuth callback parameters left over from the Premium build.
-    try {
-        const url = new URL(location.href);
-        if (url.searchParams.has('code') || url.searchParams.has('state')) {
-            url.searchParams.delete('code');
-            url.searchParams.delete('state');
-            history.replaceState({}, document.title, url.pathname + (url.search ? url.search : '') + url.hash);
-        }
-    } catch {}
-
-    // Remove old OAuth tokens so the site never tries to use Premium-only APIs.
-    localStorage.removeItem('sk_spotify_token_v2');
-    localStorage.removeItem('sk_spotify_pkce_verifier_v2');
-    localStorage.removeItem('sk_spotify_oauth_state_v2');
-
-    setupSpotifyFreeUI();
-    renderSpotifyEverywhere();
+        renderSpotifyEverywhere();
+    });
 
     // ---------------------------------------------------------------------
     // HUB: HISTORY / NOTES / SETTINGS / UTILITIES
@@ -2184,6 +3020,7 @@ function installMegaArena() {
 
         const search = String(document.getElementById('publicRoomSearch')?.value || '').toLowerCase().trim();
         const filtered = publicRoomsCache.filter(room => {
+            if (room.mode === '2v2') return false;
             if (!search) return true;
             return `${room.hostName} ${room.mode} ${room.winCondition}`.toLowerCase().includes(search);
         });
@@ -2335,7 +3172,6 @@ function installMegaArena() {
         if (event.key.toLowerCase() === 'm') openGameDock('music');
         if (event.key.toLowerCase() === 'r' && activeRoomData) toggleMyReadyStatus();
         if (event.key === '1') switchMatchMode('1v1');
-        if (event.key === '2') switchMatchMode('2v2');
         if (event.key === '3') openFfaPage();
     });
 
