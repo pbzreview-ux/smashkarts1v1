@@ -10,8 +10,23 @@ const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: '*' } });
 
 // =========================================================
-// SERVE YOUR EXISTING SCRIPT.JS + THIS UPGRADE PACK
+// SPOTIFY CONFIG + EXISTING SCRIPT.JS + THIS UPGRADE PACK
 // =========================================================
+// The Spotify Client ID belongs to the WEBSITE, not each player.
+// Every browser gets the same public Client ID from this endpoint.
+// No Client Secret is ever sent to the browser.
+app.get('/api/spotify-config', (req, res) => {
+    res.set({
+        'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+        'Pragma': 'no-cache',
+        'Expires': '0'
+    });
+
+    res.json({
+        clientId: String(process.env.SPOTIFY_CLIENT_ID || '').trim()
+    });
+});
+
 app.get('/script.js', (req, res) => {
     const filename = ['script.js', 'script(1).js'].find(name =>
         fs.existsSync(path.join(__dirname, name))
@@ -21,9 +36,17 @@ app.get('/script.js', (req, res) => {
         return res.status(404).send('Missing script.js or script(1).js');
     }
 
+    // Do not let Render/CDN/browser cache an old copy that was generated
+    // before SPOTIFY_CLIENT_ID was added.
+    res.set({
+        'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+        'Pragma': 'no-cache',
+        'Expires': '0'
+    });
+
     res.type('application/javascript').send(
         fs.readFileSync(path.join(__dirname, filename), 'utf8') +
-        '\nwindow.__SPOTIFY_CLIENT_ID__ = ' + JSON.stringify(process.env.SPOTIFY_CLIENT_ID || '') + ';' +
+        '\nwindow.__SPOTIFY_CLIENT_ID__ = ' + JSON.stringify(String(process.env.SPOTIFY_CLIENT_ID || '').trim()) + ';' +
         '\n;(' + installMegaArena.toString() + ')();'
     );
 });
@@ -1834,8 +1857,36 @@ function installMegaArena() {
     let spotifyCurrent = { track: null, paused: true };
     let spotifyLastResults = [];
 
+    let spotifyClientIdCache = String(window.__SPOTIFY_CLIENT_ID__ || '').trim();
+
     function spotifyClientId() {
-        return String(window.__SPOTIFY_CLIENT_ID__ || '').trim();
+        return spotifyClientIdCache || String(window.__SPOTIFY_CLIENT_ID__ || '').trim();
+    }
+
+    async function ensureSpotifyClientId() {
+        const existing = spotifyClientId();
+        if (existing) return existing;
+
+        try {
+            const response = await fetch('/api/spotify-config?ts=' + Date.now(), {
+                cache: 'no-store',
+                headers: { 'Accept': 'application/json' }
+            });
+
+            if (!response.ok) return '';
+
+            const data = await response.json();
+            spotifyClientIdCache = String(data?.clientId || '').trim();
+            window.__SPOTIFY_CLIENT_ID__ = spotifyClientIdCache;
+
+            if (spotifyClientIdCache) {
+                renderSpotifyEverywhere();
+            }
+
+            return spotifyClientIdCache;
+        } catch {
+            return '';
+        }
     }
 
     function spotifyRedirectUri() {
@@ -1882,7 +1933,7 @@ function installMegaArena() {
         }
         if (!token.refresh_token) return null;
 
-        const clientId = spotifyClientId();
+        const clientId = await ensureSpotifyClientId();
         if (!clientId) return null;
 
         const body = new URLSearchParams({
@@ -2031,9 +2082,10 @@ function installMegaArena() {
     };
 
     window.spotifyConnect = async function () {
-        const clientId = spotifyClientId();
+        const clientId = await ensureSpotifyClientId();
         if (!clientId) {
-            showToast('Spotify is not configured on this website yet. The site owner needs to set SPOTIFY_CLIENT_ID once on Render.', '🎵');
+            showToast('Spotify is still unavailable on this deployment. Ask the site owner to redeploy after saving the Spotify Client ID.', '🎵');
+            if (typeof openSpotifySetupInfo === 'function') openSpotifySetupInfo();
             return;
         }
 
@@ -2081,7 +2133,7 @@ function installMegaArena() {
 
         const expectedState = localStorage.getItem(SPOTIFY_STATE_KEY);
         const verifier = localStorage.getItem(SPOTIFY_VERIFIER_KEY);
-        const clientId = spotifyClientId();
+        const clientId = await ensureSpotifyClientId();
 
         if (!clientId || !verifier || !expectedState || returnedState !== expectedState) {
             showToast('Spotify login could not be verified. Try connecting again.', '❌');
@@ -2460,6 +2512,10 @@ function installMegaArena() {
     window.openSpotifyWebsite = function () {
         window.open('https://open.spotify.com/', '_blank', 'noopener,noreferrer');
     };
+
+    // Always refresh the public, site-wide Spotify Client ID from the server.
+    // This is what makes the SAME Render Client ID work for every visitor.
+    ensureSpotifyClientId().finally(() => renderSpotifyEverywhere());
 
     handleSpotifyOAuthCallback().then(async () => {
         if (spotifyIsConnected()) {
