@@ -23,6 +23,7 @@ app.get('/script.js', (req, res) => {
 
     res.type('application/javascript').send(
         fs.readFileSync(path.join(__dirname, filename), 'utf8') +
+        '\nwindow.__SPOTIFY_CLIENT_ID__ = ' + JSON.stringify(process.env.SPOTIFY_CLIENT_ID || '') + ';' +
         '\n;(' + installMegaArena.toString() + ')();'
     );
 });
@@ -648,7 +649,8 @@ io.on('connection', socket => {
         if (!player) return;
         leaveAllRoomsExcept(socket);
 
-        const maxPlayers = Math.max(2, Math.min(20, Number(options && options.maxPlayers) || 12));
+        const requestedPlayers = Number(options && options.maxPlayers) || 12;
+        const maxPlayers = requestedPlayers === 24 ? 24 : 12;
         const roomId = crypto.randomUUID();
         const room = {
             roomId,
@@ -1038,9 +1040,11 @@ function installMegaArena() {
         originalPromptEditUsername();
     };
 
-    // Settings are a normal Arena Hub page now, not a floating window.
+    // Settings is one normal modal. Connection status stays in the header.
     openSettingsModal = function () {
-        openHubPage('settings');
+        closeExclusiveModals('settingsModal');
+        syncMainSettings();
+        document.getElementById('settingsModal')?.classList.remove('hidden');
     };
 
     closeSettingsModal = function () {
@@ -1117,37 +1121,15 @@ function installMegaArena() {
                 : 'bg-red-600 hover:bg-red-500 text-white text-xs font-bold px-4 py-2 rounded-xl';
         }
 
-        const hubName = document.getElementById('hubProfileName');
-        if (hubName) hubName.textContent = user.username;
-
-        const hubMode = document.getElementById('hubProfileMode');
-        if (hubMode) hubMode.textContent = isGuest
-            ? 'Guest Mode · gameplay works, permanent account stats are off'
-            : `Saved account · ${account.email}`;
-
-        const hubLogin = document.getElementById('hubLoginButton');
-        const hubAccount = document.getElementById('hubAccountAction');
-        [hubLogin, hubAccount].forEach(button => {
-            if (!button) return;
-            button.textContent = isGuest ? 'LOG IN TO SAVE STATS' : 'LOG OUT TO GUEST MODE';
-            button.onclick = isGuest ? openOptionalLogin : () => AuthSession.logout();
-        });
+        const settingsAccount = document.getElementById('settingsAccountButton');
+        if (settingsAccount) {
+            settingsAccount.textContent = isGuest ? 'LOG IN TO SAVE STATS' : 'LOG OUT TO GUEST MODE';
+            settingsAccount.onclick = isGuest ? openOptionalLogin : () => AuthSession.logout();
+        }
 
         const guestMessage = document.getElementById('guestMessagesNotice');
         if (guestMessage) guestMessage.classList.toggle('hidden', !isGuest);
 
-        const progress = document.getElementById('hubProgressText');
-        if (progress) {
-            if (isGuest) {
-                progress.textContent = 'Guest progress stays local. Log in to keep match history and leaderboard stats permanently.';
-            } else {
-                const localBoard = readJSON('saved_leaderboard', []);
-                const row = localBoard.find(p => p.username === account.username);
-                const matches = row ? Number(row.matches || 0) : 0;
-                const level = Math.max(1, Math.floor(matches / 5) + 1);
-                progress.textContent = `Level ${level} · ${matches} games recorded on this browser`;
-            }
-        }
     }
 
     // Friend/DM actions explain account requirement immediately instead of
@@ -1187,39 +1169,28 @@ function installMegaArena() {
         socket.emit('create_ffa_lobby', { maxPlayers, isPublic });
     };
 
-    window.openHubPage = function (panel = 'profile') {
+    window.openMusicPage = function () {
         const game = document.getElementById('gameScreen');
         if (game && !game.classList.contains('hidden')) {
-            // While playing, stay in the game and use the single dock instead.
-            if (panel === 'music') openGameDock('music');
-            else openGameDock('tools');
+            openGameDock('music');
             return;
         }
-        activateDashboardTab('hubTab', 'btnNavHub');
-        openHubPanel(panel);
+        activateDashboardTab('musicTab', 'btnNavMusic');
+        renderSpotifyEverywhere();
     };
 
-    window.openHubPanel = function (name) {
-        const valid = ['profile', 'music', 'history', 'notes', 'settings', 'shortcuts'];
-        if (!valid.includes(name)) name = 'profile';
-
-        document.querySelectorAll('.hub-panel').forEach(el => el.classList.add('hidden'));
-        document.querySelectorAll('.hub-sub-button').forEach(el => el.classList.remove('active'));
-        document.getElementById(`hub${name.charAt(0).toUpperCase() + name.slice(1)}Panel`)?.classList.remove('hidden');
-        document.querySelector(`[data-hub="${name}"]`)?.classList.add('active');
-
-        if (name === 'history') requestSavedHistory();
-        if (name === 'notes') loadArenaNotes();
-        if (name === 'settings') syncHubSettings();
-        updateAccountUI();
+    // Compatibility for any older buttons still cached by the browser.
+    window.openHubPage = function (panel = 'settings') {
+        if (panel === 'music') openMusicPage();
+        else openSettingsModal();
     };
 
-    // Keep original 1v1 / 2v2 switching, but clear FFA/Hub active states.
+    // Keep original 1v1 / 2v2 switching, but clear FFA/Music active states.
     const originalSwitchMatchMode = switchMatchMode;
     switchMatchMode = function (mode) {
         originalSwitchMatchMode(mode);
         document.getElementById('btnNavFFA')?.classList.remove('active');
-        document.getElementById('btnNavHub')?.classList.remove('active');
+        document.getElementById('btnNavMusic')?.classList.remove('active');
     };
 
     // ---------------------------------------------------------------------
@@ -1246,10 +1217,10 @@ function installMegaArena() {
                 else showToast('You are not in a lobby yet.', 'ℹ️');
             } else if (tab === 'music') {
                 closeExclusiveModals();
-                openHubPage('music');
+                openMusicPage();
             } else {
                 closeExclusiveModals();
-                openHubPage('settings');
+                openSettingsModal();
             }
             return;
         }
@@ -1271,7 +1242,6 @@ function installMegaArena() {
         document.querySelector(`[data-dock-tab="${tab}"]`)?.classList.add('active');
 
         document.getElementById('gameLobbyButton')?.classList.toggle('active', tab === 'lobby');
-        document.getElementById('gameMusicButton')?.classList.toggle('active', tab === 'music');
         document.getElementById('arenaChatButton')?.classList.toggle('active', tab === 'chat');
         document.getElementById('arenaOptionsButton')?.classList.toggle('active', tab === 'tools');
 
@@ -1289,7 +1259,7 @@ function installMegaArena() {
         screen?.classList.remove('game-dock-open');
         activeDockTab = null;
         document.querySelectorAll('.arena-button').forEach(button => {
-            if (['gameLobbyButton', 'gameMusicButton', 'arenaChatButton', 'arenaOptionsButton'].includes(button.id)) {
+            if (['gameLobbyButton', 'arenaChatButton', 'arenaOptionsButton'].includes(button.id)) {
                 button.classList.remove('active');
             }
         });
@@ -1537,21 +1507,543 @@ function installMegaArena() {
     };
 
     // ---------------------------------------------------------------------
-    // SPOTIFY
+    // SPOTIFY WEB PLAYER
+    // Real Spotify Web API + Web Playback SDK. No playlist-import iframe.
     // ---------------------------------------------------------------------
+    const SPOTIFY_CLIENT_KEY = 'sk_spotify_client_id_v2';
+    const SPOTIFY_TOKEN_KEY = 'sk_spotify_token_v2';
+    const SPOTIFY_VERIFIER_KEY = 'sk_spotify_pkce_verifier_v2';
+    const SPOTIFY_STATE_KEY = 'sk_spotify_oauth_state_v2';
+    let spotifyPlayer = null;
+    let spotifyDeviceId = null;
+    let spotifySdkLoading = false;
+    let spotifyCurrent = { track: null, paused: true };
+    let spotifyLastResults = [];
+
+    function spotifyClientId() {
+        return String(localStorage.getItem(SPOTIFY_CLIENT_KEY) || window.__SPOTIFY_CLIENT_ID__ || '').trim();
+    }
+
+    function spotifyRedirectUri() {
+        return `${location.origin}${location.pathname}`;
+    }
+
+    function spotifyReadTokens() {
+        return readJSON(SPOTIFY_TOKEN_KEY, null);
+    }
+
+    function spotifyWriteTokens(data) {
+        if (!data) {
+            localStorage.removeItem(SPOTIFY_TOKEN_KEY);
+            return;
+        }
+        writeJSON(SPOTIFY_TOKEN_KEY, data);
+    }
+
+    function spotifyIsConnected() {
+        const token = spotifyReadTokens();
+        return !!(token && (token.access_token || token.refresh_token));
+    }
+
+    function spotifyRandomString(length = 64) {
+        const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~';
+        const bytes = new Uint8Array(length);
+        crypto.getRandomValues(bytes);
+        return Array.from(bytes, byte => chars[byte % chars.length]).join('');
+    }
+
+    async function spotifyChallenge(verifier) {
+        const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
+        return btoa(String.fromCharCode(...new Uint8Array(digest)))
+            .replace(/\+/g, '-')
+            .replace(/\//g, '_')
+            .replace(/=+$/, '');
+    }
+
+    async function spotifyAccessToken() {
+        let token = spotifyReadTokens();
+        if (!token) return null;
+        if (token.access_token && Number(token.expires_at || 0) > Date.now() + 60000) {
+            return token.access_token;
+        }
+        if (!token.refresh_token) return null;
+
+        const clientId = spotifyClientId();
+        if (!clientId) return null;
+
+        const body = new URLSearchParams({
+            client_id: clientId,
+            grant_type: 'refresh_token',
+            refresh_token: token.refresh_token
+        });
+
+        const response = await fetch('https://accounts.spotify.com/api/token', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body
+        });
+
+        if (!response.ok) {
+            spotifyWriteTokens(null);
+            renderSpotifyEverywhere();
+            return null;
+        }
+
+        const fresh = await response.json();
+        token = {
+            ...token,
+            ...fresh,
+            refresh_token: fresh.refresh_token || token.refresh_token,
+            expires_at: Date.now() + Number(fresh.expires_in || 3600) * 1000
+        };
+        spotifyWriteTokens(token);
+        return token.access_token;
+    }
+
+    async function spotifyApi(path, options = {}) {
+        const token = await spotifyAccessToken();
+        if (!token) throw new Error('Spotify is not connected.');
+
+        const headers = new Headers(options.headers || {});
+        headers.set('Authorization', `Bearer ${token}`);
+        if (options.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
+
+        const response = await fetch(`https://api.spotify.com/v1${path}`, {
+            ...options,
+            headers
+        });
+
+        if (response.status === 204) return null;
+        if (!response.ok) {
+            let message = `Spotify request failed (${response.status})`;
+            try {
+                const body = await response.json();
+                message = body?.error?.message || message;
+            } catch {}
+            throw new Error(message);
+        }
+        return response.json();
+    }
+
+    function spotifyStatusText() {
+        if (!spotifyClientId()) return 'Needs Spotify Client ID';
+        if (!spotifyIsConnected()) return 'Not connected';
+        if (!spotifyDeviceId) return 'Connected · starting web player…';
+        return 'Connected · SmashKarts Arena Player';
+    }
+
+    function spotifyTrackInfo() {
+        const track = spotifyCurrent.track;
+        return {
+            title: track?.name || 'Nothing playing',
+            artist: track?.artists?.map(a => a.name).join(', ') || (spotifyIsConnected() ? 'Search Spotify below' : 'Connect Spotify to start'),
+            art: track?.album?.images?.[0]?.url || ''
+        };
+    }
+
+    function setImage(id, src) {
+        const img = document.getElementById(id);
+        if (!img) return;
+        if (src) {
+            img.src = src;
+            img.style.visibility = 'visible';
+        } else {
+            img.removeAttribute('src');
+            img.style.visibility = 'hidden';
+        }
+    }
+
+    function renderSpotifyEverywhere() {
+        const info = spotifyTrackInfo();
+        const status = spotifyStatusText();
+        const connected = spotifyIsConnected();
+        const playIcon = spotifyCurrent.paused ? '▶' : '⏸';
+
+        ['spotifyPageStatus', 'spotifyDockStatus', 'spotifySettingsStatus'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.textContent = status;
+        });
+
+        ['spotifyPageTrack', 'spotifyDockTrack', 'spotifyMiniTrack'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.textContent = info.title;
+        });
+        ['spotifyPageArtist', 'spotifyDockArtist', 'spotifyMiniArtist'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.textContent = info.artist;
+        });
+
+        setImage('spotifyPageArt', info.art);
+        setImage('spotifyDockArt', info.art);
+        setImage('spotifyMiniArt', info.art);
+
+        ['spotifyPagePlayButton', 'spotifyDockPlayButton'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.textContent = playIcon;
+        });
+
+        ['spotifyPageConnectButton', 'spotifyDockConnectButton', 'spotifySettingsConnectButton'].forEach(id => {
+            const button = document.getElementById(id);
+            if (!button) return;
+            button.textContent = connected ? 'CONNECTED' : 'CONNECT SPOTIFY';
+        });
+    }
+
+    function syncMainSettings() {
+        const pref = readJSON(PREF_KEY, {});
+        const gameplay = document.getElementById('settingsGameplayMode');
+        if (gameplay) gameplay.value = pref.gameplay || currentGameplayMode || 'popup';
+
+        const clientInput = document.getElementById('spotifyClientIdInput');
+        if (clientInput) clientInput.value = spotifyClientId();
+
+        const redirect = document.getElementById('spotifyRedirectUri');
+        if (redirect) redirect.value = spotifyRedirectUri();
+        renderSpotifyEverywhere();
+    }
+
+    window.saveMainSettings = function () {
+        const gameplay = document.getElementById('settingsGameplayMode')?.value === 'embed' ? 'embed' : 'popup';
+        currentGameplayMode = gameplay;
+        updateGameplayMode(gameplay);
+        const pref = readJSON(PREF_KEY, {});
+        pref.gameplay = gameplay;
+        writeJSON(PREF_KEY, pref);
+        const originalSelect = document.getElementById('gameplayModeSelect');
+        if (originalSelect) originalSelect.value = gameplay;
+        window.saveSpotifyClientId(false);
+        showToast('Settings saved.', '⚙️');
+    };
+
+    window.saveSpotifyClientId = function (toast = true) {
+        const input = document.getElementById('spotifyClientIdInput');
+        const id = String(input?.value || '').trim();
+        if (id) localStorage.setItem(SPOTIFY_CLIENT_KEY, id);
+        else localStorage.removeItem(SPOTIFY_CLIENT_KEY);
+        if (toast) showToast(id ? 'Spotify Client ID saved.' : 'Spotify Client ID cleared.', '🎵');
+        renderSpotifyEverywhere();
+    };
+
+    window.copySpotifyRedirectUri = function () {
+        navigator.clipboard?.writeText(spotifyRedirectUri())
+            .then(() => showToast('Spotify redirect URI copied.', '📋'))
+            .catch(() => showToast('Could not copy redirect URI.', '❌'));
+    };
+
+    window.spotifyConnect = async function () {
+        const input = document.getElementById('spotifyClientIdInput');
+        if (input && input.value.trim()) localStorage.setItem(SPOTIFY_CLIENT_KEY, input.value.trim());
+        const clientId = spotifyClientId();
+        if (!clientId) {
+            openSettingsModal();
+            showToast('Add your Spotify Client ID in Settings first.', '🎵');
+            return;
+        }
+
+        if (spotifyIsConnected()) {
+            await ensureSpotifyPlayer();
+            renderSpotifyEverywhere();
+            return;
+        }
+
+        const verifier = spotifyRandomString(64);
+        const state = spotifyRandomString(24);
+        localStorage.setItem(SPOTIFY_VERIFIER_KEY, verifier);
+        localStorage.setItem(SPOTIFY_STATE_KEY, state);
+        const challenge = await spotifyChallenge(verifier);
+
+        const scopes = [
+            'streaming',
+            'user-read-email',
+            'user-read-private',
+            'user-read-playback-state',
+            'user-modify-playback-state',
+            'user-read-currently-playing',
+            'playlist-read-private',
+            'user-library-read'
+        ].join(' ');
+
+        const params = new URLSearchParams({
+            client_id: clientId,
+            response_type: 'code',
+            redirect_uri: spotifyRedirectUri(),
+            scope: scopes,
+            code_challenge_method: 'S256',
+            code_challenge: challenge,
+            state
+        });
+        location.href = `https://accounts.spotify.com/authorize?${params}`;
+    };
+
+    async function handleSpotifyOAuthCallback() {
+        const params = new URLSearchParams(location.search);
+        const code = params.get('code');
+        const returnedState = params.get('state');
+        if (!code) return;
+
+        const expectedState = localStorage.getItem(SPOTIFY_STATE_KEY);
+        const verifier = localStorage.getItem(SPOTIFY_VERIFIER_KEY);
+        const clientId = spotifyClientId();
+
+        if (!clientId || !verifier || !expectedState || returnedState !== expectedState) {
+            showToast('Spotify login could not be verified. Try connecting again.', '❌');
+            return;
+        }
+
+        const body = new URLSearchParams({
+            client_id: clientId,
+            grant_type: 'authorization_code',
+            code,
+            redirect_uri: spotifyRedirectUri(),
+            code_verifier: verifier
+        });
+
+        try {
+            const response = await fetch('https://accounts.spotify.com/api/token', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body
+            });
+            if (!response.ok) throw new Error('Spotify token exchange failed.');
+            const token = await response.json();
+            spotifyWriteTokens({
+                ...token,
+                expires_at: Date.now() + Number(token.expires_in || 3600) * 1000
+            });
+            localStorage.removeItem(SPOTIFY_STATE_KEY);
+            localStorage.removeItem(SPOTIFY_VERIFIER_KEY);
+            history.replaceState({}, document.title, spotifyRedirectUri());
+            showToast('Spotify connected.', '🎵');
+            await ensureSpotifyPlayer();
+        } catch (error) {
+            showToast(error.message || 'Spotify connection failed.', '❌');
+        }
+        renderSpotifyEverywhere();
+    }
+
+    function loadSpotifySdk() {
+        if (window.Spotify?.Player) return Promise.resolve();
+        if (spotifySdkLoading) {
+            return new Promise(resolve => {
+                const wait = setInterval(() => {
+                    if (window.Spotify?.Player) {
+                        clearInterval(wait);
+                        resolve();
+                    }
+                }, 100);
+            });
+        }
+
+        spotifySdkLoading = true;
+        return new Promise((resolve, reject) => {
+            window.onSpotifyWebPlaybackSDKReady = () => {
+                spotifySdkLoading = false;
+                resolve();
+            };
+            const tag = document.createElement('script');
+            tag.src = 'https://sdk.scdn.co/spotify-player.js';
+            tag.async = true;
+            tag.onerror = () => {
+                spotifySdkLoading = false;
+                reject(new Error('Could not load Spotify Web Playback SDK.'));
+            };
+            document.head.appendChild(tag);
+        });
+    }
+
+    async function ensureSpotifyPlayer() {
+        if (!spotifyIsConnected()) return null;
+        if (spotifyPlayer) return spotifyPlayer;
+
+        await loadSpotifySdk();
+        const token = await spotifyAccessToken();
+        if (!token) return null;
+
+        spotifyPlayer = new window.Spotify.Player({
+            name: 'SmashKarts Arena Player',
+            getOAuthToken: async cb => cb(await spotifyAccessToken()),
+            volume: 0.65
+        });
+
+        spotifyPlayer.addListener('ready', async ({ device_id }) => {
+            spotifyDeviceId = device_id;
+            renderSpotifyEverywhere();
+            try {
+                await spotifyApi('/me/player', {
+                    method: 'PUT',
+                    body: JSON.stringify({ device_ids: [device_id], play: false })
+                });
+            } catch {}
+        });
+
+        spotifyPlayer.addListener('not_ready', ({ device_id }) => {
+            if (spotifyDeviceId === device_id) spotifyDeviceId = null;
+            renderSpotifyEverywhere();
+        });
+
+        spotifyPlayer.addListener('player_state_changed', state => {
+            if (!state) return;
+            spotifyCurrent = {
+                track: state.track_window?.current_track || null,
+                paused: !!state.paused
+            };
+            renderSpotifyEverywhere();
+        });
+
+        for (const eventName of ['initialization_error', 'authentication_error', 'account_error', 'playback_error']) {
+            spotifyPlayer.addListener(eventName, ({ message }) => {
+                showToast(message || 'Spotify player error.', '❌');
+            });
+        }
+
+        await spotifyPlayer.connect();
+        return spotifyPlayer;
+    }
+
+    window.spotifyDisconnect = function () {
+        try { spotifyPlayer?.disconnect(); } catch {}
+        spotifyPlayer = null;
+        spotifyDeviceId = null;
+        spotifyCurrent = { track: null, paused: true };
+        spotifyWriteTokens(null);
+        renderSpotifyEverywhere();
+        showToast('Spotify disconnected.', '🎵');
+    };
+
+    async function ensureSpotifyReady() {
+        if (!spotifyIsConnected()) {
+            spotifyConnect();
+            return false;
+        }
+        try {
+            await ensureSpotifyPlayer();
+            if (!spotifyDeviceId) {
+                showToast('Spotify is connecting. Try again in a moment.', '🎵');
+                return false;
+            }
+            return true;
+        } catch (error) {
+            showToast(error.message || 'Spotify is unavailable.', '❌');
+            return false;
+        }
+    }
+
+    window.spotifyTogglePlayback = async function () {
+        if (!(await ensureSpotifyReady())) return;
+        try {
+            if (spotifyCurrent.paused) await spotifyPlayer.resume();
+            else await spotifyPlayer.pause();
+        } catch (error) {
+            showToast(error.message || 'Could not change playback.', '❌');
+        }
+    };
+
+    window.spotifyNextTrack = async function () {
+        if (!(await ensureSpotifyReady())) return;
+        try {
+            await spotifyApi(`/me/player/next?device_id=${encodeURIComponent(spotifyDeviceId)}`, { method: 'POST' });
+        } catch (error) {
+            showToast(error.message || 'Could not skip song.', '❌');
+        }
+    };
+
+    window.spotifyPreviousTrack = async function () {
+        if (!(await ensureSpotifyReady())) return;
+        try {
+            await spotifyApi(`/me/player/previous?device_id=${encodeURIComponent(spotifyDeviceId)}`, { method: 'POST' });
+        } catch (error) {
+            showToast(error.message || 'Could not go to the previous song.', '❌');
+        }
+    };
+
+    window.spotifyPlayUri = async function (uri) {
+        if (!(await ensureSpotifyReady())) return;
+        try {
+            await spotifyApi(`/me/player/play?device_id=${encodeURIComponent(spotifyDeviceId)}`, {
+                method: 'PUT',
+                body: JSON.stringify({ uris: [uri] })
+            });
+        } catch (error) {
+            showToast(error.message || 'Could not play that song.', '❌');
+        }
+    };
+
+    function renderSpotifyResults(targetId, tracks) {
+        const container = document.getElementById(targetId);
+        if (!container) return;
+        container.replaceChildren();
+
+        if (!tracks.length) {
+            const empty = document.createElement('div');
+            empty.className = 'text-xs text-gray-400 p-3';
+            empty.textContent = 'No songs found.';
+            container.appendChild(empty);
+            return;
+        }
+
+        tracks.forEach(track => {
+            const row = document.createElement('button');
+            row.type = 'button';
+            row.className = 'spotify-result text-left';
+            row.onclick = () => spotifyPlayUri(track.uri);
+
+            const image = document.createElement('img');
+            image.alt = '';
+            if (track.album?.images?.[0]?.url) image.src = track.album.images[0].url;
+
+            const copy = document.createElement('div');
+            copy.className = 'min-w-0';
+            const title = document.createElement('div');
+            title.className = 'spotify-result-title';
+            title.textContent = track.name || 'Unknown track';
+            const sub = document.createElement('div');
+            sub.className = 'spotify-result-sub';
+            sub.textContent = `${track.artists?.map(a => a.name).join(', ') || 'Unknown artist'} · ${track.album?.name || ''}`;
+            copy.append(title, sub);
+
+            const play = document.createElement('span');
+            play.className = 'spotify-control primary flex items-center justify-center';
+            play.textContent = '▶';
+
+            row.append(image, copy, play);
+            container.appendChild(row);
+        });
+    }
+
+    window.spotifySearch = async function (surface = 'page') {
+        const inputId = surface === 'dock' ? 'spotifyDockSearchInput' : 'spotifyPageSearchInput';
+        const resultId = surface === 'dock' ? 'spotifyDockResults' : 'spotifyPageResults';
+        const query = String(document.getElementById(inputId)?.value || '').trim();
+        if (!query) return;
+        if (!spotifyIsConnected()) {
+            spotifyConnect();
+            return;
+        }
+
+        const target = document.getElementById(resultId);
+        if (target) target.textContent = 'Searching Spotify…';
+
+        try {
+            const data = await spotifyApi(`/search?q=${encodeURIComponent(query)}&type=track&limit=10`);
+            spotifyLastResults = data?.tracks?.items || [];
+            renderSpotifyResults(resultId, spotifyLastResults);
+            const otherId = surface === 'dock' ? 'spotifyPageResults' : 'spotifyDockResults';
+            renderSpotifyResults(otherId, spotifyLastResults);
+        } catch (error) {
+            if (target) target.textContent = error.message || 'Spotify search failed.';
+        }
+    };
+
     window.openSpotifyWebsite = function () {
         window.open('https://open.spotify.com/', '_blank', 'noopener,noreferrer');
     };
 
-    window.reloadSpotifyPlayer = function () {
-        ['spotifyEmbedFrame', 'hubSpotifyEmbedFrame'].forEach(id => {
-            const frame = document.getElementById(id);
-            if (!frame) return;
-            const src = frame.src;
-            frame.src = 'about:blank';
-            setTimeout(() => { frame.src = src; }, 40);
-        });
-    };
+    handleSpotifyOAuthCallback().then(async () => {
+        if (spotifyIsConnected()) {
+            try { await ensureSpotifyPlayer(); } catch {}
+        }
+        renderSpotifyEverywhere();
+    });
 
     // ---------------------------------------------------------------------
     // HUB: HISTORY / NOTES / SETTINGS / UTILITIES
@@ -1609,23 +2101,9 @@ function installMegaArena() {
         showToast('Notes cleared.', '🗑️');
     };
 
-    function syncHubSettings() {
-        const pref = readJSON(PREF_KEY, {});
-        const select = document.getElementById('hubGameplayMode');
-        if (select) select.value = pref.gameplay || currentGameplayMode || 'popup';
-    }
+    function syncHubSettings() { syncMainSettings(); }
 
-    window.applyHubGameplayMode = function () {
-        const mode = document.getElementById('hubGameplayMode')?.value === 'embed' ? 'embed' : 'popup';
-        currentGameplayMode = mode;
-        updateGameplayMode(mode);
-        const pref = readJSON(PREF_KEY, {});
-        pref.gameplay = mode;
-        writeJSON(PREF_KEY, pref);
-        const originalSelect = document.getElementById('gameplayModeSelect');
-        if (originalSelect) originalSelect.value = mode;
-        showToast(`Gameplay mode: ${mode === 'embed' ? 'Type in Code' : 'Popup Window'}`, '⚙️');
-    };
+    window.applyHubGameplayMode = function () { saveMainSettings(); };
 
     window.rollArenaDice = function () {
         showToast(`You rolled a ${1 + Math.floor(Math.random() * 6)}.`, '🎲');
@@ -1820,8 +2298,8 @@ function installMegaArena() {
     document.getElementById('authModal')?.classList.add('hidden');
     document.getElementById('settingsModal')?.classList.add('hidden');
     updateAccountUI();
-    loadArenaNotes();
-    syncHubSettings();
+    syncMainSettings();
+    renderSpotifyEverywhere();
     setConnectionState(socket.connected ? 'connected' : 'connecting');
 
     // Ensure the guest/account session reaches the server even if the old

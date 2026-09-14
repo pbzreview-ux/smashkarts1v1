@@ -281,17 +281,6 @@
 
         #chatOverlay.hidden-overlay { display: block !important; }
 
-        #spotifyEmbedFrame,
-        #hubSpotifyEmbedFrame {
-            width: 100%;
-            border: 0;
-            border-radius: 14px;
-            background: #121212;
-        }
-
-        #spotifyEmbedFrame { height: 500px; }
-        #hubSpotifyEmbedFrame { height: 480px; }
-
         /* =========================
            HEADER ORGANIZATION
            ========================= */
@@ -325,48 +314,179 @@
 
         #settingsFloatingBtn { display: none !important; }
 
-        /* =========================
-           ARENA HUB
-           Normal dashboard page - NOT overlay
-           ========================= */
-        #hubSubnav {
-            display: flex;
-            gap: 7px;
-            flex-wrap: wrap;
-            margin-bottom: 14px;
-        }
-
-        .hub-sub-button {
-            border: 1px solid #ffffff20;
-            border-radius: 12px;
-            padding: 8px 11px;
-            color: white;
-            background: #173477;
-            font-size: 10px;
-            font-weight: 900;
-            cursor: pointer;
-        }
-
-        .hub-sub-button.active {
-            background: #ffd318;
-            color: #142f75;
-            border-color: #ffd318;
-        }
-
-        .hub-panel.hidden { display: none !important; }
-
-        .hub-grid {
-            display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 12px;
-        }
-
+        /* Shared card styling for FFA and Settings. */
         .hub-card {
             background: #173477b8;
             border: 1px solid #ffffff1f;
             border-radius: 16px;
             padding: 14px;
         }
+
+        /* =========================
+           SPOTIFY WEB PLAYER
+           ========================= */
+        .spotify-mini {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            min-width: 220px;
+            max-width: 330px;
+            padding: 6px 8px;
+            border: 1px solid #2d5c3a;
+            border-radius: 16px;
+            background: #121212;
+            color: white;
+        }
+
+        .spotify-mini img {
+            width: 34px;
+            height: 34px;
+            border-radius: 7px;
+            object-fit: cover;
+            background: #242424;
+        }
+
+        .spotify-mini-copy {
+            min-width: 0;
+            flex: 1;
+            cursor: pointer;
+        }
+
+        .spotify-mini-track,
+        .spotify-mini-artist {
+            display: block;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .spotify-mini-track { font: 800 11px "Inter", sans-serif; }
+        .spotify-mini-artist { font: 700 9px "Inter", sans-serif; color: #a7a7a7; }
+
+        .spotify-mini-skip {
+            width: 34px;
+            height: 34px;
+            flex: 0 0 34px;
+            border: 0;
+            border-radius: 999px;
+            background: #1ed760;
+            color: #000;
+            font-weight: 1000;
+            cursor: pointer;
+        }
+
+        .spotify-web-shell {
+            background: #121212;
+            color: white;
+            border: 1px solid #ffffff1f;
+            border-radius: 18px;
+            overflow: hidden;
+        }
+
+        .spotify-web-top {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 14px;
+            background: #181818;
+            border-bottom: 1px solid #ffffff14;
+        }
+
+        .spotify-logo-text {
+            color: #1ed760;
+            font: 900 16px "Inter", sans-serif;
+        }
+
+        .spotify-web-body { padding: 14px; }
+
+        .spotify-now {
+            display: grid;
+            grid-template-columns: 86px minmax(0,1fr);
+            gap: 14px;
+            align-items: center;
+            padding: 12px;
+            border-radius: 14px;
+            background: #181818;
+        }
+
+        .spotify-now img {
+            width: 86px;
+            height: 86px;
+            border-radius: 10px;
+            object-fit: cover;
+            background: #282828;
+        }
+
+        .spotify-controls {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 10px;
+        }
+
+        .spotify-control {
+            min-width: 38px;
+            height: 38px;
+            padding: 0 12px;
+            border: 0;
+            border-radius: 999px;
+            background: #282828;
+            color: white;
+            font-weight: 1000;
+            cursor: pointer;
+        }
+
+        .spotify-control.primary {
+            background: #1ed760;
+            color: #000;
+        }
+
+        .spotify-search-row {
+            display: flex;
+            gap: 8px;
+            margin-top: 14px;
+        }
+
+        .spotify-results {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            margin-top: 12px;
+            max-height: 420px;
+            overflow-y: auto;
+        }
+
+        .spotify-result {
+            display: grid;
+            grid-template-columns: 48px minmax(0,1fr) auto;
+            align-items: center;
+            gap: 10px;
+            padding: 8px;
+            border-radius: 10px;
+            background: #181818;
+            cursor: pointer;
+        }
+
+        .spotify-result:hover { background: #282828; }
+
+        .spotify-result img {
+            width: 48px;
+            height: 48px;
+            object-fit: cover;
+            border-radius: 6px;
+            background: #282828;
+        }
+
+        .spotify-result-title,
+        .spotify-result-sub {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .spotify-result-title { font-size: 12px; font-weight: 900; }
+        .spotify-result-sub { font-size: 10px; color: #a7a7a7; margin-top: 2px; }
 
         /* =========================
            ONE-AT-A-TIME MODALS
@@ -387,7 +507,6 @@
             .arena-button { padding: 8px 9px; font-size: 10px; }
             #gameLobbyInfo { max-width: 200px; }
             #gameLobbyPlayerNames { max-width: 90px; }
-            .hub-grid { grid-template-columns: 1fr; }
 
             #gameScreen.game-dock-open #smashFrame { display: none; }
             #gameDock { width: 100%; }
@@ -399,15 +518,58 @@
 
     <div id="toastContainer"></div>
 
-    <!-- Compatibility settings modal. The new Settings button opens Arena Hub instead. -->
+    <!-- SETTINGS: normal modal, never covered by connection status. -->
     <div id="settingsModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4 exclusive-modal">
-        <div class="w-full max-w-sm bg-blue-900 border-2 border-yellow-400 rounded-3xl p-6 shadow-2xl">
-            <div class="flex justify-between items-center mb-4">
-                <h3 class="font-bungee text-lg text-yellow-300">⚙️ SETTINGS</h3>
+        <div class="w-full max-w-xl bg-blue-900 border-2 border-yellow-400 rounded-3xl p-6 shadow-2xl max-h-[90vh] overflow-y-auto">
+            <div class="flex justify-between items-center mb-5">
+                <div>
+                    <h3 class="font-bungee text-lg text-yellow-300">⚙️ SETTINGS</h3>
+                    <p class="text-[11px] text-blue-200 mt-1">Gameplay, account and Spotify Web Player setup.</p>
+                </div>
                 <button onclick="closeSettingsModal()" class="text-white hover:text-red-400 font-bold text-lg">✕</button>
             </div>
-            <p class="text-xs text-blue-200 mb-4">Settings now live inside Arena Hub so they do not pile over other windows.</p>
-            <button onclick="closeSettingsModal(); openHubPage('settings');" class="w-full bg-yellow-400 text-blue-950 font-black py-3 rounded-xl text-xs">OPEN ARENA HUB SETTINGS</button>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div class="hub-card">
+                    <span class="dock-label">Gameplay</span>
+                    <label class="text-xs text-blue-200">Gameplay mode</label>
+                    <select id="settingsGameplayMode" class="smash-input w-full px-3 py-2 rounded-xl text-xs mt-1">
+                        <option value="popup">Popup Window</option>
+                        <option value="embed">Type in Code / Embedded</option>
+                    </select>
+                    <button onclick="saveMainSettings()" class="dock-action mt-3">SAVE SETTINGS</button>
+                </div>
+
+                <div class="hub-card">
+                    <span class="dock-label">Account</span>
+                    <button onclick="promptEditUsername()" class="dock-action">✏️ CHANGE USERNAME</button>
+                    <button id="settingsAccountButton" onclick="openOptionalLogin()" class="dock-action yellow mt-2">LOG IN TO SAVE STATS</button>
+                </div>
+            </div>
+
+            <div class="hub-card mt-4" style="background:#111827">
+                <div class="flex items-center justify-between gap-3 mb-3">
+                    <div>
+                        <span class="dock-label" style="color:#1ed760">Spotify Web Player</span>
+                        <p class="text-[11px] text-gray-300">Connect your Spotify account once, then search and play Spotify directly inside this site.</p>
+                    </div>
+                    <span id="spotifySettingsStatus" class="text-[10px] font-bold text-gray-300">Not connected</span>
+                </div>
+
+                <label class="text-[10px] uppercase font-bold text-gray-400">Spotify Client ID</label>
+                <input id="spotifyClientIdInput" type="text" placeholder="Paste Spotify Developer Client ID" class="smash-input w-full px-3 py-2 rounded-xl text-xs mt-1">
+
+                <label class="text-[10px] uppercase font-bold text-gray-400 block mt-3">Redirect URI to add in Spotify Developer Dashboard</label>
+                <div class="flex gap-2 mt-1">
+                    <input id="spotifyRedirectUri" type="text" readonly class="smash-input flex-1 px-3 py-2 rounded-xl text-[10px]">
+                    <button onclick="copySpotifyRedirectUri()" class="dock-action" style="width:auto">COPY</button>
+                </div>
+
+                <div class="grid grid-cols-2 gap-2 mt-3">
+                    <button onclick="saveSpotifyClientId()" class="dock-action">SAVE CLIENT ID</button>
+                    <button id="spotifySettingsConnectButton" onclick="spotifyConnect()" class="dock-action green">CONNECT SPOTIFY</button>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -504,7 +666,14 @@
                     </button>
                     <button id="gamePasteCodeButton" class="arena-button" onclick="pasteCodeIntoCurrentLobby()">📋 PASTE CODE</button>
                     <button id="gameLobbyButton" class="arena-button" onclick="openGameDock('lobby')">👥 LOBBY</button>
-                    <button id="gameMusicButton" class="arena-button" onclick="openGameDock('music')">🎵 MUSIC</button>
+                    <div id="spotifyMiniPlayer" class="spotify-mini">
+                        <img id="spotifyMiniArt" alt="" src="">
+                        <div class="spotify-mini-copy" onclick="openGameDock('music')" title="Open Spotify Web Player">
+                            <span id="spotifyMiniTrack" class="spotify-mini-track">Spotify not connected</span>
+                            <span id="spotifyMiniArtist" class="spotify-mini-artist">Click to open Music</span>
+                        </div>
+                        <button class="spotify-mini-skip" onclick="spotifyNextTrack()" title="Skip song">⏭</button>
+                    </div>
                     <button id="arenaChatButton" class="arena-button" onclick="toggleOverlayChat()">💬 <span id="toggleChatBtnLabel">Show Chat</span></button>
                     <button id="arenaOptionsButton" class="arena-button" onclick="openGameDock('tools')">⚡ TOOLS</button>
                 </div>
@@ -589,22 +758,35 @@
                     </section>
 
                     <section id="dockMusicPanel" class="game-dock-panel hidden">
-                        <div class="dock-card">
-                            <span class="dock-label">Spotify Player</span>
-                            <p class="text-[11px] text-blue-200 mb-3">Listen while you play. This uses Spotify's official embedded player.</p>
-                            <iframe
-                                id="spotifyEmbedFrame"
-                                src="https://open.spotify.com/embed/playlist/37i9dQZF1DXcBWIGoYBM5M?utm_source=generator"
-                                title="Spotify"
-                                allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
-                                loading="lazy">
-                            </iframe>
+                        <div class="spotify-web-shell">
+                            <div class="spotify-web-top">
+                                <div>
+                                    <div class="spotify-logo-text">Spotify Web</div>
+                                    <div id="spotifyDockStatus" class="text-[10px] text-gray-400 mt-1">Not connected</div>
+                                </div>
+                                <button id="spotifyDockConnectButton" onclick="spotifyConnect()" class="dock-action green" style="width:auto">CONNECT</button>
+                            </div>
+                            <div class="spotify-web-body">
+                                <div class="spotify-now">
+                                    <img id="spotifyDockArt" alt="">
+                                    <div class="min-w-0">
+                                        <div id="spotifyDockTrack" class="font-black text-sm truncate">Nothing playing</div>
+                                        <div id="spotifyDockArtist" class="text-[11px] text-gray-400 truncate mt-1">Connect Spotify to start</div>
+                                        <div class="spotify-controls">
+                                            <button onclick="spotifyPreviousTrack()" class="spotify-control">⏮</button>
+                                            <button id="spotifyDockPlayButton" onclick="spotifyTogglePlayback()" class="spotify-control primary">▶</button>
+                                            <button onclick="spotifyNextTrack()" class="spotify-control">⏭</button>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="spotify-search-row">
+                                    <input id="spotifyDockSearchInput" type="text" placeholder="Search Spotify for any song..." onkeydown="if(event.key==='Enter') spotifySearch('dock')" class="smash-input flex-1 px-3 py-2 rounded-xl text-xs">
+                                    <button onclick="spotifySearch('dock')" class="dock-action green" style="width:auto">SEARCH</button>
+                                </div>
+                                <div id="spotifyDockResults" class="spotify-results"></div>
+                            </div>
                         </div>
-                        <div class="grid grid-cols-2 gap-2">
-                            <button class="dock-action green" onclick="openSpotifyWebsite()">🔎 BROWSE SPOTIFY</button>
-                            <button class="dock-action" onclick="reloadSpotifyPlayer()">↻ RELOAD PLAYER</button>
-                        </div>
-                        <p class="text-[10px] text-blue-300 mt-3">The full Spotify website cannot reliably run inside another site's iframe. “Browse Spotify” opens the real web player, while this box stays available for playback.</p>
                     </section>
 
                     <section id="dockToolsPanel" class="game-dock-panel hidden">
@@ -612,7 +794,7 @@
                             <button class="dock-action" onclick="copyActiveRoomCode()">📋 COPY CODE</button>
                             <button class="dock-action" onclick="openOnlineModal()">🟢 ONLINE</button>
                             <button class="dock-action" onclick="toggleArenaFullscreen()">⛶ FULLSCREEN</button>
-                            <button class="dock-action" onclick="openHubPage('settings')">⚙️ SETTINGS</button>
+                            <button class="dock-action" onclick="openSettingsModal()">⚙️ SETTINGS</button>
                             <button class="dock-action" onclick="rollArenaDice()">🎲 DICE</button>
                             <button class="dock-action" onclick="flipArenaCoin()">🪙 COIN</button>
                         </div>
@@ -653,7 +835,7 @@
 
             <div id="headerRightActions">
                 <button id="headerAccountButton" onclick="openOptionalLogin()" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 text-xs font-black px-4 py-2 rounded-xl">LOG IN TO SAVE STATS</button>
-                <button onclick="openHubPage('settings')" class="bg-blue-800 hover:bg-blue-700 text-white text-xs font-bold px-4 py-2 rounded-xl">⚙️ SETTINGS</button>
+                <button onclick="openSettingsModal()" class="bg-blue-800 hover:bg-blue-700 text-white text-xs font-bold px-4 py-2 rounded-xl">⚙️ SETTINGS</button>
             </div>
         </header>
 
@@ -664,7 +846,7 @@
                 <button id="btnNav1v1" onclick="switchMatchMode('1v1')" title="1v1 Matchmaking" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg active">🎮</button>
                 <button id="btnNav2v2" onclick="switchMatchMode('2v2')" title="2v2 Matchmaking" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg">⚔️</button>
                 <button id="btnNavMessages" onclick="showMessagesTab()" title="Friends & Messages" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg">💬<span id="messagesBadge" class="unread-badge hidden">0</span></button>
-                <button id="btnNavHub" onclick="openHubPage('profile')" title="Arena Hub" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg">⚡</button>
+                <button id="btnNavMusic" onclick="openMusicPage()" title="Spotify Web Player" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg">🎵</button>
             </aside>
 
             <main class="flex-1 flex flex-col items-center">
@@ -750,11 +932,8 @@
                                 <h3 class="font-bungee text-sm text-yellow-300 mb-2">CREATE</h3>
                                 <div class="grid grid-cols-2 gap-2 mb-3">
                                     <select id="ffaMaxPlayers" class="smash-input px-3 py-2 rounded-xl text-xs font-bold">
-                                        <option value="6">6 players</option>
-                                        <option value="8">8 players</option>
                                         <option value="12" selected>12 players</option>
-                                        <option value="16">16 players</option>
-                                        <option value="20">20 players</option>
+                                        <option value="24">24 players</option>
                                     </select>
                                     <select id="ffaPrivacy" class="smash-input px-3 py-2 rounded-xl text-xs font-bold">
                                         <option value="public">Public</option>
@@ -766,112 +945,50 @@
                         </div>
                     </div>
 
-                    <!-- Organized Arena Hub: one page, sub-tabs, no piling panels. -->
-                    <div id="hubTab" class="tab-content hidden">
-                        <div class="border-b border-white/10 pb-4 mb-4">
-                            <h2 class="font-bungee text-2xl text-white">⚡ ARENA HUB</h2>
-                            <p class="text-xs text-blue-200">Everything extra lives here instead of opening a pile of floating windows.</p>
+                    <!-- Spotify is its own normal page. No Arena Hub. -->
+                    <div id="musicTab" class="tab-content hidden space-y-4">
+                        <div class="flex justify-between items-center border-b border-white/10 pb-4 gap-3">
+                            <div>
+                                <h2 class="font-bungee text-2xl text-white">🎵 SPOTIFY WEB PLAYER</h2>
+                                <p class="text-xs text-blue-200">Search and play Spotify directly here. While racing, only the current song and Skip stay in the top bar.</p>
+                            </div>
+                            <button onclick="openSettingsModal()" class="text-xs bg-blue-700 hover:bg-blue-600 text-white font-black px-4 py-2.5 rounded-xl">⚙️ Spotify Setup</button>
                         </div>
 
-                        <div id="hubSubnav">
-                            <button class="hub-sub-button" data-hub="profile" onclick="openHubPanel('profile')">👤 Profile</button>
-                            <button class="hub-sub-button" data-hub="music" onclick="openHubPanel('music')">🎵 Spotify</button>
-                            <button class="hub-sub-button" data-hub="history" onclick="openHubPanel('history')">📜 History</button>
-                            <button class="hub-sub-button" data-hub="notes" onclick="openHubPanel('notes')">📝 Notes</button>
-                            <button class="hub-sub-button" data-hub="settings" onclick="openHubPanel('settings')">⚙️ Settings</button>
-                            <button class="hub-sub-button" data-hub="shortcuts" onclick="openHubPanel('shortcuts')">⌨️ Shortcuts</button>
+                        <div class="spotify-web-shell">
+                            <div class="spotify-web-top">
+                                <div>
+                                    <div class="spotify-logo-text">Spotify Web</div>
+                                    <div id="spotifyPageStatus" class="text-[10px] text-gray-400 mt-1">Not connected</div>
+                                </div>
+                                <div class="flex gap-2">
+                                    <button id="spotifyPageConnectButton" onclick="spotifyConnect()" class="dock-action green" style="width:auto">CONNECT SPOTIFY</button>
+                                    <button onclick="openSpotifyWebsite()" class="dock-action" style="width:auto">OPEN SPOTIFY.COM</button>
+                                </div>
+                            </div>
+
+                            <div class="spotify-web-body">
+                                <div class="spotify-now">
+                                    <img id="spotifyPageArt" alt="">
+                                    <div class="min-w-0">
+                                        <div id="spotifyPageTrack" class="font-black text-lg truncate">Nothing playing</div>
+                                        <div id="spotifyPageArtist" class="text-xs text-gray-400 truncate mt-1">Connect Spotify to search and play music</div>
+                                        <div class="spotify-controls">
+                                            <button onclick="spotifyPreviousTrack()" class="spotify-control">⏮</button>
+                                            <button id="spotifyPagePlayButton" onclick="spotifyTogglePlayback()" class="spotify-control primary">▶</button>
+                                            <button onclick="spotifyNextTrack()" class="spotify-control">⏭</button>
+                                            <button onclick="spotifyDisconnect()" class="spotify-control">DISCONNECT</button>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="spotify-search-row">
+                                    <input id="spotifyPageSearchInput" type="text" placeholder="Search Spotify for any song..." onkeydown="if(event.key==='Enter') spotifySearch('page')" class="smash-input flex-1 px-4 py-3 rounded-xl text-sm">
+                                    <button onclick="spotifySearch('page')" class="dock-action green" style="width:auto">SEARCH</button>
+                                </div>
+                                <div id="spotifyPageResults" class="spotify-results"></div>
+                            </div>
                         </div>
-
-                        <section id="hubProfilePanel" class="hub-panel">
-                            <div class="hub-grid">
-                                <div class="hub-card">
-                                    <span class="dock-label">Player</span>
-                                    <div id="hubProfileName" class="font-bungee text-xl text-yellow-300">Guest</div>
-                                    <div id="hubProfileMode" class="text-xs text-blue-200 mt-1">Guest Mode</div>
-                                    <button id="hubLoginButton" onclick="openOptionalLogin()" class="dock-action yellow mt-4">LOG IN TO SAVE STATS</button>
-                                </div>
-                                <div class="hub-card">
-                                    <span class="dock-label">Progress</span>
-                                    <div id="hubProgressText" class="text-sm font-bold text-white">Guest progress stays on this browser.</div>
-                                    <div id="hubSessionTime" class="text-xs text-blue-200 mt-2">Session: 0m</div>
-                                </div>
-                            </div>
-                        </section>
-
-                        <section id="hubMusicPanel" class="hub-panel hidden">
-                            <div class="hub-card">
-                                <span class="dock-label">Spotify</span>
-                                <p class="text-xs text-blue-200 mb-3">Official Spotify player embedded directly in Arena Hub.</p>
-                                <iframe
-                                    id="hubSpotifyEmbedFrame"
-                                    src="https://open.spotify.com/embed/playlist/37i9dQZF1DXcBWIGoYBM5M?utm_source=generator"
-                                    title="Spotify"
-                                    allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
-                                    loading="lazy">
-                                </iframe>
-                                <div class="grid grid-cols-2 gap-2 mt-3">
-                                    <button class="dock-action green" onclick="openSpotifyWebsite()">🔎 BROWSE SPOTIFY</button>
-                                    <button class="dock-action" onclick="reloadSpotifyPlayer()">↻ RELOAD</button>
-                                </div>
-                            </div>
-                        </section>
-
-                        <section id="hubHistoryPanel" class="hub-panel hidden">
-                            <div class="hub-card">
-                                <div class="flex justify-between items-center gap-2 mb-3">
-                                    <span class="dock-label" style="margin:0">Saved match history</span>
-                                    <button onclick="requestSavedHistory()" class="dock-action" style="width:auto">↻ REFRESH</button>
-                                </div>
-                                <div id="hubHistoryList" class="space-y-2 text-xs text-white">Log in to save permanent match history.</div>
-                            </div>
-                        </section>
-
-                        <section id="hubNotesPanel" class="hub-panel hidden">
-                            <div class="hub-card">
-                                <span class="dock-label">Match notes</span>
-                                <textarea id="hubNotesInput" rows="10" placeholder="Strategies, players, reminders..." class="smash-input w-full px-3 py-3 rounded-xl text-sm"></textarea>
-                                <div class="grid grid-cols-2 gap-2 mt-3">
-                                    <button onclick="saveArenaNotes()" class="dock-action green">SAVE NOTES</button>
-                                    <button onclick="clearArenaNotes()" class="dock-action red">CLEAR</button>
-                                </div>
-                            </div>
-                        </section>
-
-                        <section id="hubSettingsPanel" class="hub-panel hidden">
-                            <div class="hub-grid">
-                                <div class="hub-card">
-                                    <span class="dock-label">Gameplay</span>
-                                    <label class="text-xs text-blue-200">Gameplay mode</label>
-                                    <select id="hubGameplayMode" class="smash-input w-full px-3 py-2 rounded-xl text-xs mt-1">
-                                        <option value="popup">Popup Window</option>
-                                        <option value="embed">Type in Code / Embedded</option>
-                                    </select>
-                                    <button onclick="applyHubGameplayMode()" class="dock-action mt-3">SAVE GAMEPLAY MODE</button>
-                                </div>
-                                <div class="hub-card">
-                                    <span class="dock-label">Account</span>
-                                    <button onclick="promptEditUsername()" class="dock-action">✏️ CHANGE USERNAME</button>
-                                    <button id="hubAccountAction" onclick="openOptionalLogin()" class="dock-action yellow mt-2">LOG IN TO SAVE STATS</button>
-                                </div>
-                            </div>
-                        </section>
-
-                        <section id="hubShortcutsPanel" class="hub-panel hidden">
-                            <div class="hub-grid">
-                                <div class="hub-card text-xs text-white space-y-2">
-                                    <div><b class="text-yellow-300">L</b> · Lobby dock</div>
-                                    <div><b class="text-yellow-300">C</b> · Chat dock</div>
-                                    <div><b class="text-yellow-300">M</b> · Spotify dock</div>
-                                    <div><b class="text-yellow-300">R</b> · Ready / not ready</div>
-                                </div>
-                                <div class="hub-card text-xs text-white space-y-2">
-                                    <div><b class="text-yellow-300">1</b> · 1v1 page</div>
-                                    <div><b class="text-yellow-300">2</b> · 2v2 page</div>
-                                    <div><b class="text-yellow-300">3</b> · FFA page</div>
-                                    <div><b class="text-yellow-300">Esc</b> · Close current dock/modal</div>
-                                </div>
-                            </div>
-                        </section>
                     </div>
                 </div>
             </main>
@@ -952,7 +1069,7 @@
     <script>
         /*
            Small layout controller only.
-           The full guest/lobby/hub logic comes from server.js after script.js.
+           The full guest/lobby/music logic comes from server.js after script.js.
         */
         (() => {
             const screen = document.getElementById('gameScreen');
