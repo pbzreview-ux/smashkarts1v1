@@ -1,189 +1,3 @@
-
-i want you to add another button beside chat that you can click to go to the lobby from earlier and also add something that will tell you how many people are in the lobby use other files if needed but make sure to make it copyable
-
-
-no make a code that i can copy and replace but also i want you to add another button beside chat that you can click to go to the lobby from earlier and also add something that will tell you how many people are in the lobby use other files if needed but make sure to make it copyable
-
-
-
-index.html
-File
-
-script.js
-JavaScript
-
-server.js
-JavaScript
-these are my current files use which one you need to replace and give me a copyable code to replace and also you still didnt add the lobby and show players in ffa and 1v1 and 2v2
-
-e6c69b43-586e-4bfb-974b-a6be52fc5387.png
-this is what its saying
-
-Yes. I changed it so one Spotify Client ID in Render is automatically shared by your website with every visitor. Your friends should no longer get the “set it up in Render” message just because their browser didn't receive the ID.
-
-Replace these two files:
-
-COPYABLE index.html
-
-COPYABLE server.js
-
-Or the actual files:
-
-index.html
-
-server.js
-
-What I changed
-Your Spotify Client ID now comes from a dedicated server endpoint:
-
-/api/spotify-config
-Every player's browser retrieves the same site-wide Client ID automatically. I also:
-
-disabled caching on the Spotify configuration;
-
-disabled caching on the generated script.js;
-
-changed the HTML to load /script.js?v=8, forcing old cached versions out;
-
-made Connect Spotify fetch the Client ID again if it somehow isn't already loaded;
-
-kept the Client Secret completely out of the browser.
-
-Do not change your Render value
-Keep exactly one Render variable:
-
-SPOTIFY_CLIENT_ID = your-current-client-id
-You do not change that for your friends.
-
-After replacing the two files, redeploy/restart:
-
-node server.js
-Then you and your friends should refresh the site. Normal flow should now be:
-
-🎵 Connect Spotify
-        ↓
-Spotify login
-        ↓
-Allow
-        ↓
-Search/play music
-They should not be told to configure Render anymore.
-
-If Spotify itself rejects one of your friends after they reach the Spotify login page, that is a separate Spotify account/development-mode restriction rather than this Render Client ID bug.
-
-
-
-COPY_REPLACE_INDEX_V8.txt
-Document
-
-
-COPY_REPLACE_SERVER_V8.txt
-Document
-
-
-index_v8.html
-HTML
-
-1 more
-
-is this only for premuim users?
-
-Yes — the version we built that plays Spotify directly inside your website is Premium-only.
-
-Spotify’s Web Playback SDK requires a Spotify Premium account, and playback-control endpoints such as play, pause, skip, seek, volume, and queue control are Premium-only too. 
-
-Free Spotify users could still have a fallback like:
-
-Search Spotify
-
-See songs/playlists
-
-Click Open in Spotify
-
-Or use a basic Spotify embed where available
-
-But the nice experience you wanted — song playing inside your Smash Karts site with skip/play controls in the gameplay bar — requires Premium. 
-
-I can modify it so the site automatically detects this and shows:
-
-Premium user: full in-site player + skip controls
-Free user: Spotify search + “Open in Spotify” fallback
-
-That would keep the Music page useful for everyone.
-
-
-make it work for normal users for now at least
-
-Yes. I changed Spotify to a Free Mode so regular Spotify users can use it without Premium, without connecting an account to your site, and without anybody touching Render or a Client ID.
-
-Replace these two files:
-
-COPYABLE index.html
-
-COPYABLE server.js
-
-Or the actual files:
-
-Replacement index.html
-
-Replacement server.js
-
-How Spotify works now
-No Connect Spotify step
-
-No Premium requirement
-
-No Client ID setup
-
-No Render setup for players
-
-Music page contains Spotify's official embedded player.
-
-It works for normal Spotify users.
-
-Search Spotify opens the real Spotify Web Player search so they can search anything.
-
-Open Spotify Web opens the normal full Spotify experience.
-
-The player inside your site has Spotify's own playback controls.
-
-The small gameplay music button opens the Spotify panel instead of trying to use Premium-only remote playback controls.
-
-Spotify officially supports interactive Embeds for tracks, albums, playlists and other content, and its iFrame API supports play/pause-style control. 
- The iFrame API does not expose a general next/previous-track method, so for Free Mode the reliable skip control is the one Spotify provides inside its own player. 
-
-You can leave your existing SPOTIFY_CLIENT_ID in Render if you already added it; this version doesn't need it.
-
-After replacing both:
-
-node server.js
-Then:
-
-Ctrl + Shift + R
-I syntax-checked the replacement server.js and the JavaScript inside the new index.html.
-
-
-
-COPY_REPLACE_INDEX_V9.txt
-Document
-
-
-COPY_REPLACE_SERVER_V9.txt
-Document
-
-
-index_v9_free_spotify.html
-HTML
-
-1 more
-
-Library
-/
-coding 2
-/
-COPY_REPLACE_INDEX_V9.txt
-
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -262,3 +76,1426 @@ COPY_REPLACE_INDEX_V9.txt
         }
 
         #gameLobbyInfo {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            min-width: 0;
+            max-width: 310px;
+            padding: 4px 7px;
+            border: 1px solid #ffffff32;
+            border-radius: 12px;
+            background: var(--arena-deep);
+        }
+
+        #gameLobbyPlayerCount {
+            color: var(--arena-yellow);
+            font: 900 9px "Inter", sans-serif;
+            white-space: nowrap;
+        }
+
+        #gameLobbyPlayerNames {
+            color: white;
+            font: 800 9px "Inter", sans-serif;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .arena-button {
+            padding: 6px 8px;
+            border: 1px solid #ffda25;
+            border-radius: 13px;
+            background: #ffffff15;
+            color: var(--arena-yellow);
+            font: 900 9px "Inter", sans-serif;
+            cursor: pointer;
+            transition: .15s ease;
+        }
+
+        .arena-button:hover { transform: translateY(-1px); background: #ffffff22; }
+        .arena-button.active { background: #ffd318; color: #142f75; }
+        #arenaChatButton { background: #ffd318; color: #142f75; }
+        #arenaOptionsButton { background: #234caa; border-color: #7f99d7; }
+
+        #arenaMenuToggle {
+            position: absolute;
+            top: 100%;
+            right: 24px;
+            padding: 5px 10px;
+            border: 1px solid #ffd318;
+            border-top: 0;
+            border-radius: 0 0 12px 12px;
+            background: var(--arena-blue);
+            color: var(--arena-yellow);
+            font: 900 9px "Inter", sans-serif;
+            cursor: pointer;
+            box-shadow: 0 5px 12px #0004;
+        }
+
+        /* Old options element stays for compatibility, but is never floated. */
+        #arenaOptions { display: none !important; }
+
+        /* =========================
+           GAME STAGE + DOCK
+           The dock SHRINKS the game.
+           It does not pile over it.
+           ========================= */
+        #gameStage {
+            position: absolute;
+            inset: 0;
+        }
+
+        #gameScreen.arena-menu-open #gameStage {
+            top: var(--menu-height);
+        }
+
+        #smashFrame {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            border: 0;
+            transition: width .18s ease;
+        }
+
+        #gameDock {
+            position: absolute;
+            right: 0;
+            top: 0;
+            bottom: 0;
+            width: var(--arena-dock-width);
+            display: none;
+            flex-direction: column;
+            background: #0d2258;
+            border-left: 2px solid #ffffff22;
+            color: white;
+            z-index: 20;
+        }
+
+        #gameScreen.game-dock-open #gameDock { display: flex; }
+        #gameScreen.game-dock-open #smashFrame { width: calc(100% - var(--arena-dock-width)); }
+
+        #gameDockHeader {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            padding: 11px 12px;
+            border-bottom: 1px solid #ffffff1f;
+            background: #173477;
+        }
+
+        #gameDockTitle {
+            font-family: "Bungee", sans-serif;
+            color: var(--arena-yellow);
+            font-size: 13px;
+        }
+
+        #gameDockTabs {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 6px;
+            padding: 8px;
+            background: #132e70;
+            border-bottom: 1px solid #ffffff1f;
+        }
+
+        .dock-tab-button {
+            border: 1px solid #ffffff20;
+            border-radius: 10px;
+            padding: 8px 4px;
+            color: #dbe7ff;
+            font-size: 10px;
+            font-weight: 900;
+            background: #ffffff0d;
+            cursor: pointer;
+        }
+
+        .dock-tab-button.active {
+            color: #142f75;
+            background: var(--arena-yellow);
+            border-color: var(--arena-yellow);
+        }
+
+        #gameDockBody {
+            flex: 1;
+            min-height: 0;
+            overflow: hidden;
+        }
+
+        .game-dock-panel {
+            height: 100%;
+            padding: 12px;
+            overflow-y: auto;
+        }
+
+        .game-dock-panel.hidden { display: none !important; }
+
+        .dock-card {
+            background: #173477;
+            border: 1px solid #ffffff1f;
+            border-radius: 14px;
+            padding: 11px;
+            margin-bottom: 10px;
+        }
+
+        .dock-label {
+            display: block;
+            color: #9db8f5;
+            font-size: 9px;
+            font-weight: 900;
+            text-transform: uppercase;
+            margin-bottom: 6px;
+        }
+
+        .dock-action {
+            width: 100%;
+            border: 1px solid #ffffff20;
+            border-radius: 11px;
+            padding: 9px 10px;
+            color: white;
+            background: #264fa7;
+            font-size: 11px;
+            font-weight: 900;
+            cursor: pointer;
+        }
+
+        .dock-action:hover { filter: brightness(1.08); }
+        .dock-action.yellow { background: #ffd318; color: #142f75; }
+        .dock-action.green { background: #10b981; }
+        .dock-action.red { background: #dc2626; }
+
+        #gameDockPlayerList,
+        #matchChatMessages {
+            display: flex;
+            flex-direction: column;
+            gap: 7px;
+        }
+
+        #matchChatMessages {
+            height: calc(100% - 100px);
+            overflow-y: auto;
+            padding-right: 4px;
+        }
+
+        #chatOverlay {
+            position: static !important;
+            width: 100% !important;
+            max-height: none !important;
+            background: transparent !important;
+            border: 0 !important;
+            box-shadow: none !important;
+            padding: 0 !important;
+            backdrop-filter: none !important;
+        }
+
+        #chatOverlay.hidden-overlay { display: block !important; }
+
+        /* =========================
+           HEADER ORGANIZATION
+           ========================= */
+        #headerRightActions {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+        }
+
+        #connectionPill {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 7px 10px;
+            border: 1px solid #ffffff2a;
+            border-radius: 12px;
+            background: #12316e;
+            color: white;
+            font-size: 10px;
+            font-weight: 900;
+        }
+
+        #connectionDot {
+            width: 8px;
+            height: 8px;
+            border-radius: 999px;
+            background: #22c55e;
+        }
+
+        #settingsFloatingBtn { display: none !important; }
+
+        /* Shared card styling for FFA and Settings. */
+        .hub-card {
+            background: #173477b8;
+            border: 1px solid #ffffff1f;
+            border-radius: 16px;
+            padding: 14px;
+        }
+
+        /* =========================
+           SPOTIFY WEB PLAYER
+           ========================= */
+        .spotify-mini {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            min-width: 150px;
+            max-width: 230px;
+            height: 30px;
+            padding: 3px 4px 3px 8px;
+            border: 1px solid #2d5c3a;
+            border-radius: 999px;
+            background: #121212;
+            color: white;
+        }
+
+        .spotify-mini-copy {
+            min-width: 0;
+            flex: 1;
+            cursor: pointer;
+        }
+
+        .spotify-mini-track {
+            display: block;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            font: 800 9px "Inter", sans-serif;
+        }
+
+        .spotify-mini-skip {
+            width: 24px;
+            height: 24px;
+            flex: 0 0 24px;
+            border: 0;
+            border-radius: 999px;
+            background: #1ed760;
+            color: #000;
+            font-size: 11px;
+            font-weight: 1000;
+            cursor: pointer;
+        }
+
+        .spotify-web-shell {
+            background: #121212;
+            color: white;
+            border: 1px solid #ffffff1f;
+            border-radius: 18px;
+            overflow: hidden;
+        }
+
+        .spotify-web-top {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 14px;
+            background: #181818;
+            border-bottom: 1px solid #ffffff14;
+        }
+
+        .spotify-logo-text {
+            color: #1ed760;
+            font: 900 16px "Inter", sans-serif;
+        }
+
+        .spotify-web-body { padding: 14px; }
+
+        .spotify-now {
+            display: grid;
+            grid-template-columns: 86px minmax(0,1fr);
+            gap: 14px;
+            align-items: center;
+            padding: 12px;
+            border-radius: 14px;
+            background: #181818;
+        }
+
+        .spotify-now img {
+            width: 86px;
+            height: 86px;
+            border-radius: 10px;
+            object-fit: cover;
+            background: #282828;
+        }
+
+        .spotify-controls {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 10px;
+        }
+
+        .spotify-control {
+            min-width: 38px;
+            height: 38px;
+            padding: 0 12px;
+            border: 0;
+            border-radius: 999px;
+            background: #282828;
+            color: white;
+            font-weight: 1000;
+            cursor: pointer;
+        }
+
+        .spotify-control.primary {
+            background: #1ed760;
+            color: #000;
+        }
+
+        .spotify-search-row {
+            display: flex;
+            gap: 8px;
+            margin-top: 14px;
+        }
+
+        .spotify-results {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            margin-top: 12px;
+            max-height: 420px;
+            overflow-y: auto;
+        }
+
+        .spotify-result {
+            display: grid;
+            grid-template-columns: 48px minmax(0,1fr) auto;
+            align-items: center;
+            gap: 10px;
+            padding: 8px;
+            border-radius: 10px;
+            background: #181818;
+            cursor: pointer;
+        }
+
+        .spotify-result:hover { background: #282828; }
+
+        .spotify-result img {
+            width: 48px;
+            height: 48px;
+            object-fit: cover;
+            border-radius: 6px;
+            background: #282828;
+        }
+
+        .spotify-result-title,
+        .spotify-result-sub {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .spotify-result-title { font-size: 12px; font-weight: 900; }
+        .spotify-result-sub { font-size: 10px; color: #a7a7a7; margin-top: 2px; }
+
+
+        /* =========================
+           DISCORD-LIKE DIRECT MESSAGES
+           ========================= */
+        .discord-shell {
+            display: grid;
+            grid-template-columns: 245px minmax(0, 1fr);
+            height: min(620px, calc(100vh - 245px));
+            min-height: 430px;
+            overflow: hidden;
+            border: 1px solid #ffffff1f;
+            border-radius: 18px;
+            background: #101c46;
+        }
+
+        .discord-sidebar {
+            display: flex;
+            min-width: 0;
+            flex-direction: column;
+            background: #152557;
+            border-right: 1px solid #ffffff16;
+        }
+
+        .discord-sidebar-head {
+            padding: 12px;
+            border-bottom: 1px solid #ffffff15;
+        }
+
+        .discord-friend-list {
+            flex: 1;
+            min-height: 0;
+            overflow-y: auto;
+            padding: 8px;
+        }
+
+        .discord-friend {
+            width: 100%;
+            display: flex;
+            align-items: center;
+            gap: 9px;
+            padding: 8px;
+            margin-bottom: 3px;
+            border: 0;
+            border-radius: 9px;
+            background: transparent;
+            color: #d9e2ff;
+            text-align: left;
+            cursor: pointer;
+        }
+
+        .discord-friend:hover,
+        .discord-friend.active {
+            background: #ffffff12;
+            color: white;
+        }
+
+        .discord-avatar {
+            position: relative;
+            width: 34px;
+            height: 34px;
+            flex: 0 0 34px;
+            display: grid;
+            place-items: center;
+            border-radius: 50%;
+            background: #3d58a8;
+            color: white;
+            font-size: 11px;
+            font-weight: 1000;
+        }
+
+        .discord-avatar.big {
+            width: 40px;
+            height: 40px;
+            flex-basis: 40px;
+            font-size: 13px;
+        }
+
+        .discord-status-dot {
+            position: absolute;
+            right: -1px;
+            bottom: -1px;
+            width: 10px;
+            height: 10px;
+            border: 2px solid #152557;
+            border-radius: 50%;
+            background: #6b7280;
+        }
+
+        .discord-status-dot.online { background: #22c55e; }
+
+        .discord-chat {
+            display: flex;
+            min-width: 0;
+            flex-direction: column;
+            background: #182b62;
+        }
+
+        .discord-chat-head {
+            min-height: 58px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            padding: 9px 14px;
+            border-bottom: 1px solid #ffffff15;
+            box-shadow: 0 1px 0 #0002;
+        }
+
+        .discord-messages {
+            flex: 1;
+            min-height: 0;
+            overflow-y: auto;
+            padding: 14px 14px 6px;
+        }
+
+        .discord-message {
+            display: grid;
+            grid-template-columns: 40px minmax(0, 1fr);
+            gap: 10px;
+            padding: 5px 0;
+        }
+
+        .discord-message:hover { background: #ffffff05; }
+
+        .discord-message-name {
+            color: white;
+            font-size: 12px;
+            font-weight: 900;
+        }
+
+        .discord-message-time {
+            margin-left: 7px;
+            color: #8ea0cf;
+            font-size: 9px;
+            font-weight: 700;
+        }
+
+        .discord-message-text {
+            color: #e6ebff;
+            font-size: 12px;
+            line-height: 1.45;
+            overflow-wrap: anywhere;
+            white-space: pre-wrap;
+        }
+
+        .discord-composer {
+            display: flex;
+            align-items: flex-end;
+            gap: 8px;
+            padding: 10px 12px 12px;
+        }
+
+        .discord-composer textarea {
+            min-height: 42px;
+            max-height: 120px;
+            resize: vertical;
+        }
+
+        .discord-section-label {
+            padding: 8px 8px 5px;
+            color: #8ea0cf;
+            font-size: 9px;
+            font-weight: 1000;
+            letter-spacing: .08em;
+            text-transform: uppercase;
+        }
+
+        .discord-request {
+            padding: 8px;
+            margin-bottom: 5px;
+            border: 1px solid #ffd31855;
+            border-radius: 10px;
+            background: #ffd31812;
+        }
+
+        .discord-unread {
+            margin-left: auto;
+            min-width: 18px;
+            height: 18px;
+            display: grid;
+            place-items: center;
+            border-radius: 999px;
+            background: #ef4444;
+            color: white;
+            font-size: 9px;
+            font-weight: 1000;
+        }
+
+        /* =========================
+           SPOTIFY WEB-STYLE LIBRARY
+           ========================= */
+        .spotify-app-grid {
+            display: grid;
+            grid-template-columns: 180px minmax(0, 1fr);
+            min-height: 460px;
+        }
+
+        .spotify-library-nav {
+            padding: 12px;
+            background: #0f0f0f;
+            border-right: 1px solid #ffffff12;
+        }
+
+        .spotify-nav-button {
+            width: 100%;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px;
+            margin-bottom: 5px;
+            border: 0;
+            border-radius: 8px;
+            background: transparent;
+            color: #b3b3b3;
+            font-size: 11px;
+            font-weight: 900;
+            text-align: left;
+            cursor: pointer;
+        }
+
+        .spotify-nav-button:hover,
+        .spotify-nav-button.active {
+            background: #242424;
+            color: white;
+        }
+
+        .spotify-main-view {
+            min-width: 0;
+            padding: 14px;
+            background: linear-gradient(#1b1b1b, #121212 190px);
+        }
+
+        .spotify-view-title {
+            margin-bottom: 10px;
+            color: white;
+            font-size: 18px;
+            font-weight: 1000;
+        }
+
+        .spotify-playlist {
+            width: 100%;
+            display: grid;
+            grid-template-columns: 46px minmax(0,1fr);
+            gap: 9px;
+            align-items: center;
+            padding: 7px;
+            border: 0;
+            border-radius: 9px;
+            background: transparent;
+            color: white;
+            text-align: left;
+            cursor: pointer;
+        }
+
+        .spotify-playlist:hover { background: #282828; }
+        .spotify-playlist img {
+            width: 46px;
+            height: 46px;
+            object-fit: cover;
+            border-radius: 5px;
+            background: #282828;
+        }
+
+
+        /* =========================
+           ONE-AT-A-TIME MODALS
+           ========================= */
+        .exclusive-modal { isolation: isolate; }
+
+        body:has(#gameScreen:not(.hidden)) { overflow: hidden; }
+
+        @media (max-width: 980px) {
+            :root { --arena-dock-width: 330px; }
+            #gameLobbyPlayerNames { max-width: 130px; }
+        }
+
+        @media (max-width: 760px) {
+            #arenaToolbar { padding: 4px 6px; }
+            .arena-brand { font-size: 12px; }
+            .arena-actions { gap: 3px; }
+            .arena-button { padding: 5px 6px; font-size: 8px; }
+            #gameLobbyInfo { max-width: 200px; }
+            #gameLobbyPlayerNames { max-width: 90px; }
+
+            #gameScreen.game-dock-open #smashFrame { display: none; }
+            #gameDock { width: 100%; }
+            .spotify-mini { min-width: 110px; max-width: 150px; }
+            .discord-shell { grid-template-columns: 1fr; height: auto; min-height: 520px; }
+            .discord-sidebar { max-height: 190px; border-right: 0; border-bottom: 1px solid #ffffff16; }
+            .discord-chat { min-height: 370px; }
+            .spotify-app-grid { grid-template-columns: 1fr; }
+            .spotify-library-nav { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; border-right: 0; border-bottom: 1px solid #ffffff12; }
+            .spotify-nav-button { margin: 0; justify-content: center; }
+        }
+    </style>
+</head>
+
+<body class="min-h-screen flex flex-col justify-between overflow-x-hidden">
+
+    <div id="toastContainer"></div>
+
+    <!-- SETTINGS: normal modal, never covered by connection status. -->
+    <div id="settingsModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4 exclusive-modal">
+        <div class="w-full max-w-xl bg-blue-900 border-2 border-yellow-400 rounded-3xl p-6 shadow-2xl max-h-[90vh] overflow-y-auto">
+            <div class="flex justify-between items-center mb-5">
+                <div>
+                    <h3 class="font-bungee text-lg text-yellow-300">⚙️ SETTINGS</h3>
+                    <p class="text-[11px] text-blue-200 mt-1">Gameplay and account settings.</p>
+                </div>
+                <button onclick="closeSettingsModal()" class="text-white hover:text-red-400 font-bold text-lg">✕</button>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div class="hub-card">
+                    <span class="dock-label">Gameplay</span>
+                    <label class="text-xs text-blue-200">Gameplay mode</label>
+                    <select id="settingsGameplayMode" class="smash-input w-full px-3 py-2 rounded-xl text-xs mt-1">
+                        <option value="popup">Popup Window</option>
+                        <option value="embed">Type in Code / Embedded</option>
+                    </select>
+                    <button onclick="saveMainSettings()" class="dock-action mt-3">SAVE SETTINGS</button>
+                </div>
+
+                <div class="hub-card">
+                    <span class="dock-label">Account</span>
+                    <button onclick="promptEditUsername()" class="dock-action">✏️ CHANGE USERNAME</button>
+                    <button id="settingsAccountButton" onclick="openOptionalLogin()" class="dock-action yellow mt-2">LOG IN TO SAVE STATS</button>
+                </div>
+            </div>
+
+            <div class="hub-card mt-4" style="background:#111827">
+                <div class="flex items-center justify-between gap-3">
+                    <div>
+                        <div class="flex items-center gap-2">
+                            <span class="dock-label" style="color:#1ed760">Spotify</span>
+                            
+                        </div>
+                        <p class="text-[11px] text-gray-300 mt-1">Spotify Free Mode works for regular Spotify users. No Premium, Client ID, or Render setup required.</p>
+                    </div>
+                    <span id="spotifySettingsStatus" class="text-[10px] font-bold text-gray-300">Free mode · ready</span>
+                </div>
+                <div class="grid grid-cols-2 gap-2 mt-3">
+                    <button id="spotifySettingsConnectButton" onclick="openMusicPage()" class="dock-action green">OPEN MUSIC</button>
+                    <button onclick="openSpotifyWebsite()" class="dock-action">OPEN SPOTIFY WEB</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="editUsernameModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4 exclusive-modal">
+        <div class="w-full max-w-sm bg-blue-900 border-2 border-yellow-400 rounded-3xl p-6 shadow-2xl">
+            <h3 class="font-bungee text-lg text-yellow-300 mb-3">✏️ CHANGE USERNAME</h3>
+            <input type="text" id="newUsernameInput" placeholder="Enter new username..." class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold mb-4">
+            <div class="flex gap-2">
+                <button onclick="closeEditUsernameModal()" class="w-1/2 bg-gray-600 hover:bg-gray-500 text-white font-bold py-2.5 rounded-xl text-xs">Cancel</button>
+                <button onclick="saveNewUsername()" class="w-1/2 btn-smash text-white font-bungee py-2.5 rounded-xl text-xs">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Optional account login. No forced login. -->
+    <div id="authModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4 exclusive-modal">
+        <div class="w-full max-w-md bg-blue-900 border-2 border-yellow-400 rounded-3xl p-6 shadow-2xl">
+            <div class="flex justify-between items-start gap-3 mb-5">
+                <div>
+                    <h3 class="font-bungee text-lg text-yellow-300">SAVE YOUR STATS</h3>
+                    <p class="text-[11px] text-blue-200 mt-1">Playing as a guest is free. Log in only if you want permanent stats, history, friends and progression.</p>
+                </div>
+                <button onclick="closeAuthModalOptional()" class="text-white hover:text-red-400 font-bold text-lg">✕</button>
+            </div>
+
+            <div class="flex border-b border-white/20 mb-6 pb-2 gap-4 justify-center">
+                <button id="tabLoginBtn" onclick="toggleAuthTab('login')" class="font-bungee text-lg text-yellow-300 border-b-2 border-yellow-300 pb-1">LOG IN</button>
+                <button id="tabRegisterBtn" onclick="toggleAuthTab('register')" class="font-bungee text-lg text-white/50 pb-1 hover:text-white">CREATE ACCOUNT</button>
+            </div>
+
+            <form id="loginForm" onsubmit="handleAuthSubmit(event, 'login')" class="space-y-4">
+                <div>
+                    <label class="block text-xs font-bold uppercase text-blue-200 mb-1">Username</label>
+                    <input type="text" id="loginUsername" placeholder="Username" class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
+                </div>
+                <div>
+                    <label class="block text-xs font-bold uppercase text-blue-200 mb-1">Email Address</label>
+                    <input type="email" id="loginEmail" required placeholder="player@example.com" class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
+                </div>
+                <div>
+                    <label class="block text-xs font-bold uppercase text-blue-200 mb-1">Password</label>
+                    <input type="password" id="loginPassword" required placeholder="••••••••" class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
+                </div>
+                <button type="submit" class="btn-smash w-full py-3.5 rounded-2xl font-bungee text-lg text-white">LOG IN & SAVE STATS</button>
+            </form>
+
+            <form id="registerForm" onsubmit="handleAuthSubmit(event, 'register')" class="space-y-4 hidden">
+                <div>
+                    <label class="block text-xs font-bold uppercase text-blue-200 mb-1">Username</label>
+                    <input type="text" id="regUsername" required placeholder="SpeedRacer99" class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
+                </div>
+                <div>
+                    <label class="block text-xs font-bold uppercase text-blue-200 mb-1">Email Address</label>
+                    <input type="email" id="regEmail" required placeholder="player@example.com" class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
+                </div>
+                <div>
+                    <label class="block text-xs font-bold uppercase text-blue-200 mb-1">Password</label>
+                    <input type="password" id="regPassword" required placeholder="••••••••" class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
+                </div>
+                <button type="submit" class="btn-smash w-full py-3.5 rounded-2xl font-bungee text-lg text-white">CREATE ACCOUNT</button>
+            </form>
+        </div>
+    </div>
+
+    <div id="onlineUsersModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4 exclusive-modal">
+        <div class="w-full max-w-md bg-blue-900 border-2 border-emerald-400 rounded-3xl p-6 shadow-2xl">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="font-bungee text-lg text-emerald-300">🟢 ONLINE PLAYERS</h3>
+                <button onclick="closeOnlineModal()" class="text-white hover:text-red-400 font-bold text-lg">✕</button>
+            </div>
+            <div id="onlineUsersList" class="max-h-80 overflow-y-auto space-y-2"></div>
+        </div>
+    </div>
+
+    <!-- =========================================================
+         GAME SCREEN
+         ========================================================= -->
+    <div id="gameScreen" class="hidden fixed inset-0 z-40 bg-black overflow-hidden">
+
+        <div id="gameTopBar">
+            <div id="arenaToolbar" hidden>
+                <div class="arena-brand">
+                    <span>🎮 SMASH KARTS</span>
+                    <span id="gameModeBadge">1v1</span>
+                    <div id="gameLobbyInfo">
+                        <span id="gameLobbyPlayerCount">👥 0 IN LOBBY</span>
+                        <span id="gameLobbyPlayerNames">No active players</span>
+                    </div>
+                </div>
+
+                <div class="arena-actions">
+                    <button id="copyRoomCodeBtn" class="arena-button" onclick="copyActiveRoomCode()" title="Copy room code">
+                        Code: (<span id="gameRoomCodeDisplay">------</span>)
+                    </button>
+                    <button id="gamePasteCodeButton" class="arena-button" onclick="pasteCodeIntoCurrentLobby()">📋 PASTE CODE</button>
+                    <button id="gameLobbyButton" class="arena-button" onclick="openGameDock('lobby')">👥 LOBBY</button>
+                    <div id="spotifyMiniPlayer" class="spotify-mini" title="Click the song to open Music">
+                        <div class="spotify-mini-copy" onclick="openGameDock('music')">
+                            <span id="spotifyMiniTrack" class="spotify-mini-track">🎵 Spotify</span>
+                        </div>
+                        <button class="spotify-mini-skip" onclick="openGameDock('music')" title="Open Spotify player">♫</button>
+                    </div>
+                    <button id="arenaChatButton" class="arena-button" onclick="toggleOverlayChat()">💬 <span id="toggleChatBtnLabel">Show Chat</span></button>
+                    <button id="arenaOptionsButton" class="arena-button" onclick="openGameDock('tools')">⚡ TOOLS</button>
+                </div>
+            </div>
+
+            <button id="arenaMenuToggle" aria-controls="arenaToolbar" aria-expanded="false">
+                <span id="topBarTabIcon">▼</span>
+                <span id="arenaMenuLabel">SHOW MENU</span>
+            </button>
+
+            <div id="arenaOptions" hidden></div>
+        </div>
+
+        <div id="gameStage">
+            <iframe
+                id="smashFrame"
+                src=""
+                title="Smash Karts game"
+                allow="autoplay; fullscreen 'none'">
+            </iframe>
+
+            <!-- ONE organized dock. Nothing stacks on top of it. -->
+            <aside id="gameDock">
+                <div id="gameDockHeader">
+                    <span id="gameDockTitle">👥 LOBBY</span>
+                    <button onclick="closeGameDock()" class="arena-button" style="padding:6px 9px">✕</button>
+                </div>
+
+                <div id="gameDockTabs">
+                    <button class="dock-tab-button" data-dock-tab="lobby" onclick="openGameDock('lobby')">👥 Lobby</button>
+                    <button class="dock-tab-button" data-dock-tab="chat" onclick="openGameDock('chat')">💬 Chat</button>
+                    <button class="dock-tab-button" data-dock-tab="music" onclick="openGameDock('music')">🎵 Spotify</button>
+                    <button class="dock-tab-button" data-dock-tab="tools" onclick="openGameDock('tools')">⚡ Tools</button>
+                </div>
+
+                <div id="gameDockBody">
+                    <section id="dockLobbyPanel" class="game-dock-panel">
+                        <div class="dock-card">
+                            <span class="dock-label">Lobby status</span>
+                            <div id="dockLobbySummary" class="font-bold text-sm text-white">Not in a lobby</div>
+                            <div id="dockReadySummary" class="text-[11px] text-blue-200 mt-1">0 ready</div>
+                        </div>
+                        <div class="dock-card">
+                            <span class="dock-label">Players</span>
+                            <div id="gameDockPlayerList"></div>
+                        </div>
+                        <div class="grid grid-cols-2 gap-2">
+                            <button id="dockReadyButton" class="dock-action green" onclick="toggleMyReadyStatus()">✓ READY</button>
+                            <button class="dock-action yellow" onclick="pasteCodeIntoCurrentLobby()">📋 PASTE CODE</button>
+                        </div>
+                        <div id="dockTeamControls" class="dock-card hidden mt-2">
+                            <span class="dock-label">2v2 team</span>
+                            <div class="grid grid-cols-2 gap-2">
+                                <button class="dock-action" onclick="chooseLobbyTeam('blue')">🔵 BLUE</button>
+                                <button class="dock-action red" onclick="chooseLobbyTeam('red')">🔴 RED</button>
+                            </div>
+                        </div>
+                        <div class="dock-card mt-2">
+                            <span class="dock-label">Quick reactions</span>
+                            <div class="grid grid-cols-5 gap-1">
+                                <button class="dock-action" onclick="sendLobbyReaction('🔥')">🔥</button>
+                                <button class="dock-action" onclick="sendLobbyReaction('😂')">😂</button>
+                                <button class="dock-action" onclick="sendLobbyReaction('🏁')">🏁</button>
+                                <button class="dock-action" onclick="sendLobbyReaction('💀')">💀</button>
+                                <button class="dock-action" onclick="sendLobbyReaction('GG')">GG</button>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section id="dockChatPanel" class="game-dock-panel hidden">
+                        <div id="chatOverlay">
+                            <div class="flex justify-between items-center mb-2">
+                                <span class="font-bungee text-xs text-yellow-300">💬 LOBBY CHAT</span>
+                                <span class="text-[10px] text-blue-200">same chat as lobby</span>
+                            </div>
+                            <div id="matchChatMessages"></div>
+                            <div class="flex gap-2 mt-3">
+                                <input type="text" id="matchChatInput" placeholder="Type..." onkeydown="if(event.key==='Enter') sendMatchChatMessage()" class="smash-input flex-1 px-3 py-2 rounded-xl text-xs">
+                                <button onclick="sendMatchChatMessage()" class="bg-yellow-400 text-blue-950 font-black px-3 py-2 rounded-xl text-xs">Send</button>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section id="dockMusicPanel" class="game-dock-panel hidden">
+                        <div class="spotify-web-shell">
+                            <div class="spotify-web-top">
+                                <div>
+                                    <div class="spotify-logo-text">Spotify Web</div>
+                                    <div id="spotifyDockStatus" class="text-[10px] text-gray-400 mt-1">Not connected</div>
+                                </div>
+                                <button id="spotifyDockConnectButton" onclick="spotifyConnect()" class="dock-action green" style="width:auto">CONNECT</button>
+                            </div>
+                            <div class="spotify-web-body">
+                                <div class="spotify-now">
+                                    <img id="spotifyDockArt" alt="">
+                                    <div class="min-w-0">
+                                        <div id="spotifyDockTrack" class="font-black text-sm truncate">Nothing playing</div>
+                                        <div id="spotifyDockArtist" class="text-[11px] text-gray-400 truncate mt-1">Connect Spotify to start</div>
+                                        <div class="spotify-controls">
+                                            <button onclick="spotifyPreviousTrack()" class="spotify-control">⏮</button>
+                                            <button id="spotifyDockPlayButton" onclick="spotifyTogglePlayback()" class="spotify-control primary">▶</button>
+                                            <button onclick="spotifyNextTrack()" class="spotify-control">⏭</button>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="spotify-search-row">
+                                    <input id="spotifyDockSearchInput" type="text" placeholder="Search Spotify for any song..." onkeydown="if(event.key==='Enter') spotifySearch('dock')" class="smash-input flex-1 px-3 py-2 rounded-xl text-xs">
+                                    <button onclick="spotifySearch('dock')" class="dock-action green" style="width:auto">SEARCH</button>
+                                </div>
+                                <div id="spotifyDockResults" class="spotify-results"></div>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section id="dockToolsPanel" class="game-dock-panel hidden">
+                        <div class="grid grid-cols-2 gap-2">
+                            <button class="dock-action" onclick="copyActiveRoomCode()">📋 COPY CODE</button>
+                            <button class="dock-action" onclick="openOnlineModal()">🟢 ONLINE</button>
+                            <button class="dock-action" onclick="toggleArenaFullscreen()">⛶ FULLSCREEN</button>
+                            <button class="dock-action" onclick="openSettingsModal()">⚙️ SETTINGS</button>
+                            <button class="dock-action" onclick="rollArenaDice()">🎲 DICE</button>
+                            <button class="dock-action" onclick="flipArenaCoin()">🪙 COIN</button>
+                        </div>
+                        <button class="dock-action red mt-3" onclick="leaveEmbeddedGame()">✕ EXIT GAME</button>
+                    </section>
+                </div>
+            </aside>
+        </div>
+    </div>
+
+    <!-- =========================================================
+         DASHBOARD
+         ========================================================= -->
+    <div id="mainDashboard" class="min-h-screen flex flex-col justify-between">
+        <header class="w-full px-6 py-4 flex justify-between items-center gap-4 flex-wrap">
+            <div class="flex items-center gap-3 flex-wrap">
+                <div class="flex items-center gap-2 bg-blue-900/40 p-2 pr-4 rounded-2xl border border-white/20">
+                    <div class="w-9 h-9 rounded-xl bg-yellow-400 flex items-center justify-center font-black text-blue-950 text-lg">👤</div>
+                    <div>
+                        <span id="accountModeLabel" class="block text-[10px] font-bold uppercase text-blue-200">Guest</span>
+                        <div class="flex items-center gap-2">
+                            <span id="userDisplayTag" class="text-sm font-bold text-white">Guest</span>
+                            <button onclick="promptEditUsername()" title="Edit Username" class="text-xs text-yellow-300 hover:underline">✏️</button>
+                        </div>
+                    </div>
+                </div>
+
+                <button id="onlineCounterBtn" onclick="openOnlineModal()" class="bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/50 px-3 py-2 rounded-2xl flex items-center gap-2">
+                    <span class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                    <span id="onlineCountBadge" class="text-xs font-bold text-emerald-300">0 Online</span>
+                </button>
+
+                <div id="connectionPill">
+                    <span id="connectionDot"></span>
+                    <span id="connectionText">Connected</span>
+                </div>
+            </div>
+
+            <div id="headerRightActions">
+                <button id="headerAccountButton" onclick="openOptionalLogin()" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 text-xs font-black px-4 py-2 rounded-xl">LOG IN TO SAVE STATS</button>
+                <button onclick="openSettingsModal()" class="bg-blue-800 hover:bg-blue-700 text-white text-xs font-bold px-4 py-2 rounded-xl">⚙️ SETTINGS</button>
+            </div>
+        </header>
+
+        <div class="flex flex-1 w-full max-w-7xl mx-auto px-4">
+            <aside class="flex flex-col gap-4 py-6 pr-4 items-center">
+                <button id="btnNavLeaderboard" onclick="showTab('leaderboardTab')" title="Leaderboard" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg">🏆</button>
+                <button id="btnNavFFA" onclick="openFfaPage()" title="FFA" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg">🔥</button>
+                <button id="btnNav1v1" onclick="switchMatchMode('1v1')" title="1v1 Matchmaking" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg active">🎮</button>
+                <button id="btnNav2v2" onclick="switchMatchMode('2v2')" title="2v2 Matchmaking" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg">⚔️</button>
+                <button id="btnNavMessages" onclick="showMessagesTab()" title="Friends & Messages" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg">💬<span id="messagesBadge" class="unread-badge hidden">0</span></button>
+                <button id="btnNavMusic" onclick="openMusicPage()" title="Spotify" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg">🎵</button>
+            </aside>
+
+            <main class="flex-1 flex flex-col items-center">
+                <div class="mb-8">
+                    <div class="bg-gradient-to-b from-yellow-300 to-yellow-500 border-4 border-white rounded-3xl px-10 py-3 shadow-2xl">
+                        <span class="font-bungee text-3xl sm:text-4xl text-blue-950">Smashkarts1v1s</span>
+                    </div>
+                </div>
+
+                <div class="w-full max-w-4xl bg-blue-950/40 border-2 border-white/20 backdrop-blur-xl rounded-3xl p-6 shadow-2xl mb-8">
+                    <div id="leaderboardTab" class="tab-content hidden space-y-4">
+                        <h2 class="font-bungee text-xl text-yellow-300 mb-2">🏆 TOP PLAYERS</h2>
+                        <p id="guestLeaderboardNote" class="text-xs text-blue-200">Guest play works normally. Log in if you want your own matches added permanently.</p>
+                        <div id="leaderboardList" class="space-y-2"></div>
+                    </div>
+
+                    <div id="messagesTab" class="tab-content hidden space-y-4">
+                        <div class="flex justify-between items-center gap-3">
+                            <div>
+                                <h2 class="font-bungee text-xl text-yellow-300">💬 MESSAGES</h2>
+                                <p class="text-xs text-blue-200 mt-1">Simple Discord-style DMs with your friends.</p>
+                            </div>
+                            <button onclick="openOnlineModal()" class="bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs px-4 py-2 rounded-xl">+ FIND FRIENDS</button>
+                        </div>
+
+                        <div id="guestMessagesNotice" class="hidden bg-yellow-500/15 border border-yellow-400/40 rounded-xl p-3 text-xs text-yellow-100">
+                            Direct messages are saved-account features. Log in to save friends and conversations.
+                        </div>
+
+                        <div class="discord-shell">
+                            <aside class="discord-sidebar">
+                                <div class="discord-sidebar-head">
+                                    <div class="font-bungee text-xs text-white mb-2">DIRECT MESSAGES</div>
+                                    <input id="dmFriendSearch" type="text" placeholder="Find a friend..." oninput="filterDiscordFriends()" class="smash-input w-full px-3 py-2 rounded-lg text-xs">
+                                </div>
+                                <div id="friendsTabList" class="discord-friend-list"></div>
+                            </aside>
+
+                            <section class="discord-chat">
+                                <div class="discord-chat-head">
+                                    <div class="flex items-center gap-2 min-w-0">
+                                        <div id="dmChatAvatar" class="discord-avatar big">💬</div>
+                                        <div class="min-w-0">
+                                            <div id="activeDMChatHeader" class="font-black text-sm text-white truncate">Select a friend</div>
+                                            <div id="dmChatStatus" class="text-[10px] text-blue-200">Choose somebody from the left.</div>
+                                        </div>
+                                    </div>
+                                    <div class="flex gap-2">
+                                        <button id="dmChallengeButton" onclick="challengeActiveDMFriend()" class="hidden bg-yellow-400 hover:bg-yellow-300 text-blue-950 font-black text-[10px] px-3 py-2 rounded-lg">⚔️ 1v1</button>
+                                    </div>
+                                </div>
+
+                                <div id="tabDMMessages" class="discord-messages">
+                                    <div id="dmEmptyState" class="h-full grid place-items-center text-center text-blue-200 text-xs">
+                                        Select a friend to start messaging.
+                                    </div>
+                                </div>
+
+                                <div class="discord-composer">
+                                    <textarea id="tabDMInput" placeholder="Message a friend..." onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendTabDM();}" class="smash-input flex-1 px-3 py-2 rounded-xl text-xs"></textarea>
+                                    <button onclick="sendTabDM()" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 font-black px-4 py-3 rounded-xl text-xs">SEND</button>
+                                </div>
+                            </section>
+                        </div>
+                    </div>
+
+                    <div id="setupTab" class="tab-content space-y-6">
+                        <div class="flex justify-between items-center border-b border-white/10 pb-4 gap-3">
+                            <div>
+                                <h2 id="arenaTitle" class="font-bungee text-2xl text-white">1v1 MATCHMAKING</h2>
+                                <p id="arenaSubtitle" class="text-xs text-blue-200">Start or join a match</p>
+                            </div>
+                            <button onclick="openFindGameModal()" class="text-xs bg-emerald-500 hover:bg-emerald-400 text-white font-black px-5 py-2.5 rounded-xl uppercase">🔍 Public Lobbies</button>
+                        </div>
+
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-xs font-bold uppercase text-blue-200 mb-2">Smash Karts Room Link or Code</label>
+                                <div class="flex gap-2">
+                                    <input type="text" id="smashUrl" placeholder="Paste link or code here..." class="smash-input flex-1 px-4 py-3 rounded-2xl text-sm font-bold">
+                                    <button onclick="openMakeCodeModal()" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 font-black px-3 py-3 rounded-2xl text-xs uppercase flex-shrink-0">⚡ Make Code</button>
+                                </div>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-bold uppercase text-blue-200 mb-2">Win Condition</label>
+                                <select id="winCondition" class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
+                                    <option value="First to 3">First to 3</option>
+                                    <option value="First to 6">First to 6</option>
+                                    <option value="First to 10">First to 10</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <button onclick="createLobby()" class="btn-smash w-full py-4 rounded-2xl font-bungee text-xl text-white">+ CREATE LOBBY & PRE-CHAT</button>
+                    </div>
+
+                    <!-- FFA is now a normal page, never a floating overlay. -->
+                    <div id="ffaTab" class="tab-content hidden space-y-6">
+                        <div class="flex justify-between items-center border-b border-white/10 pb-4 gap-3">
+                            <div>
+                                <h2 class="font-bungee text-2xl text-white">FFA MATCHMAKING</h2>
+                                <p class="text-xs text-blue-200">Join an FFA lobby or create one</p>
+                            </div>
+                            <button onclick="openFindGameModal()" class="text-xs bg-emerald-500 hover:bg-emerald-400 text-white font-black px-5 py-2.5 rounded-xl uppercase">🔍 Public Lobbies</button>
+                        </div>
+
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div class="hub-card">
+                                <h3 class="font-bungee text-sm text-yellow-300 mb-2">JOIN</h3>
+                                <p class="text-xs text-blue-200 mb-4">Jump into an open public FFA lobby.</p>
+                                <button onclick="playFFAFromPage()" class="btn-smash w-full py-4 rounded-2xl font-bungee text-lg text-white">🔥 PLAY FFA</button>
+                            </div>
+                            <div class="hub-card">
+                                <h3 class="font-bungee text-sm text-yellow-300 mb-2">CREATE</h3>
+                                <div class="grid grid-cols-2 gap-2 mb-3">
+                                    <select id="ffaMaxPlayers" class="smash-input px-3 py-2 rounded-xl text-xs font-bold">
+                                        <option value="12" selected>12 players</option>
+                                        <option value="24">24 players</option>
+                                    </select>
+                                    <select id="ffaPrivacy" class="smash-input px-3 py-2 rounded-xl text-xs font-bold">
+                                        <option value="public">Public</option>
+                                        <option value="private">Private</option>
+                                    </select>
+                                </div>
+                                <button onclick="createFFAFromPage()" class="bg-emerald-500 hover:bg-emerald-400 w-full py-4 rounded-2xl font-bungee text-lg text-white">+ CREATE LOBBY</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Spotify is a normal page. Players just connect their account. -->
+                    <div id="musicTab" class="tab-content hidden space-y-4">
+                        <div class="flex justify-between items-center border-b border-white/10 pb-4 gap-3">
+                            <div>
+                                <h2 class="font-bungee text-2xl text-white">🎵 SPOTIFY</h2>
+                                <p class="text-xs text-blue-200">Spotify Free Mode: listen in the official player, or search the full Spotify Web Player.</p>
+                            </div>
+                            <div class="flex gap-2 items-center">
+                                <button id="spotifyPageConnectButton" onclick="openSpotifyWebsite()" class="dock-action green" style="width:auto">OPEN SPOTIFY WEB</button>
+                                <button onclick="openSpotifyWebsite()" class="dock-action" style="width:auto">OPEN FULL SPOTIFY</button>
+                            </div>
+                        </div>
+
+                        <div class="spotify-web-shell">
+                            <div class="spotify-web-top">
+                                <div>
+                                    <div class="spotify-logo-text">Spotify</div>
+                                    <div id="spotifyPageStatus" class="text-[10px] text-gray-400 mt-1">Not connected</div>
+                                </div>
+                                <button onclick="spotifyDisconnect()" class="spotify-control">DISCONNECT</button>
+                            </div>
+
+                            <div class="spotify-app-grid">
+                                <aside class="spotify-library-nav">
+                                    <button id="spotifyNavSearch" class="spotify-nav-button active" onclick="spotifyShowView('search')">⌕ Search</button>
+                                    <button id="spotifyNavPlaylists" class="spotify-nav-button" onclick="spotifyShowView('playlists')">♫ Your Playlists</button>
+                                    <button id="spotifyNavRecent" class="spotify-nav-button" onclick="spotifyShowView('recent')">↻ Recently Played</button>
+                                </aside>
+
+                                <section class="spotify-main-view">
+                                    <div class="spotify-now mb-4">
+                                        <img id="spotifyPageArt" alt="">
+                                        <div class="min-w-0">
+                                            <div id="spotifyPageTrack" class="font-black text-lg truncate">Nothing playing</div>
+                                            <div id="spotifyPageArtist" class="text-xs text-gray-400 truncate mt-1">Connect Spotify to start</div>
+                                            <div class="spotify-controls">
+                                                <button onclick="spotifyPreviousTrack()" class="spotify-control">⏮</button>
+                                                <button id="spotifyPagePlayButton" onclick="spotifyTogglePlayback()" class="spotify-control primary">▶</button>
+                                                <button onclick="spotifyNextTrack()" class="spotify-control">⏭</button>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div id="spotifySearchView">
+                                        <div class="spotify-view-title">Search Spotify</div>
+                                        <div class="spotify-search-row" style="margin-top:0">
+                                            <input id="spotifyPageSearchInput" type="text" placeholder="What do you want to listen to?" onkeydown="if(event.key==='Enter') spotifySearch('page')" class="smash-input flex-1 px-4 py-3 rounded-xl text-sm">
+                                            <button onclick="spotifySearch('page')" class="dock-action green" style="width:auto">SEARCH</button>
+                                        </div>
+                                        <div id="spotifyPageResults" class="spotify-results"></div>
+                                    </div>
+
+                                    <div id="spotifyPlaylistsView" class="hidden">
+                                        <div class="flex justify-between items-center gap-2">
+                                            <div class="spotify-view-title">Your Playlists</div>
+                                            <button onclick="spotifyLoadPlaylists()" class="spotify-control">↻</button>
+                                        </div>
+                                        <div id="spotifyPlaylistResults" class="spotify-results"></div>
+                                    </div>
+
+                                    <div id="spotifyRecentView" class="hidden">
+                                        <div class="flex justify-between items-center gap-2">
+                                            <div class="spotify-view-title">Recently Played</div>
+                                            <button onclick="spotifyLoadRecent()" class="spotify-control">↻</button>
+                                        </div>
+                                        <div id="spotifyRecentResults" class="spotify-results"></div>
+                                    </div>
+                                </section>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <!-- =========================================================
+         PRE-GAME LOBBY - only one full modal at a time
+         ========================================================= -->
+    <div id="preGameLobbyModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4 exclusive-modal">
+        <div class="w-full max-w-3xl bg-blue-900 border-2 border-yellow-400 rounded-3xl p-6 shadow-2xl relative flex flex-col max-h-[90vh]">
+            <div class="flex justify-between items-center border-b border-white/10 pb-3 mb-4">
+                <div>
+                    <h3 class="font-bungee text-lg text-yellow-300">👥 MATCH LOBBY</h3>
+                    <p id="preGameLobbyMeta" class="text-[10px] text-blue-200 mt-1"></p>
+                </div>
+                <button onclick="closePreGameLobbyModal()" class="text-white hover:text-red-400 font-bold text-lg">✕</button>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 flex-1 min-h-0">
+                <div class="bg-blue-950/80 rounded-2xl p-3 border border-white/10 flex flex-col min-h-0">
+                    <h4 class="font-bungee text-xs text-yellow-300 mb-2">👥 PLAYERS (0)</h4>
+                    <div id="preGamePlayerList" class="space-y-2 text-xs overflow-y-auto flex-1"></div>
+                    <button id="preGameReadyButton" onclick="toggleMyReadyStatus()" class="bg-emerald-500 hover:bg-emerald-400 text-white font-black py-2 rounded-xl text-xs mt-3">✓ READY</button>
+                    <button onclick="enterGameFromLobby()" class="btn-smash w-full py-3 rounded-xl font-bungee text-sm text-white mt-2">🚀 JOIN GAME</button>
+                </div>
+
+                <div class="md:col-span-2 bg-blue-950/80 rounded-2xl p-3 border border-white/10 flex flex-col min-h-0">
+                    <div class="flex justify-between items-center gap-2 mb-2">
+                        <h4 class="font-bungee text-xs text-yellow-300">💬 LOBBY CHAT</h4>
+                        <button onclick="openGameDock('music')" class="text-[10px] text-green-300 font-bold">🎵 Spotify</button>
+                    </div>
+                    <div id="preGameChatMessages" class="flex-1 overflow-y-auto space-y-2 text-xs pr-1 mb-3 min-h-[160px]"></div>
+                    <div class="flex gap-2">
+                        <input type="text" id="preGameChatInput" placeholder="Chat with lobby..." onkeydown="if(event.key==='Enter') sendPreGameChatMessage()" class="smash-input flex-1 px-3 py-2 rounded-xl text-xs">
+                        <button onclick="sendPreGameChatMessage()" class="bg-yellow-400 text-blue-950 font-black px-4 py-2 rounded-xl text-xs uppercase">Send</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="makeCodeModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4 exclusive-modal">
+        <div class="w-full max-w-3xl bg-blue-900 border-2 border-white/30 rounded-3xl p-5 shadow-2xl flex flex-col h-[85vh]">
+            <div class="flex justify-between items-center mb-3">
+                <h3 class="font-bungee text-base text-yellow-300">⚡ MAKE ROOM CODE IN SMASH KARTS</h3>
+                <button onclick="closeMakeCodeModal()" class="text-white hover:text-red-400 font-bold text-lg">✕</button>
+            </div>
+            <div class="flex-1 bg-black rounded-2xl overflow-hidden mb-3">
+                <iframe id="makeCodeIframe" src="" title="Create a Smash Karts room" class="w-full h-full border-0"></iframe>
+            </div>
+            <div class="flex gap-2">
+                <input type="text" id="copyCodeInput" placeholder="Paste created room link/code..." class="smash-input flex-1 px-3 py-2 rounded-xl text-xs font-bold">
+                <button onclick="copyAndPlay()" class="btn-smash px-5 py-2 rounded-xl font-bungee text-xs text-white">📋 COPY & PLAY NOW</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="findGameModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4 exclusive-modal">
+        <div class="w-full max-w-lg bg-blue-900 border-2 border-white/30 rounded-3xl p-6 shadow-2xl relative">
+            <div class="flex justify-between items-center mb-4">
+                <div>
+                    <h3 class="font-bungee text-lg text-yellow-300">🎮 ACTIVE MATCHES</h3>
+                    <p class="text-[10px] text-blue-200">1v1, 2v2 and FFA</p>
+                </div>
+                <button onclick="closeFindGameModal()" class="text-white hover:text-red-400 font-bold text-lg">✕</button>
+            </div>
+            <div class="flex gap-2 mb-3">
+                <input id="publicRoomSearch" type="text" placeholder="Search host or mode..." class="smash-input flex-1 px-3 py-2 rounded-xl text-xs">
+                <button onclick="socket.emit('get_public_rooms')" class="bg-blue-700 text-white font-bold px-3 rounded-xl text-xs">↻</button>
+            </div>
+            <div id="publicRoomsList" class="max-h-80 overflow-y-auto space-y-2.5"></div>
+        </div>
+    </div>
+
+    <!-- Spotify setup directions -->
+    <div id="spotifySetupInfoModal" class="hidden fixed inset-0 modal-overlay z-[80] flex items-center justify-center p-4 exclusive-modal">
+        <div class="w-full max-w-lg bg-[#121212] border-2 border-[#1ed760] rounded-3xl p-6 shadow-2xl text-white">
+            <div class="flex items-start justify-between gap-4 mb-4">
+                <div>
+                    <h3 class="font-bungee text-lg text-[#1ed760]">🎵 SPOTIFY SETUP</h3>
+                    <p class="text-xs text-gray-300 mt-1">This setup is only for the website owner. Regular players never need a Client ID.</p>
+                </div>
+                <button type="button" onclick="closeSpotifySetupInfo()" class="text-white hover:text-red-400 font-bold text-xl">✕</button>
+            </div>
+
+            <div class="space-y-3 text-sm">
+                <div class="bg-white/5 border border-white/10 rounded-2xl p-4">
+                    <div class="font-black text-[#1ed760] mb-2">FOR PLAYERS</div>
+                    <p class="text-gray-200">Just click <strong>Connect Spotify</strong>, sign into your normal Spotify account, and approve access. That is all.</p>
+                </div>
+
+                <div class="bg-white/5 border border-white/10 rounded-2xl p-4">
+                    <div class="font-black text-yellow-300 mb-2">ONE-TIME OWNER SETUP</div>
+                    <ol class="list-decimal pl-5 space-y-2 text-gray-200">
+                        <li>Go to the Spotify Developer Dashboard and create one app for this website.</li>
+                        <li>Copy the app's <strong>Client ID</strong>.</li>
+                        <li>Add this exact Redirect URI to that Spotify app:</li>
+                    </ol>
+
+                    <div class="flex gap-2 mt-3">
+                        <input id="spotifyRedirectHelp" readonly class="smash-input flex-1 px-3 py-2 rounded-xl text-xs" value="">
+                        <button type="button" onclick="copySpotifyRedirectHelp()" class="dock-action green" style="width:auto">COPY</button>
+                    </div>
+
+                    <ol start="4" class="list-decimal pl-5 space-y-2 text-gray-200 mt-3">
+                        <li>In Render, open your web service → <strong>Environment</strong>.</li>
+                        <li>Add <strong>SPOTIFY_CLIENT_ID</strong> as the key and paste your Client ID as the value.</li>
+                        <li>Save/redeploy the service, then refresh this website.</li>
+                    </ol>
+                </div>
+
+                <div class="bg-blue-950/70 border border-blue-400/20 rounded-2xl p-3 text-xs text-blue-100">
+                    Do not put a Spotify Client Secret into the browser. This site uses the browser-safe PKCE login flow.
+                </div>
+            </div>
+
+            <div class="flex gap-2 mt-5">
+                <button type="button" onclick="window.open('https://developer.spotify.com/dashboard','_blank')" class="dock-action green">OPEN SPOTIFY DASHBOARD</button>
+                <button type="button" onclick="closeSpotifySetupInfo()" class="dock-action">DONE</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/script.js?v=9"></script>
+
+    <script>
+        /*
+           Small layout controller only.
+           The full guest/lobby/music logic comes from server.js after script.js.
+        */
+        (() => {
+            window.openSpotifySetupInfo = function() {
+                document.querySelectorAll('.exclusive-modal').forEach((el) => {
+                    if (el.id !== 'spotifySetupInfoModal') el.classList.add('hidden');
+                });
+                const modal = document.getElementById('spotifySetupInfoModal');
+                const redirect = document.getElementById('spotifyRedirectHelp');
+                if (redirect) redirect.value = `${location.origin}${location.pathname}`;
+                if (modal) modal.classList.remove('hidden');
+            };
+
+            window.closeSpotifySetupInfo = function() {
+                document.getElementById('spotifySetupInfoModal')?.classList.add('hidden');
+            };
+
+            window.copySpotifyRedirectHelp = async function() {
+                const input = document.getElementById('spotifyRedirectHelp');
+                const text = input?.value || `${location.origin}${location.pathname}`;
+                try {
+                    await navigator.clipboard.writeText(text);
+                    if (typeof showToast === 'function') showToast('Spotify Redirect URI copied.', '📋');
+                } catch {
+                    if (input) {
+                        input.focus();
+                        input.select();
+                    }
+                }
+            };
+
+            const screen = document.getElementById('gameScreen');
+            const toolbar = document.getElementById('arenaToolbar');
+            const menuToggle = document.getElementById('arenaMenuToggle');
+
+            function measureToolbar() {
+                const h = toolbar.hidden ? 0 : toolbar.getBoundingClientRect().height;
+                if (h > 0) screen.style.setProperty('--menu-height', `${h}px`);
+            }
+
+            window.setArenaToolbarOpen = function(open) {
+                toolbar.hidden = !open;
+                screen.classList.toggle('arena-menu-open', open);
+                menuToggle.setAttribute('aria-expanded', String(open));
+                document.getElementById('topBarTabIcon').textContent = open ? '▲' : '▼';
+                document.getElementById('arenaMenuLabel').textContent = open ? 'HIDE MENU' : 'SHOW MENU';
+                measureToolbar();
+            };
+
+            window.toggleGameTopBar = function() {
+                setArenaToolbarOpen(toolbar.hidden);
+            };
+
+            menuToggle.addEventListener('click', toggleGameTopBar);
+            window.addEventListener('resize', measureToolbar);
+            if (typeof ResizeObserver !== 'undefined') new ResizeObserver(measureToolbar).observe(toolbar);
+            setArenaToolbarOpen(false);
+        })();
+    </script>
+</body>
+</html>
