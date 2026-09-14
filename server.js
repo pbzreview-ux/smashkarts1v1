@@ -1193,6 +1193,321 @@ function installMegaArena() {
         document.getElementById('btnNavMusic')?.classList.remove('active');
     };
 
+
+    // ---------------------------------------------------------------------
+    // DISCORD-LIKE DIRECT MESSAGES
+    // One clean friends rail + one conversation. No stacked DM windows.
+    // ---------------------------------------------------------------------
+    const dmUnreadByUser = Object.create(null);
+    let currentDMHistory = [];
+
+    function dmInitials(name) {
+        return String(name || '?')
+            .split(/[\s_-]+/)
+            .filter(Boolean)
+            .slice(0, 2)
+            .map(part => part[0]?.toUpperCase() || '')
+            .join('') || '?';
+    }
+
+    function dmIsOnline(username) {
+        return onlineUsersCache.some(user => user.username === username);
+    }
+
+    function getMergedFriendNames() {
+        const currentUser = AuthSession.getUser();
+        if (!currentUser || !isRealAccount()) return [];
+
+        const names = getLocalFriends(currentUser.username).slice();
+        const self = onlineUsersCache.find(user => user.username === currentUser.username);
+        (self?.friends || []).forEach(name => {
+            if (!names.includes(name)) names.push(name);
+        });
+        return names.sort((a, b) => {
+            const onlineDiff = Number(dmIsOnline(b)) - Number(dmIsOnline(a));
+            return onlineDiff || a.localeCompare(b);
+        });
+    }
+
+    window.filterDiscordFriends = function () {
+        updateFriendsTabList();
+    };
+
+    showMessagesTab = function () {
+        activateDashboardTab('messagesTab', 'btnNavMessages');
+        clearUnreadBadge();
+        updateFriendsTabList();
+    };
+
+    updateFriendsTabList = function () {
+        const container = document.getElementById('friendsTabList');
+        if (!container) return;
+        container.replaceChildren();
+
+        if (!isRealAccount()) {
+            const card = document.createElement('div');
+            card.className = 'p-3 m-1 rounded-xl bg-yellow-500/10 border border-yellow-400/30 text-xs text-yellow-100';
+            card.innerHTML = '<div class="font-black mb-1">LOG IN FOR DIRECT MESSAGES</div><div class="text-[10px] opacity-90">Guest lobby chat still works normally.</div>';
+            const button = document.createElement('button');
+            button.className = 'dock-action yellow mt-3';
+            button.textContent = 'LOG IN';
+            button.onclick = openOptionalLogin;
+            card.appendChild(button);
+            container.appendChild(card);
+            return;
+        }
+
+        const query = String(document.getElementById('dmFriendSearch')?.value || '').trim().toLowerCase();
+
+        if ((pendingFriendRequests || []).length) {
+            const label = document.createElement('div');
+            label.className = 'discord-section-label';
+            label.textContent = `Friend requests — ${pendingFriendRequests.length}`;
+            container.appendChild(label);
+
+            pendingFriendRequests
+                .filter(name => !query || name.toLowerCase().includes(query))
+                .forEach(name => {
+                    const wrap = document.createElement('div');
+                    wrap.className = 'discord-request';
+
+                    const title = document.createElement('div');
+                    title.className = 'font-bold text-xs text-white mb-2';
+                    title.textContent = name;
+
+                    const actions = document.createElement('div');
+                    actions.className = 'grid grid-cols-2 gap-1';
+
+                    const accept = document.createElement('button');
+                    accept.className = 'bg-emerald-600 hover:bg-emerald-500 text-white text-[9px] font-black px-2 py-1.5 rounded-lg';
+                    accept.textContent = 'ACCEPT';
+                    accept.onclick = () => acceptFriendRequestByName(name);
+
+                    const decline = document.createElement('button');
+                    decline.className = 'bg-red-600 hover:bg-red-500 text-white text-[9px] font-black px-2 py-1.5 rounded-lg';
+                    decline.textContent = 'DECLINE';
+                    decline.onclick = () => declineFriendRequestByName(name);
+
+                    actions.append(accept, decline);
+                    wrap.append(title, actions);
+                    container.appendChild(wrap);
+                });
+        }
+
+        const label = document.createElement('div');
+        label.className = 'discord-section-label';
+        label.textContent = 'Direct messages';
+        container.appendChild(label);
+
+        const friends = getMergedFriendNames().filter(name =>
+            !query || name.toLowerCase().includes(query)
+        );
+
+        if (!friends.length) {
+            const empty = document.createElement('div');
+            empty.className = 'text-[10px] text-blue-200 p-2';
+            empty.textContent = query
+                ? 'No friends match that search.'
+                : 'No friends yet. Click + FIND FRIENDS.';
+            container.appendChild(empty);
+            return;
+        }
+
+        friends.forEach(name => {
+            const online = dmIsOnline(name);
+            const row = document.createElement('button');
+            row.type = 'button';
+            row.className = `discord-friend${activeDMTargetUser === name ? ' active' : ''}`;
+            row.onclick = () => openTabDMWith(name);
+
+            const avatar = document.createElement('div');
+            avatar.className = 'discord-avatar';
+            avatar.textContent = dmInitials(name);
+            const dot = document.createElement('span');
+            dot.className = `discord-status-dot${online ? ' online' : ''}`;
+            avatar.appendChild(dot);
+
+            const copy = document.createElement('div');
+            copy.className = 'min-w-0 flex-1';
+
+            const title = document.createElement('div');
+            title.className = 'text-xs font-black truncate';
+            title.textContent = name;
+
+            const sub = document.createElement('div');
+            sub.className = 'text-[9px] text-blue-200 truncate';
+            sub.textContent = online ? 'Online' : 'Offline';
+
+            copy.append(title, sub);
+            row.append(avatar, copy);
+
+            const unread = Number(dmUnreadByUser[name] || 0);
+            if (unread > 0) {
+                const badge = document.createElement('span');
+                badge.className = 'discord-unread';
+                badge.textContent = unread > 99 ? '99+' : String(unread);
+                row.appendChild(badge);
+            }
+
+            container.appendChild(row);
+        });
+    };
+
+    openTabDMWith = function (username) {
+        if (!isRealAccount()) {
+            openOptionalLogin();
+            return;
+        }
+
+        activeDMTargetUser = username;
+        dmUnreadByUser[username] = 0;
+        clearUnreadBadge();
+
+        const header = document.getElementById('activeDMChatHeader');
+        if (header) header.textContent = username;
+
+        const status = document.getElementById('dmChatStatus');
+        if (status) status.textContent = dmIsOnline(username) ? '● Online' : '○ Offline';
+
+        const avatar = document.getElementById('dmChatAvatar');
+        if (avatar) avatar.textContent = dmInitials(username);
+
+        const challenge = document.getElementById('dmChallengeButton');
+        if (challenge) challenge.classList.toggle('hidden', !dmIsOnline(username));
+
+        const messages = document.getElementById('tabDMMessages');
+        if (messages) messages.innerHTML = '<div class="h-full grid place-items-center text-xs text-blue-200">Loading messages…</div>';
+
+        updateFriendsTabList();
+        socket.emit('get_dm_history', { targetUsername: username });
+    };
+
+    window.challengeActiveDMFriend = function () {
+        if (!activeDMTargetUser) return;
+        if (!dmIsOnline(activeDMTargetUser)) {
+            showToast(`${activeDMTargetUser} is offline.`, 'ℹ️');
+            return;
+        }
+        initiateFriend1v1(activeDMTargetUser);
+    };
+
+    sendTabDM = function () {
+        const input = document.getElementById('tabDMInput');
+        const message = String(input?.value || '').trim();
+
+        if (!isRealAccount()) {
+            openOptionalLogin();
+            return;
+        }
+        if (!activeDMTargetUser) {
+            showToast('Select a friend first.', '💬');
+            return;
+        }
+        if (!message) return;
+
+        socket.emit('send_direct_message', {
+            targetUsername: activeDMTargetUser,
+            message,
+            senderUsername: AuthSession.getUser()?.username || 'Player'
+        });
+        input.value = '';
+        input.focus();
+    };
+
+    renderDMMessages = function (history) {
+        currentDMHistory = Array.isArray(history) ? history : [];
+        const container = document.getElementById('tabDMMessages');
+        if (!container) return;
+        container.replaceChildren();
+
+        if (!activeDMTargetUser) {
+            const empty = document.createElement('div');
+            empty.className = 'h-full grid place-items-center text-center text-blue-200 text-xs';
+            empty.textContent = 'Select a friend to start messaging.';
+            container.appendChild(empty);
+            return;
+        }
+
+        if (!currentDMHistory.length) {
+            const empty = document.createElement('div');
+            empty.className = 'h-full grid place-items-center text-center text-blue-200 text-xs';
+            empty.textContent = `This is the beginning of your conversation with ${activeDMTargetUser}.`;
+            container.appendChild(empty);
+            return;
+        }
+
+        const me = AuthSession.getUser()?.username || 'Player';
+
+        currentDMHistory.forEach(message => {
+            const own = message.senderUsername === me;
+            const row = document.createElement('div');
+            row.className = 'discord-message';
+
+            const avatar = document.createElement('div');
+            avatar.className = 'discord-avatar big';
+            avatar.textContent = dmInitials(message.senderUsername);
+
+            const body = document.createElement('div');
+            body.className = 'min-w-0';
+
+            const head = document.createElement('div');
+            const name = document.createElement('span');
+            name.className = 'discord-message-name';
+            name.textContent = own ? 'You' : message.senderUsername;
+
+            const time = document.createElement('span');
+            time.className = 'discord-message-time';
+            time.textContent = message.timestamp
+                ? new Date(message.timestamp).toLocaleString([], {
+                    month: 'short',
+                    day: 'numeric',
+                    hour: 'numeric',
+                    minute: '2-digit'
+                })
+                : '';
+
+            const text = document.createElement('div');
+            text.className = 'discord-message-text';
+            text.textContent = message.message;
+
+            head.append(name, time);
+            body.append(head, text);
+            row.append(avatar, body);
+            container.appendChild(row);
+        });
+
+        container.scrollTop = container.scrollHeight;
+    };
+
+    socket.off('receive_direct_message');
+    socket.off('dm_sent_success');
+    socket.off('load_dm_history');
+
+    socket.on('receive_direct_message', data => {
+        const from = data.senderUsername;
+        if (activeDMTargetUser === from &&
+            !document.getElementById('messagesTab')?.classList.contains('hidden')) {
+            renderDMMessages(data.history || []);
+        } else {
+            dmUnreadByUser[from] = Number(dmUnreadByUser[from] || 0) + 1;
+            incrementUnreadBadge();
+            showToast(`New message from ${from}`, '💬');
+        }
+        updateFriendsTabList();
+    });
+
+    socket.on('dm_sent_success', data => {
+        if (data.targetUsername === activeDMTargetUser) {
+            renderDMMessages(data.history || []);
+        }
+    });
+
+    socket.on('load_dm_history', data => {
+        if (data.targetUsername === activeDMTargetUser) {
+            renderDMMessages(data.history || []);
+        }
+    });
+
     // ---------------------------------------------------------------------
     // SINGLE IN-GAME DOCK
     // ---------------------------------------------------------------------
@@ -1510,7 +1825,6 @@ function installMegaArena() {
     // SPOTIFY WEB PLAYER
     // Real Spotify Web API + Web Playback SDK. No playlist-import iframe.
     // ---------------------------------------------------------------------
-    const SPOTIFY_CLIENT_KEY = 'sk_spotify_client_id_v2';
     const SPOTIFY_TOKEN_KEY = 'sk_spotify_token_v2';
     const SPOTIFY_VERIFIER_KEY = 'sk_spotify_pkce_verifier_v2';
     const SPOTIFY_STATE_KEY = 'sk_spotify_oauth_state_v2';
@@ -1521,7 +1835,7 @@ function installMegaArena() {
     let spotifyLastResults = [];
 
     function spotifyClientId() {
-        return String(localStorage.getItem(SPOTIFY_CLIENT_KEY) || window.__SPOTIFY_CLIENT_ID__ || '').trim();
+        return String(window.__SPOTIFY_CLIENT_ID__ || '').trim();
     }
 
     function spotifyRedirectUri() {
@@ -1626,10 +1940,10 @@ function installMegaArena() {
     }
 
     function spotifyStatusText() {
-        if (!spotifyClientId()) return 'Needs Spotify Client ID';
-        if (!spotifyIsConnected()) return 'Not connected';
-        if (!spotifyDeviceId) return 'Connected · starting web player…';
-        return 'Connected · SmashKarts Arena Player';
+        if (!spotifyClientId()) return 'Spotify unavailable · site owner setup needed';
+        if (!spotifyIsConnected()) return 'Ready to connect your Spotify account';
+        if (!spotifyDeviceId) return 'Connected · starting player…';
+        return 'Connected to Spotify';
     }
 
     function spotifyTrackInfo() {
@@ -1664,18 +1978,25 @@ function installMegaArena() {
             if (el) el.textContent = status;
         });
 
-        ['spotifyPageTrack', 'spotifyDockTrack', 'spotifyMiniTrack'].forEach(id => {
+        ['spotifyPageTrack', 'spotifyDockTrack'].forEach(id => {
             const el = document.getElementById(id);
             if (el) el.textContent = info.title;
         });
-        ['spotifyPageArtist', 'spotifyDockArtist', 'spotifyMiniArtist'].forEach(id => {
+        ['spotifyPageArtist', 'spotifyDockArtist'].forEach(id => {
             const el = document.getElementById(id);
             if (el) el.textContent = info.artist;
         });
 
+        const miniTrack = document.getElementById('spotifyMiniTrack');
+        if (miniTrack) {
+            miniTrack.textContent = spotifyIsConnected()
+                ? `🎵 ${info.title}`
+                : '🎵 Connect Spotify';
+            miniTrack.title = spotifyIsConnected() ? `${info.title} — ${info.artist}` : 'Open Music';
+        }
+
         setImage('spotifyPageArt', info.art);
         setImage('spotifyDockArt', info.art);
-        setImage('spotifyMiniArt', info.art);
 
         ['spotifyPagePlayButton', 'spotifyDockPlayButton'].forEach(id => {
             const el = document.getElementById(id);
@@ -1694,11 +2015,6 @@ function installMegaArena() {
         const gameplay = document.getElementById('settingsGameplayMode');
         if (gameplay) gameplay.value = pref.gameplay || currentGameplayMode || 'popup';
 
-        const clientInput = document.getElementById('spotifyClientIdInput');
-        if (clientInput) clientInput.value = spotifyClientId();
-
-        const redirect = document.getElementById('spotifyRedirectUri');
-        if (redirect) redirect.value = spotifyRedirectUri();
         renderSpotifyEverywhere();
     }
 
@@ -1711,32 +2027,13 @@ function installMegaArena() {
         writeJSON(PREF_KEY, pref);
         const originalSelect = document.getElementById('gameplayModeSelect');
         if (originalSelect) originalSelect.value = gameplay;
-        window.saveSpotifyClientId(false);
         showToast('Settings saved.', '⚙️');
     };
 
-    window.saveSpotifyClientId = function (toast = true) {
-        const input = document.getElementById('spotifyClientIdInput');
-        const id = String(input?.value || '').trim();
-        if (id) localStorage.setItem(SPOTIFY_CLIENT_KEY, id);
-        else localStorage.removeItem(SPOTIFY_CLIENT_KEY);
-        if (toast) showToast(id ? 'Spotify Client ID saved.' : 'Spotify Client ID cleared.', '🎵');
-        renderSpotifyEverywhere();
-    };
-
-    window.copySpotifyRedirectUri = function () {
-        navigator.clipboard?.writeText(spotifyRedirectUri())
-            .then(() => showToast('Spotify redirect URI copied.', '📋'))
-            .catch(() => showToast('Could not copy redirect URI.', '❌'));
-    };
-
     window.spotifyConnect = async function () {
-        const input = document.getElementById('spotifyClientIdInput');
-        if (input && input.value.trim()) localStorage.setItem(SPOTIFY_CLIENT_KEY, input.value.trim());
         const clientId = spotifyClientId();
         if (!clientId) {
-            openSettingsModal();
-            showToast('Add your Spotify Client ID in Settings first.', '🎵');
+            showToast('Spotify is not configured on this website yet. The site owner needs to set SPOTIFY_CLIENT_ID once on Render.', '🎵');
             return;
         }
 
@@ -1760,7 +2057,8 @@ function installMegaArena() {
             'user-modify-playback-state',
             'user-read-currently-playing',
             'playlist-read-private',
-            'user-library-read'
+            'user-library-read',
+            'user-read-recently-played'
         ].join(' ');
 
         const params = new URLSearchParams({
@@ -2031,6 +2329,131 @@ function installMegaArena() {
             renderSpotifyResults(otherId, spotifyLastResults);
         } catch (error) {
             if (target) target.textContent = error.message || 'Spotify search failed.';
+        }
+    };
+
+
+    window.spotifyShowView = function (view = 'search') {
+        const ids = {
+            search: 'spotifySearchView',
+            playlists: 'spotifyPlaylistsView',
+            recent: 'spotifyRecentView'
+        };
+        Object.entries(ids).forEach(([key, id]) => {
+            document.getElementById(id)?.classList.toggle('hidden', key !== view);
+        });
+        const navIds = {
+            search: 'spotifyNavSearch',
+            playlists: 'spotifyNavPlaylists',
+            recent: 'spotifyNavRecent'
+        };
+        Object.entries(navIds).forEach(([key, id]) => {
+            document.getElementById(id)?.classList.toggle('active', key === view);
+        });
+
+        if (view === 'playlists') spotifyLoadPlaylists();
+        if (view === 'recent') spotifyLoadRecent();
+    };
+
+    function renderSpotifyPlaylists(playlists) {
+        const container = document.getElementById('spotifyPlaylistResults');
+        if (!container) return;
+        container.replaceChildren();
+
+        if (!playlists.length) {
+            const empty = document.createElement('div');
+            empty.className = 'text-xs text-gray-400 p-3';
+            empty.textContent = 'No playlists found.';
+            container.appendChild(empty);
+            return;
+        }
+
+        playlists.forEach(playlist => {
+            const row = document.createElement('button');
+            row.type = 'button';
+            row.className = 'spotify-playlist';
+            row.onclick = () => spotifyOpenPlaylist(playlist.id, playlist.name);
+
+            const image = document.createElement('img');
+            image.alt = '';
+            if (playlist.images?.[0]?.url) image.src = playlist.images[0].url;
+
+            const copy = document.createElement('div');
+            copy.className = 'min-w-0';
+
+            const title = document.createElement('div');
+            title.className = 'spotify-result-title';
+            title.textContent = playlist.name || 'Playlist';
+
+            const sub = document.createElement('div');
+            sub.className = 'spotify-result-sub';
+            sub.textContent = `${playlist.tracks?.total ?? 0} songs · ${playlist.owner?.display_name || 'Spotify'}`;
+
+            copy.append(title, sub);
+            row.append(image, copy);
+            container.appendChild(row);
+        });
+    }
+
+    window.spotifyLoadPlaylists = async function () {
+        const container = document.getElementById('spotifyPlaylistResults');
+        if (!spotifyIsConnected()) {
+            spotifyConnect();
+            return;
+        }
+        if (container) container.textContent = 'Loading your playlists…';
+
+        try {
+            const data = await spotifyApi('/me/playlists?limit=30');
+            renderSpotifyPlaylists(data?.items || []);
+        } catch (error) {
+            if (container) container.textContent = error.message || 'Could not load playlists.';
+        }
+    };
+
+    window.spotifyOpenPlaylist = async function (playlistId, playlistName = 'Playlist') {
+        const container = document.getElementById('spotifyPlaylistResults');
+        if (!playlistId || !container) return;
+        container.textContent = `Loading ${playlistName}…`;
+
+        try {
+            const data = await spotifyApi(`/playlists/${encodeURIComponent(playlistId)}/tracks?limit=50`);
+            const tracks = (data?.items || []).map(item => item.track).filter(Boolean);
+            renderSpotifyResults('spotifyPlaylistResults', tracks);
+
+            const back = document.createElement('button');
+            back.type = 'button';
+            back.className = 'spotify-nav-button';
+            back.style.marginBottom = '8px';
+            back.textContent = `← Back to playlists · ${playlistName}`;
+            back.onclick = () => spotifyLoadPlaylists();
+            container.prepend(back);
+        } catch (error) {
+            container.textContent = error.message || 'Could not open that playlist.';
+        }
+    };
+
+    window.spotifyLoadRecent = async function () {
+        const container = document.getElementById('spotifyRecentResults');
+        if (!spotifyIsConnected()) {
+            spotifyConnect();
+            return;
+        }
+        if (container) container.textContent = 'Loading recently played…';
+
+        try {
+            const data = await spotifyApi('/me/player/recently-played?limit=30');
+            const seen = new Set();
+            const tracks = [];
+            for (const item of data?.items || []) {
+                const track = item.track;
+                if (!track?.id || seen.has(track.id)) continue;
+                seen.add(track.id);
+                tracks.push(track);
+            }
+            renderSpotifyResults('spotifyRecentResults', tracks);
+        } catch (error) {
+            if (container) container.textContent = error.message || 'Could not load recently played music.';
         }
     };
 

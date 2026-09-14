@@ -17,7 +17,7 @@
             --arena-dock-width: 380px;
         }
 
-        #gameScreen { --menu-height: 76px; }
+        #gameScreen { --menu-height: 52px; }
         #gameScreen [hidden] { display: none !important; }
 
         /* =========================
@@ -31,13 +31,13 @@
 
         #arenaToolbar {
             box-sizing: border-box;
-            min-height: 76px;
-            padding: 12px 22px;
+            min-height: 52px;
+            padding: 5px 12px;
             display: flex;
             align-items: center;
             justify-content: space-between;
-            flex-wrap: wrap;
-            gap: 12px;
+            flex-wrap: nowrap;
+            gap: 8px;
             background: var(--arena-blue);
             border-bottom: 1px solid #ffffff30;
             color: var(--arena-yellow);
@@ -47,21 +47,31 @@
         .arena-actions {
             display: flex;
             align-items: center;
-            flex-wrap: wrap;
-            gap: 10px;
+            gap: 6px;
         }
 
         .arena-brand {
+            min-width: 0;
+            flex: 1 1 auto;
+            flex-wrap: nowrap;
             font-family: "Bungee", sans-serif;
-            font-size: 22px;
+            font-size: 15px;
+        }
+
+        .arena-actions {
+            margin-left: auto;
+            justify-content: flex-end;
+            flex: 0 0 auto;
+            flex-wrap: nowrap;
+            gap: 4px;
         }
 
         #gameModeBadge {
-            padding: 4px 13px;
+            padding: 2px 8px;
             border-radius: 999px;
             background: #ffd318;
             color: #142f75;
-            font: 900 14px "Inter", sans-serif;
+            font: 900 10px "Inter", sans-serif;
             text-transform: uppercase;
         }
 
@@ -70,34 +80,34 @@
             align-items: center;
             gap: 7px;
             min-width: 0;
-            max-width: 420px;
-            padding: 7px 10px;
+            max-width: 310px;
+            padding: 4px 7px;
             border: 1px solid #ffffff32;
-            border-radius: 16px;
+            border-radius: 12px;
             background: var(--arena-deep);
         }
 
         #gameLobbyPlayerCount {
             color: var(--arena-yellow);
-            font: 900 11px "Inter", sans-serif;
+            font: 900 9px "Inter", sans-serif;
             white-space: nowrap;
         }
 
         #gameLobbyPlayerNames {
             color: white;
-            font: 800 10px "Inter", sans-serif;
+            font: 800 9px "Inter", sans-serif;
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
         }
 
         .arena-button {
-            padding: 10px 13px;
+            padding: 6px 8px;
             border: 1px solid #ffda25;
-            border-radius: 18px;
+            border-radius: 13px;
             background: #ffffff15;
             color: var(--arena-yellow);
-            font: 900 12px "Inter", sans-serif;
+            font: 900 9px "Inter", sans-serif;
             cursor: pointer;
             transition: .15s ease;
         }
@@ -110,14 +120,14 @@
         #arenaMenuToggle {
             position: absolute;
             top: 100%;
-            right: 30px;
-            padding: 7px 14px;
+            right: 24px;
+            padding: 5px 10px;
             border: 1px solid #ffd318;
             border-top: 0;
             border-radius: 0 0 12px 12px;
             background: var(--arena-blue);
             color: var(--arena-yellow);
-            font: 900 11px "Inter", sans-serif;
+            font: 900 9px "Inter", sans-serif;
             cursor: pointer;
             box-shadow: 0 5px 12px #0004;
         }
@@ -328,22 +338,15 @@
         .spotify-mini {
             display: flex;
             align-items: center;
-            gap: 8px;
-            min-width: 220px;
-            max-width: 330px;
-            padding: 6px 8px;
+            gap: 6px;
+            min-width: 150px;
+            max-width: 230px;
+            height: 30px;
+            padding: 3px 4px 3px 8px;
             border: 1px solid #2d5c3a;
-            border-radius: 16px;
+            border-radius: 999px;
             background: #121212;
             color: white;
-        }
-
-        .spotify-mini img {
-            width: 34px;
-            height: 34px;
-            border-radius: 7px;
-            object-fit: cover;
-            background: #242424;
         }
 
         .spotify-mini-copy {
@@ -352,25 +355,23 @@
             cursor: pointer;
         }
 
-        .spotify-mini-track,
-        .spotify-mini-artist {
+        .spotify-mini-track {
             display: block;
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
+            font: 800 9px "Inter", sans-serif;
         }
 
-        .spotify-mini-track { font: 800 11px "Inter", sans-serif; }
-        .spotify-mini-artist { font: 700 9px "Inter", sans-serif; color: #a7a7a7; }
-
         .spotify-mini-skip {
-            width: 34px;
-            height: 34px;
-            flex: 0 0 34px;
+            width: 24px;
+            height: 24px;
+            flex: 0 0 24px;
             border: 0;
             border-radius: 999px;
             background: #1ed760;
             color: #000;
+            font-size: 11px;
             font-weight: 1000;
             cursor: pointer;
         }
@@ -488,6 +489,270 @@
         .spotify-result-title { font-size: 12px; font-weight: 900; }
         .spotify-result-sub { font-size: 10px; color: #a7a7a7; margin-top: 2px; }
 
+
+        /* =========================
+           DISCORD-LIKE DIRECT MESSAGES
+           ========================= */
+        .discord-shell {
+            display: grid;
+            grid-template-columns: 245px minmax(0, 1fr);
+            height: min(620px, calc(100vh - 245px));
+            min-height: 430px;
+            overflow: hidden;
+            border: 1px solid #ffffff1f;
+            border-radius: 18px;
+            background: #101c46;
+        }
+
+        .discord-sidebar {
+            display: flex;
+            min-width: 0;
+            flex-direction: column;
+            background: #152557;
+            border-right: 1px solid #ffffff16;
+        }
+
+        .discord-sidebar-head {
+            padding: 12px;
+            border-bottom: 1px solid #ffffff15;
+        }
+
+        .discord-friend-list {
+            flex: 1;
+            min-height: 0;
+            overflow-y: auto;
+            padding: 8px;
+        }
+
+        .discord-friend {
+            width: 100%;
+            display: flex;
+            align-items: center;
+            gap: 9px;
+            padding: 8px;
+            margin-bottom: 3px;
+            border: 0;
+            border-radius: 9px;
+            background: transparent;
+            color: #d9e2ff;
+            text-align: left;
+            cursor: pointer;
+        }
+
+        .discord-friend:hover,
+        .discord-friend.active {
+            background: #ffffff12;
+            color: white;
+        }
+
+        .discord-avatar {
+            position: relative;
+            width: 34px;
+            height: 34px;
+            flex: 0 0 34px;
+            display: grid;
+            place-items: center;
+            border-radius: 50%;
+            background: #3d58a8;
+            color: white;
+            font-size: 11px;
+            font-weight: 1000;
+        }
+
+        .discord-avatar.big {
+            width: 40px;
+            height: 40px;
+            flex-basis: 40px;
+            font-size: 13px;
+        }
+
+        .discord-status-dot {
+            position: absolute;
+            right: -1px;
+            bottom: -1px;
+            width: 10px;
+            height: 10px;
+            border: 2px solid #152557;
+            border-radius: 50%;
+            background: #6b7280;
+        }
+
+        .discord-status-dot.online { background: #22c55e; }
+
+        .discord-chat {
+            display: flex;
+            min-width: 0;
+            flex-direction: column;
+            background: #182b62;
+        }
+
+        .discord-chat-head {
+            min-height: 58px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            padding: 9px 14px;
+            border-bottom: 1px solid #ffffff15;
+            box-shadow: 0 1px 0 #0002;
+        }
+
+        .discord-messages {
+            flex: 1;
+            min-height: 0;
+            overflow-y: auto;
+            padding: 14px 14px 6px;
+        }
+
+        .discord-message {
+            display: grid;
+            grid-template-columns: 40px minmax(0, 1fr);
+            gap: 10px;
+            padding: 5px 0;
+        }
+
+        .discord-message:hover { background: #ffffff05; }
+
+        .discord-message-name {
+            color: white;
+            font-size: 12px;
+            font-weight: 900;
+        }
+
+        .discord-message-time {
+            margin-left: 7px;
+            color: #8ea0cf;
+            font-size: 9px;
+            font-weight: 700;
+        }
+
+        .discord-message-text {
+            color: #e6ebff;
+            font-size: 12px;
+            line-height: 1.45;
+            overflow-wrap: anywhere;
+            white-space: pre-wrap;
+        }
+
+        .discord-composer {
+            display: flex;
+            align-items: flex-end;
+            gap: 8px;
+            padding: 10px 12px 12px;
+        }
+
+        .discord-composer textarea {
+            min-height: 42px;
+            max-height: 120px;
+            resize: vertical;
+        }
+
+        .discord-section-label {
+            padding: 8px 8px 5px;
+            color: #8ea0cf;
+            font-size: 9px;
+            font-weight: 1000;
+            letter-spacing: .08em;
+            text-transform: uppercase;
+        }
+
+        .discord-request {
+            padding: 8px;
+            margin-bottom: 5px;
+            border: 1px solid #ffd31855;
+            border-radius: 10px;
+            background: #ffd31812;
+        }
+
+        .discord-unread {
+            margin-left: auto;
+            min-width: 18px;
+            height: 18px;
+            display: grid;
+            place-items: center;
+            border-radius: 999px;
+            background: #ef4444;
+            color: white;
+            font-size: 9px;
+            font-weight: 1000;
+        }
+
+        /* =========================
+           SPOTIFY WEB-STYLE LIBRARY
+           ========================= */
+        .spotify-app-grid {
+            display: grid;
+            grid-template-columns: 180px minmax(0, 1fr);
+            min-height: 460px;
+        }
+
+        .spotify-library-nav {
+            padding: 12px;
+            background: #0f0f0f;
+            border-right: 1px solid #ffffff12;
+        }
+
+        .spotify-nav-button {
+            width: 100%;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px;
+            margin-bottom: 5px;
+            border: 0;
+            border-radius: 8px;
+            background: transparent;
+            color: #b3b3b3;
+            font-size: 11px;
+            font-weight: 900;
+            text-align: left;
+            cursor: pointer;
+        }
+
+        .spotify-nav-button:hover,
+        .spotify-nav-button.active {
+            background: #242424;
+            color: white;
+        }
+
+        .spotify-main-view {
+            min-width: 0;
+            padding: 14px;
+            background: linear-gradient(#1b1b1b, #121212 190px);
+        }
+
+        .spotify-view-title {
+            margin-bottom: 10px;
+            color: white;
+            font-size: 18px;
+            font-weight: 1000;
+        }
+
+        .spotify-playlist {
+            width: 100%;
+            display: grid;
+            grid-template-columns: 46px minmax(0,1fr);
+            gap: 9px;
+            align-items: center;
+            padding: 7px;
+            border: 0;
+            border-radius: 9px;
+            background: transparent;
+            color: white;
+            text-align: left;
+            cursor: pointer;
+        }
+
+        .spotify-playlist:hover { background: #282828; }
+        .spotify-playlist img {
+            width: 46px;
+            height: 46px;
+            object-fit: cover;
+            border-radius: 5px;
+            background: #282828;
+        }
+
+
         /* =========================
            ONE-AT-A-TIME MODALS
            ========================= */
@@ -501,15 +766,22 @@
         }
 
         @media (max-width: 760px) {
-            #arenaToolbar { padding: 9px 10px; }
-            .arena-brand { font-size: 17px; }
-            .arena-actions { gap: 5px; }
-            .arena-button { padding: 8px 9px; font-size: 10px; }
+            #arenaToolbar { padding: 4px 6px; }
+            .arena-brand { font-size: 12px; }
+            .arena-actions { gap: 3px; }
+            .arena-button { padding: 5px 6px; font-size: 8px; }
             #gameLobbyInfo { max-width: 200px; }
             #gameLobbyPlayerNames { max-width: 90px; }
 
             #gameScreen.game-dock-open #smashFrame { display: none; }
             #gameDock { width: 100%; }
+            .spotify-mini { min-width: 110px; max-width: 150px; }
+            .discord-shell { grid-template-columns: 1fr; height: auto; min-height: 520px; }
+            .discord-sidebar { max-height: 190px; border-right: 0; border-bottom: 1px solid #ffffff16; }
+            .discord-chat { min-height: 370px; }
+            .spotify-app-grid { grid-template-columns: 1fr; }
+            .spotify-library-nav { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; border-right: 0; border-bottom: 1px solid #ffffff12; }
+            .spotify-nav-button { margin: 0; justify-content: center; }
         }
     </style>
 </head>
@@ -524,7 +796,7 @@
             <div class="flex justify-between items-center mb-5">
                 <div>
                     <h3 class="font-bungee text-lg text-yellow-300">⚙️ SETTINGS</h3>
-                    <p class="text-[11px] text-blue-200 mt-1">Gameplay, account and Spotify Web Player setup.</p>
+                    <p class="text-[11px] text-blue-200 mt-1">Gameplay and account settings.</p>
                 </div>
                 <button onclick="closeSettingsModal()" class="text-white hover:text-red-400 font-bold text-lg">✕</button>
             </div>
@@ -548,26 +820,16 @@
             </div>
 
             <div class="hub-card mt-4" style="background:#111827">
-                <div class="flex items-center justify-between gap-3 mb-3">
+                <div class="flex items-center justify-between gap-3">
                     <div>
-                        <span class="dock-label" style="color:#1ed760">Spotify Web Player</span>
-                        <p class="text-[11px] text-gray-300">Connect your Spotify account once, then search and play Spotify directly inside this site.</p>
+                        <span class="dock-label" style="color:#1ed760">Spotify</span>
+                        <p class="text-[11px] text-gray-300 mt-1">Players only click Connect Spotify. No Client ID box or developer setup appears on the website.</p>
                     </div>
                     <span id="spotifySettingsStatus" class="text-[10px] font-bold text-gray-300">Not connected</span>
                 </div>
-
-                <label class="text-[10px] uppercase font-bold text-gray-400">Spotify Client ID</label>
-                <input id="spotifyClientIdInput" type="text" placeholder="Paste Spotify Developer Client ID" class="smash-input w-full px-3 py-2 rounded-xl text-xs mt-1">
-
-                <label class="text-[10px] uppercase font-bold text-gray-400 block mt-3">Redirect URI to add in Spotify Developer Dashboard</label>
-                <div class="flex gap-2 mt-1">
-                    <input id="spotifyRedirectUri" type="text" readonly class="smash-input flex-1 px-3 py-2 rounded-xl text-[10px]">
-                    <button onclick="copySpotifyRedirectUri()" class="dock-action" style="width:auto">COPY</button>
-                </div>
-
                 <div class="grid grid-cols-2 gap-2 mt-3">
-                    <button onclick="saveSpotifyClientId()" class="dock-action">SAVE CLIENT ID</button>
                     <button id="spotifySettingsConnectButton" onclick="spotifyConnect()" class="dock-action green">CONNECT SPOTIFY</button>
+                    <button onclick="spotifyDisconnect()" class="dock-action">DISCONNECT</button>
                 </div>
             </div>
         </div>
@@ -666,11 +928,9 @@
                     </button>
                     <button id="gamePasteCodeButton" class="arena-button" onclick="pasteCodeIntoCurrentLobby()">📋 PASTE CODE</button>
                     <button id="gameLobbyButton" class="arena-button" onclick="openGameDock('lobby')">👥 LOBBY</button>
-                    <div id="spotifyMiniPlayer" class="spotify-mini">
-                        <img id="spotifyMiniArt" alt="" src="">
-                        <div class="spotify-mini-copy" onclick="openGameDock('music')" title="Open Spotify Web Player">
-                            <span id="spotifyMiniTrack" class="spotify-mini-track">Spotify not connected</span>
-                            <span id="spotifyMiniArtist" class="spotify-mini-artist">Click to open Music</span>
+                    <div id="spotifyMiniPlayer" class="spotify-mini" title="Click the song to open Music">
+                        <div class="spotify-mini-copy" onclick="openGameDock('music')">
+                            <span id="spotifyMiniTrack" class="spotify-mini-track">🎵 Spotify</span>
                         </div>
                         <button class="spotify-mini-skip" onclick="spotifyNextTrack()" title="Skip song">⏭</button>
                     </div>
@@ -846,7 +1106,7 @@
                 <button id="btnNav1v1" onclick="switchMatchMode('1v1')" title="1v1 Matchmaking" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg active">🎮</button>
                 <button id="btnNav2v2" onclick="switchMatchMode('2v2')" title="2v2 Matchmaking" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg">⚔️</button>
                 <button id="btnNavMessages" onclick="showMessagesTab()" title="Friends & Messages" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg">💬<span id="messagesBadge" class="unread-badge hidden">0</span></button>
-                <button id="btnNavMusic" onclick="openMusicPage()" title="Spotify Web Player" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg">🎵</button>
+                <button id="btnNavMusic" onclick="openMusicPage()" title="Spotify" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg">🎵</button>
             </aside>
 
             <main class="flex-1 flex flex-col items-center">
@@ -864,21 +1124,52 @@
                     </div>
 
                     <div id="messagesTab" class="tab-content hidden space-y-4">
-                        <h2 class="font-bungee text-xl text-yellow-300 mb-2">💬 FRIENDS & DIRECT MESSAGES</h2>
-                        <div id="guestMessagesNotice" class="hidden bg-yellow-500/15 border border-yellow-400/40 rounded-xl p-3 text-xs text-yellow-100">Friends and saved DMs are account features. You can still use lobby chat as a guest.</div>
-                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 h-80">
-                            <div class="bg-blue-900/60 p-3 rounded-2xl border border-white/10 flex flex-col">
-                                <span class="font-bungee text-xs text-yellow-300 mb-2">YOUR FRIENDS</span>
-                                <div id="friendsTabList" class="flex-1 overflow-y-auto space-y-1.5 pr-1"></div>
+                        <div class="flex justify-between items-center gap-3">
+                            <div>
+                                <h2 class="font-bungee text-xl text-yellow-300">💬 MESSAGES</h2>
+                                <p class="text-xs text-blue-200 mt-1">Simple Discord-style DMs with your friends.</p>
                             </div>
-                            <div class="md:col-span-2 bg-blue-900/60 p-3 rounded-2xl border border-white/10 flex flex-col">
-                                <span id="activeDMChatHeader" class="font-bungee text-xs text-yellow-300 mb-2">SELECT A FRIEND TO MESSAGE</span>
-                                <div id="tabDMMessages" class="flex-1 overflow-y-auto space-y-1.5 pr-1 text-xs mb-3 bg-blue-950/80 p-2.5 rounded-xl border border-white/10"></div>
-                                <div class="flex gap-2">
-                                    <input type="text" id="tabDMInput" placeholder="Type message..." onkeydown="if(event.key==='Enter') sendTabDM()" class="smash-input flex-1 px-3 py-2 rounded-xl text-xs">
-                                    <button onclick="sendTabDM()" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 font-black px-4 py-2 rounded-xl text-xs uppercase">Send</button>
+                            <button onclick="openOnlineModal()" class="bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs px-4 py-2 rounded-xl">+ FIND FRIENDS</button>
+                        </div>
+
+                        <div id="guestMessagesNotice" class="hidden bg-yellow-500/15 border border-yellow-400/40 rounded-xl p-3 text-xs text-yellow-100">
+                            Direct messages are saved-account features. Log in to save friends and conversations.
+                        </div>
+
+                        <div class="discord-shell">
+                            <aside class="discord-sidebar">
+                                <div class="discord-sidebar-head">
+                                    <div class="font-bungee text-xs text-white mb-2">DIRECT MESSAGES</div>
+                                    <input id="dmFriendSearch" type="text" placeholder="Find a friend..." oninput="filterDiscordFriends()" class="smash-input w-full px-3 py-2 rounded-lg text-xs">
                                 </div>
-                            </div>
+                                <div id="friendsTabList" class="discord-friend-list"></div>
+                            </aside>
+
+                            <section class="discord-chat">
+                                <div class="discord-chat-head">
+                                    <div class="flex items-center gap-2 min-w-0">
+                                        <div id="dmChatAvatar" class="discord-avatar big">💬</div>
+                                        <div class="min-w-0">
+                                            <div id="activeDMChatHeader" class="font-black text-sm text-white truncate">Select a friend</div>
+                                            <div id="dmChatStatus" class="text-[10px] text-blue-200">Choose somebody from the left.</div>
+                                        </div>
+                                    </div>
+                                    <div class="flex gap-2">
+                                        <button id="dmChallengeButton" onclick="challengeActiveDMFriend()" class="hidden bg-yellow-400 hover:bg-yellow-300 text-blue-950 font-black text-[10px] px-3 py-2 rounded-lg">⚔️ 1v1</button>
+                                    </div>
+                                </div>
+
+                                <div id="tabDMMessages" class="discord-messages">
+                                    <div id="dmEmptyState" class="h-full grid place-items-center text-center text-blue-200 text-xs">
+                                        Select a friend to start messaging.
+                                    </div>
+                                </div>
+
+                                <div class="discord-composer">
+                                    <textarea id="tabDMInput" placeholder="Message a friend..." onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendTabDM();}" class="smash-input flex-1 px-3 py-2 rounded-xl text-xs"></textarea>
+                                    <button onclick="sendTabDM()" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 font-black px-4 py-3 rounded-xl text-xs">SEND</button>
+                                </div>
+                            </section>
                         </div>
                     </div>
 
@@ -945,48 +1236,74 @@
                         </div>
                     </div>
 
-                    <!-- Spotify is its own normal page. No Arena Hub. -->
+                    <!-- Spotify is a normal page. Players just connect their account. -->
                     <div id="musicTab" class="tab-content hidden space-y-4">
                         <div class="flex justify-between items-center border-b border-white/10 pb-4 gap-3">
                             <div>
-                                <h2 class="font-bungee text-2xl text-white">🎵 SPOTIFY WEB PLAYER</h2>
-                                <p class="text-xs text-blue-200">Search and play Spotify directly here. While racing, only the current song and Skip stay in the top bar.</p>
+                                <h2 class="font-bungee text-2xl text-white">🎵 SPOTIFY</h2>
+                                <p class="text-xs text-blue-200">Connect your regular Spotify account, search music, open your playlists and play it from here.</p>
                             </div>
-                            <button onclick="openSettingsModal()" class="text-xs bg-blue-700 hover:bg-blue-600 text-white font-black px-4 py-2.5 rounded-xl">⚙️ Spotify Setup</button>
+                            <div class="flex gap-2">
+                                <button id="spotifyPageConnectButton" onclick="spotifyConnect()" class="dock-action green" style="width:auto">CONNECT SPOTIFY</button>
+                                <button onclick="openSpotifyWebsite()" class="dock-action" style="width:auto">OPEN FULL SPOTIFY</button>
+                            </div>
                         </div>
 
                         <div class="spotify-web-shell">
                             <div class="spotify-web-top">
                                 <div>
-                                    <div class="spotify-logo-text">Spotify Web</div>
+                                    <div class="spotify-logo-text">Spotify</div>
                                     <div id="spotifyPageStatus" class="text-[10px] text-gray-400 mt-1">Not connected</div>
                                 </div>
-                                <div class="flex gap-2">
-                                    <button id="spotifyPageConnectButton" onclick="spotifyConnect()" class="dock-action green" style="width:auto">CONNECT SPOTIFY</button>
-                                    <button onclick="openSpotifyWebsite()" class="dock-action" style="width:auto">OPEN SPOTIFY.COM</button>
-                                </div>
+                                <button onclick="spotifyDisconnect()" class="spotify-control">DISCONNECT</button>
                             </div>
 
-                            <div class="spotify-web-body">
-                                <div class="spotify-now">
-                                    <img id="spotifyPageArt" alt="">
-                                    <div class="min-w-0">
-                                        <div id="spotifyPageTrack" class="font-black text-lg truncate">Nothing playing</div>
-                                        <div id="spotifyPageArtist" class="text-xs text-gray-400 truncate mt-1">Connect Spotify to search and play music</div>
-                                        <div class="spotify-controls">
-                                            <button onclick="spotifyPreviousTrack()" class="spotify-control">⏮</button>
-                                            <button id="spotifyPagePlayButton" onclick="spotifyTogglePlayback()" class="spotify-control primary">▶</button>
-                                            <button onclick="spotifyNextTrack()" class="spotify-control">⏭</button>
-                                            <button onclick="spotifyDisconnect()" class="spotify-control">DISCONNECT</button>
+                            <div class="spotify-app-grid">
+                                <aside class="spotify-library-nav">
+                                    <button id="spotifyNavSearch" class="spotify-nav-button active" onclick="spotifyShowView('search')">⌕ Search</button>
+                                    <button id="spotifyNavPlaylists" class="spotify-nav-button" onclick="spotifyShowView('playlists')">♫ Your Playlists</button>
+                                    <button id="spotifyNavRecent" class="spotify-nav-button" onclick="spotifyShowView('recent')">↻ Recently Played</button>
+                                </aside>
+
+                                <section class="spotify-main-view">
+                                    <div class="spotify-now mb-4">
+                                        <img id="spotifyPageArt" alt="">
+                                        <div class="min-w-0">
+                                            <div id="spotifyPageTrack" class="font-black text-lg truncate">Nothing playing</div>
+                                            <div id="spotifyPageArtist" class="text-xs text-gray-400 truncate mt-1">Connect Spotify to start</div>
+                                            <div class="spotify-controls">
+                                                <button onclick="spotifyPreviousTrack()" class="spotify-control">⏮</button>
+                                                <button id="spotifyPagePlayButton" onclick="spotifyTogglePlayback()" class="spotify-control primary">▶</button>
+                                                <button onclick="spotifyNextTrack()" class="spotify-control">⏭</button>
+                                            </div>
                                         </div>
                                     </div>
-                                </div>
 
-                                <div class="spotify-search-row">
-                                    <input id="spotifyPageSearchInput" type="text" placeholder="Search Spotify for any song..." onkeydown="if(event.key==='Enter') spotifySearch('page')" class="smash-input flex-1 px-4 py-3 rounded-xl text-sm">
-                                    <button onclick="spotifySearch('page')" class="dock-action green" style="width:auto">SEARCH</button>
-                                </div>
-                                <div id="spotifyPageResults" class="spotify-results"></div>
+                                    <div id="spotifySearchView">
+                                        <div class="spotify-view-title">Search Spotify</div>
+                                        <div class="spotify-search-row" style="margin-top:0">
+                                            <input id="spotifyPageSearchInput" type="text" placeholder="What do you want to listen to?" onkeydown="if(event.key==='Enter') spotifySearch('page')" class="smash-input flex-1 px-4 py-3 rounded-xl text-sm">
+                                            <button onclick="spotifySearch('page')" class="dock-action green" style="width:auto">SEARCH</button>
+                                        </div>
+                                        <div id="spotifyPageResults" class="spotify-results"></div>
+                                    </div>
+
+                                    <div id="spotifyPlaylistsView" class="hidden">
+                                        <div class="flex justify-between items-center gap-2">
+                                            <div class="spotify-view-title">Your Playlists</div>
+                                            <button onclick="spotifyLoadPlaylists()" class="spotify-control">↻</button>
+                                        </div>
+                                        <div id="spotifyPlaylistResults" class="spotify-results"></div>
+                                    </div>
+
+                                    <div id="spotifyRecentView" class="hidden">
+                                        <div class="flex justify-between items-center gap-2">
+                                            <div class="spotify-view-title">Recently Played</div>
+                                            <button onclick="spotifyLoadRecent()" class="spotify-control">↻</button>
+                                        </div>
+                                        <div id="spotifyRecentResults" class="spotify-results"></div>
+                                    </div>
+                                </section>
                             </div>
                         </div>
                     </div>
