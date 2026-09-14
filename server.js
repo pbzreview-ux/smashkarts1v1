@@ -2018,6 +2018,7 @@ io.on('connection', socket => {
         saveHistory();
         const target = findSocketByUsername(account.username);
         if (target) io.to(target.id).emit('account_state_changed', publicAccountState(account));
+        socket.emit('moderation_action_complete', { username: account.username, action, bannedUntil: account.bannedUntil, mutedUntil: account.mutedUntil });
         socket.emit('admin_refresh');
     });
 
@@ -4748,40 +4749,159 @@ function installV12Platform() {
     }
 
     // ------------------------------------------------------------------
-    // PUBLIC PROFILE PAGE
+    // PROFILE OVERLAY
+    // Clicking any PFP/name opens one overlay instead of replacing the page.
+    // OWNER/DEV and MOD users also get quick moderation controls here.
     // ------------------------------------------------------------------
-    function injectProfilePage() {
-        if (document.getElementById('profileTab')) return;
-        const setup = document.getElementById('setupTab');
-        if (!setup?.parentElement) return;
-        const tab = document.createElement('div');
-        tab.id = 'profileTab';
-        tab.className = 'tab-content hidden space-y-4';
-        tab.innerHTML = `<button id="profileBackButton" class="v12-small-btn">← BACK</button><div id="profilePageContent" class="hub-card"><div class="text-center text-blue-200 text-xs py-10">Loading profile…</div></div>`;
-        setup.parentElement.insertBefore(tab, setup);
-        tab.querySelector('#profileBackButton').onclick = () => showTab('messagesTab');
+    let lastOpenedProfileUsername = null;
+
+    function injectProfileOverlay() {
+        if (document.getElementById('profileOverlayModal')) return;
+        const modal = document.createElement('div');
+        modal.id = 'profileOverlayModal';
+        modal.className = 'hidden fixed inset-0 modal-overlay z-[110] flex items-center justify-center p-4 exclusive-modal';
+        modal.innerHTML = `
+            <div class="v12-modal-card w-full max-w-2xl p-5 max-h-[92vh] overflow-y-auto">
+                <div class="flex justify-between items-center gap-3 mb-3">
+                    <div>
+                        <div class="font-bungee text-lg text-yellow-300">PLAYER PROFILE</div>
+                        <div class="text-[10px] text-blue-200">Profile overlay</div>
+                    </div>
+                    <button id="profileOverlayClose" class="v12-small-btn red">✕ CLOSE</button>
+                </div>
+                <div id="profileOverlayContent"><div class="text-center text-blue-200 text-xs py-10">Loading profile…</div></div>
+            </div>`;
+        document.body.appendChild(modal);
+        modal.querySelector('#profileOverlayClose').onclick = () => modal.classList.add('hidden');
+        modal.addEventListener('click', event => {
+            if (event.target === modal) modal.classList.add('hidden');
+        });
     }
 
     window.openPlayerProfile = function (username) {
         if (!username) return;
-        injectProfilePage();
-        document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
-        document.querySelectorAll('.sidebar-btn').forEach(btn => btn.classList.remove('active'));
-        document.getElementById('profileTab')?.classList.remove('hidden');
-        const content = document.getElementById('profilePageContent');
+        lastOpenedProfileUsername = username;
+        injectProfileOverlay();
+        document.querySelectorAll('.exclusive-modal').forEach(el => {
+            if (el.id !== 'profileOverlayModal') el.classList.add('hidden');
+        });
+        const modal = document.getElementById('profileOverlayModal');
+        const content = document.getElementById('profileOverlayContent');
         if (content) content.innerHTML = '<div class="text-center text-blue-200 text-xs py-10">Loading profile…</div>';
+        modal?.classList.remove('hidden');
         socket.emit('get_public_profile', { username });
     };
 
+    window.openMyProfile = function () {
+        const username = accountState?.username || AuthSession.getUser()?.username;
+        const session = secureSession();
+        if (!session || !username || /^Guest-/i.test(username)) {
+            showToast('Log in to a saved account to open your full profile.', '👤');
+            openOptionalLogin();
+            return;
+        }
+        openPlayerProfile(username);
+    };
+
+    function profileQuickModeration(profile, content) {
+        const canModerate = !!(accountState?.roles?.owner || accountState?.roles?.moderator);
+        const targetIsOwner = !!profile?.roles?.owner;
+        const isSelf = String(profile?.username || '').toLowerCase() === String(accountState?.username || '').toLowerCase();
+        if (!canModerate || targetIsOwner || isSelf) return;
+
+        const section = document.createElement('div');
+        section.className = 'v12-section';
+        section.innerHTML = `
+            <div class="v12-section-title">🛡 MODERATION TOOLS</div>
+            <div class="text-[10px] text-blue-200 mb-2">Only DEV/MOD accounts can see these controls.</div>
+            <input id="profileModReason" class="smash-input w-full px-3 py-2 rounded-xl text-xs" placeholder="Reason / moderation note">
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-2">
+                <button id="profileWarnBtn" class="v12-small-btn yellow">WARN</button>
+                <button id="profileMuteBtn" class="v12-small-btn">MUTE 1H</button>
+                <button id="profileKickBtn" class="v12-small-btn red">KICK</button>
+                <button id="profileBanBtn" class="v12-small-btn red">🚫 BAN</button>
+            </div>
+            <div id="profileBanOptions" class="hidden mt-3 p-3 rounded-xl border border-red-400/30 bg-red-950/30">
+                <div class="text-[10px] font-black text-red-200 mb-2">BAN ${escapeHTML(profile.username)}</div>
+                <select id="profileBanDuration" class="smash-input w-full px-3 py-2 rounded-xl text-xs">
+                    <option value="3600000">1 hour</option>
+                    <option value="86400000">24 hours</option>
+                    <option value="604800000">7 days</option>
+                    <option value="permanent">Permanent</option>
+                </select>
+                <div class="flex gap-2 mt-2">
+                    <button id="profileConfirmBan" class="v12-small-btn red flex-1">CONFIRM BAN</button>
+                    <button id="profileCancelBan" class="v12-small-btn flex-1">CANCEL</button>
+                </div>
+            </div>
+            ${accountState?.roles?.owner ? '<button id="profileOpenAdminBtn" class="v12-small-btn purple mt-3">OPEN FULL DEV CONTROLS</button>' : ''}`;
+        content.appendChild(section);
+
+        const reason = () => String(section.querySelector('#profileModReason')?.value || '').trim();
+        const send = (action, duration = null) => socket.emit('admin_moderation_action', {
+            username: profile.username,
+            action,
+            duration,
+            reason: reason() || `${action} by ${accountState?.roles?.owner ? 'OWNER / DEV' : 'MOD'}`
+        });
+
+        section.querySelector('#profileWarnBtn').onclick = () => send('warn');
+        section.querySelector('#profileMuteBtn').onclick = () => send('mute', '3600000');
+        section.querySelector('#profileKickBtn').onclick = () => {
+            if (confirm(`Kick ${profile.username} from the website now?`)) send('kick');
+        };
+        const options = section.querySelector('#profileBanOptions');
+        section.querySelector('#profileBanBtn').onclick = () => options.classList.remove('hidden');
+        section.querySelector('#profileCancelBan').onclick = () => options.classList.add('hidden');
+        section.querySelector('#profileConfirmBan').onclick = () => {
+            const select = section.querySelector('#profileBanDuration');
+            const duration = select?.value || 'permanent';
+            const label = duration === 'permanent' ? 'PERMANENTLY' : (select?.selectedOptions?.[0]?.textContent || 'temporarily');
+            if (!confirm(`Ban ${profile.username} ${label}?`)) return;
+            send('ban', duration);
+            options.classList.add('hidden');
+        };
+        const openAdmin = section.querySelector('#profileOpenAdminBtn');
+        if (openAdmin) openAdmin.onclick = () => {
+            document.getElementById('profileOverlayModal')?.classList.add('hidden');
+            adminSelectedUsername = profile.username;
+            openAdminPanel();
+        };
+    }
+
     socket.on('public_profile', profile => {
-        const content = document.getElementById('profilePageContent');
-        if (!content || document.getElementById('profileTab')?.classList.contains('hidden')) return;
+        const modal = document.getElementById('profileOverlayModal');
+        const content = document.getElementById('profileOverlayContent');
+        if (!content || !modal || modal.classList.contains('hidden')) return;
         if (!profile) {
             content.innerHTML = '<div class="text-center text-red-200 text-xs py-10">Profile not found.</div>';
             return;
         }
-        const avatar = profile.avatar ? `<img src="${profile.avatar}" alt="">` : escapeHTML(String(profile.username || '?').slice(0,2).toUpperCase());
-        content.innerHTML = `<div class="v12-profile-hero"><div class="v12-profile-avatar">${avatar}</div><div><div class="flex gap-2 items-center flex-wrap"><h2 class="font-bungee text-2xl text-white">${escapeHTML(profile.username)}</h2>${badgeHTML(profile.roles)}${profile.streamerLive ? '<span class="v12-role-badge streamer">● LIVE</span>' : ''}</div><div class="text-yellow-300 font-black mt-2">LEVEL ${profile.level}</div><div class="text-xs text-blue-200 mt-1">${profile.online ? '🟢 Online' : '⚫ Offline'}${profile.playing ? ` · Playing ${escapeHTML(profile.playing)}` : ''}</div></div></div><div class="v12-stat-grid"><div class="v12-stat"><b>${profile.rating1v1}</b><span>1v1 Rating</span></div><div class="v12-stat"><b>${profile.ratingFFA}</b><span>FFA Rating</span></div><div class="v12-stat"><b>${profile.matches}</b><span>Matches</span></div><div class="v12-stat"><b>${profile.friendsCount}</b><span>Friends</span></div></div><div class="v12-section"><div class="v12-section-title">Music privacy</div><div class="text-xs text-blue-200">${profile.canSeeMusic ? 'You are friends, so shared Spotify activity can appear here when enabled.' : 'Currently-playing music is visible to friends only.'}</div></div>`;
+        lastOpenedProfileUsername = profile.username;
+        const avatar = profile.avatar
+            ? `<img src="${profile.avatar}" alt="${escapeHTML(profile.username)} profile picture">`
+            : escapeHTML(String(profile.username || '?').slice(0,2).toUpperCase());
+        content.innerHTML = `
+            <div class="v12-profile-hero">
+                <div class="v12-profile-avatar">${avatar}</div>
+                <div>
+                    <div class="flex gap-2 items-center flex-wrap">
+                        <h2 class="font-bungee text-2xl text-white">${escapeHTML(profile.username)}</h2>
+                        ${badgeHTML(profile.roles)}
+                        ${profile.streamerLive ? '<span class="v12-role-badge streamer">● LIVE</span>' : ''}
+                    </div>
+                    <div class="text-yellow-300 font-black mt-2">LEVEL ${profile.level}</div>
+                    <div class="text-xs text-blue-200 mt-1">${profile.online ? '🟢 Online' : '⚫ Offline'}${profile.playing ? ` · Playing ${escapeHTML(profile.playing)}` : ''}</div>
+                </div>
+            </div>
+            <div class="v12-stat-grid">
+                <div class="v12-stat"><b>${profile.rating1v1}</b><span>1v1 Rating</span></div>
+                <div class="v12-stat"><b>${profile.ratingFFA}</b><span>FFA Rating</span></div>
+                <div class="v12-stat"><b>${profile.matches}</b><span>Matches</span></div>
+                <div class="v12-stat"><b>${profile.friendsCount}</b><span>Friends</span></div>
+            </div>
+            <div class="v12-section"><div class="v12-section-title">Music privacy</div><div class="text-xs text-blue-200">${profile.canSeeMusic ? 'You are friends, so shared Spotify activity can appear here when enabled.' : 'Currently-playing music is visible to friends only.'}</div></div>`;
+        profileQuickModeration(profile, content);
     });
 
     // Make Online Players names/PFPs open the full profile page.
@@ -5307,14 +5427,14 @@ function installV12Platform() {
         const reports=document.getElementById('adminReports');if(reports){reports.replaceChildren();(data.reports||[]).slice(0,50).forEach(report=>{const row=document.createElement('div');row.className='p-2 border-b border-white/10 text-[10px]';row.innerHTML=`<div><b>${escapeHTML(report.reporter)}</b> reported <b>${escapeHTML(report.reportedUser)}</b> · ${escapeHTML(report.location)} · <span class="v12-pill">${escapeHTML(report.status)}</span></div><div class="text-blue-200 mt-1">${escapeHTML(report.reason)}</div><div class="mt-1">${(report.context||[]).map(c=>`<div>${escapeHTML(c.senderUsername)}: ${escapeHTML(c.message)}</div>`).join('')}</div>`;if(report.status==='open'){const a=document.createElement('div');a.className='flex gap-1 mt-2';['resolved','dismissed'].forEach(status=>{const b=document.createElement('button');b.className='v12-small-btn';b.textContent=status.toUpperCase();b.onclick=()=>socket.emit('resolve_report',{reportId:report.id,status});a.appendChild(b);});row.appendChild(a);}reports.appendChild(row);});}
         const audit=document.getElementById('adminAudit');if(audit){audit.innerHTML=(data.audit||[]).slice(0,100).map(item=>`<div class="text-[9px] py-1 border-b border-white/10"><b>${escapeHTML(item.actor)}</b> · ${escapeHTML(item.action)} · ${escapeHTML(item.target)}<div class="text-blue-300">${new Date(item.timestamp).toLocaleString()} ${escapeHTML(item.details||'')}</div></div>`).join('');}
     }
-    socket.on('admin_dashboard',renderAdminDashboard);socket.on('admin_refresh',()=>socket.emit('admin_get_dashboard'));socket.on('admin_error',data=>showToast(data?.message||'Admin action failed.','❌'));socket.on('moderation_report_received',()=>{if(accountState?.roles?.owner)showToast('New moderation report.','🛡️');});
+    socket.on('admin_dashboard',renderAdminDashboard);socket.on('admin_refresh',()=>socket.emit('admin_get_dashboard'));socket.on('admin_error',data=>showToast(data?.message||'Admin action failed.','❌'));socket.on('moderation_action_complete',data=>{const labels={ban:'Banned',unban:'Unbanned',kick:'Kicked',mute:'Muted',unmute:'Unmuted',warn:'Warned',clear_warnings:'Warnings cleared for',reset_avatar:'PFP reset for'};showToast(`${labels[data?.action]||'Updated'} ${data?.username||'player'}.`,'🛡️');if(lastOpenedProfileUsername&&String(lastOpenedProfileUsername||'').toLowerCase()===String(data?.username||'').toLowerCase())setTimeout(()=>socket.emit('get_public_profile',{username:lastOpenedProfileUsername}),150);});socket.on('moderation_report_received',()=>{if(accountState?.roles?.owner)showToast('New moderation report.','🛡️');});
 
     // ------------------------------------------------------------------
     // INITIALIZE
     // ------------------------------------------------------------------
     injectStyles();
     injectGuide();
-    injectProfilePage();
+    injectProfileOverlay();
     injectGroupsUI();
     injectTournamentUI();
     injectStreamerUI();
@@ -5335,6 +5455,10 @@ function installV12Platform() {
     }
 
     injectHeaderBadges();
+    const ownHeaderAvatar = document.getElementById('headerAvatarButton');
+    if (ownHeaderAvatar) { ownHeaderAvatar.onclick = openMyProfile; ownHeaderAvatar.title = 'Open my profile'; }
+    const ownSettingsAvatar = document.getElementById('settingsProfileAvatar');
+    if (ownSettingsAvatar) { ownSettingsAvatar.style.cursor = 'pointer'; ownSettingsAvatar.onclick = openMyProfile; ownSettingsAvatar.title = 'Open my profile'; }
     socket.emit('get_groups');
     socket.emit('get_tournaments');
 
