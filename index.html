@@ -822,8 +822,11 @@
             <div class="hub-card mt-4" style="background:#111827">
                 <div class="flex items-center justify-between gap-3">
                     <div>
-                        <span class="dock-label" style="color:#1ed760">Spotify</span>
-                        <p class="text-[11px] text-gray-300 mt-1">Players only click Connect Spotify. No Client ID box or developer setup appears on the website.</p>
+                        <div class="flex items-center gap-2">
+                            <span class="dock-label" style="color:#1ed760">Spotify</span>
+                            <button type="button" onclick="openSpotifySetupInfo()" title="Spotify setup directions" aria-label="Spotify setup directions" style="width:22px;height:22px;border-radius:999px;border:1px solid #ffffff35;background:#232323;color:#fff;font-weight:1000;font-size:12px;display:grid;place-items:center;cursor:pointer;">i</button>
+                        </div>
+                        <p class="text-[11px] text-gray-300 mt-1">Players only click Connect Spotify. Site-owner setup is explained with the i button.</p>
                     </div>
                     <span id="spotifySettingsStatus" class="text-[10px] font-bold text-gray-300">Not connected</span>
                 </div>
@@ -1243,7 +1246,8 @@
                                 <h2 class="font-bungee text-2xl text-white">🎵 SPOTIFY</h2>
                                 <p class="text-xs text-blue-200">Connect your regular Spotify account, search music, open your playlists and play it from here.</p>
                             </div>
-                            <div class="flex gap-2">
+                            <div class="flex gap-2 items-center">
+                                <button type="button" onclick="openSpotifySetupInfo()" title="Spotify setup directions" aria-label="Spotify setup directions" style="width:34px;height:34px;border-radius:999px;border:1px solid #ffffff35;background:#1d2e58;color:#fff;font-weight:1000;font-size:14px;display:grid;place-items:center;cursor:pointer;">i</button>
                                 <button id="spotifyPageConnectButton" onclick="spotifyConnect()" class="dock-action green" style="width:auto">CONNECT SPOTIFY</button>
                                 <button onclick="openSpotifyWebsite()" class="dock-action" style="width:auto">OPEN FULL SPOTIFY</button>
                             </div>
@@ -1381,6 +1385,55 @@
         </div>
     </div>
 
+    <!-- Spotify setup directions -->
+    <div id="spotifySetupInfoModal" class="hidden fixed inset-0 modal-overlay z-[80] flex items-center justify-center p-4 exclusive-modal">
+        <div class="w-full max-w-lg bg-[#121212] border-2 border-[#1ed760] rounded-3xl p-6 shadow-2xl text-white">
+            <div class="flex items-start justify-between gap-4 mb-4">
+                <div>
+                    <h3 class="font-bungee text-lg text-[#1ed760]">🎵 SPOTIFY SETUP</h3>
+                    <p class="text-xs text-gray-300 mt-1">This setup is only for the website owner. Regular players never need a Client ID.</p>
+                </div>
+                <button type="button" onclick="closeSpotifySetupInfo()" class="text-white hover:text-red-400 font-bold text-xl">✕</button>
+            </div>
+
+            <div class="space-y-3 text-sm">
+                <div class="bg-white/5 border border-white/10 rounded-2xl p-4">
+                    <div class="font-black text-[#1ed760] mb-2">FOR PLAYERS</div>
+                    <p class="text-gray-200">Just click <strong>Connect Spotify</strong>, sign into your normal Spotify account, and approve access. That is all.</p>
+                </div>
+
+                <div class="bg-white/5 border border-white/10 rounded-2xl p-4">
+                    <div class="font-black text-yellow-300 mb-2">ONE-TIME OWNER SETUP</div>
+                    <ol class="list-decimal pl-5 space-y-2 text-gray-200">
+                        <li>Go to the Spotify Developer Dashboard and create one app for this website.</li>
+                        <li>Copy the app's <strong>Client ID</strong>.</li>
+                        <li>Add this exact Redirect URI to that Spotify app:</li>
+                    </ol>
+
+                    <div class="flex gap-2 mt-3">
+                        <input id="spotifyRedirectHelp" readonly class="smash-input flex-1 px-3 py-2 rounded-xl text-xs" value="">
+                        <button type="button" onclick="copySpotifyRedirectHelp()" class="dock-action green" style="width:auto">COPY</button>
+                    </div>
+
+                    <ol start="4" class="list-decimal pl-5 space-y-2 text-gray-200 mt-3">
+                        <li>In Render, open your web service → <strong>Environment</strong>.</li>
+                        <li>Add <strong>SPOTIFY_CLIENT_ID</strong> as the key and paste your Client ID as the value.</li>
+                        <li>Save/redeploy the service, then refresh this website.</li>
+                    </ol>
+                </div>
+
+                <div class="bg-blue-950/70 border border-blue-400/20 rounded-2xl p-3 text-xs text-blue-100">
+                    Do not put a Spotify Client Secret into the browser. This site uses the browser-safe PKCE login flow.
+                </div>
+            </div>
+
+            <div class="flex gap-2 mt-5">
+                <button type="button" onclick="window.open('https://developer.spotify.com/dashboard','_blank')" class="dock-action green">OPEN SPOTIFY DASHBOARD</button>
+                <button type="button" onclick="closeSpotifySetupInfo()" class="dock-action">DONE</button>
+            </div>
+        </div>
+    </div>
+
     <script src="script.js"></script>
 
     <script>
@@ -1389,6 +1442,34 @@
            The full guest/lobby/music logic comes from server.js after script.js.
         */
         (() => {
+            window.openSpotifySetupInfo = function() {
+                document.querySelectorAll('.exclusive-modal').forEach((el) => {
+                    if (el.id !== 'spotifySetupInfoModal') el.classList.add('hidden');
+                });
+                const modal = document.getElementById('spotifySetupInfoModal');
+                const redirect = document.getElementById('spotifyRedirectHelp');
+                if (redirect) redirect.value = `${location.origin}${location.pathname}`;
+                if (modal) modal.classList.remove('hidden');
+            };
+
+            window.closeSpotifySetupInfo = function() {
+                document.getElementById('spotifySetupInfoModal')?.classList.add('hidden');
+            };
+
+            window.copySpotifyRedirectHelp = async function() {
+                const input = document.getElementById('spotifyRedirectHelp');
+                const text = input?.value || `${location.origin}${location.pathname}`;
+                try {
+                    await navigator.clipboard.writeText(text);
+                    if (typeof showToast === 'function') showToast('Spotify Redirect URI copied.', '📋');
+                } catch {
+                    if (input) {
+                        input.focus();
+                        input.select();
+                    }
+                }
+            };
+
             const screen = document.getElementById('gameScreen');
             const toolbar = document.getElementById('arenaToolbar');
             const menuToggle = document.getElementById('arenaMenuToggle');
