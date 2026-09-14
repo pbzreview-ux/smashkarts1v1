@@ -47,7 +47,8 @@ app.get('/script.js', (req, res) => {
     res.type('application/javascript').send(
         fs.readFileSync(path.join(__dirname, filename), 'utf8') +
         '\nwindow.__SPOTIFY_CLIENT_ID__ = ' + JSON.stringify(String(process.env.SPOTIFY_CLIENT_ID || '').trim()) + ';' +
-        '\n;(' + installMegaArena.toString() + ')();'
+        '\n;(' + installMegaArena.toString() + ')();' +
+        '\n;(' + installV12Platform.toString() + ')();'
     );
 });
 
@@ -72,17 +73,29 @@ const dataFile = path.join(dataDirectory, 'history.json');
 
 const saved = fs.existsSync(dataFile)
     ? JSON.parse(fs.readFileSync(dataFile, 'utf8'))
-    : { profiles: {}, stats: {}, directMessages: {}, matches: {} };
+    : { profiles: {}, stats: {}, directMessages: {}, matches: {}, accounts: {}, sessions: {}, groups: {}, tournaments: {}, reports: [], auditLog: [] };
 
 saved.profiles ||= {};
 saved.stats ||= {};
 saved.directMessages ||= {};
 saved.matches ||= {};
+saved.accounts ||= {};
+saved.sessions ||= {};
+saved.groups ||= {};
+saved.tournaments ||= {};
+if (!Array.isArray(saved.reports)) saved.reports = [];
+if (!Array.isArray(saved.auditLog)) saved.auditLog = [];
 
 const profiles = Object.assign(Object.create(null), saved.profiles);
 const playerStats = Object.assign(Object.create(null), saved.stats);
 const directMessageStore = Object.assign(Object.create(null), saved.directMessages);
 const matchHistory = Object.assign(Object.create(null), saved.matches);
+const accounts = Object.assign(Object.create(null), saved.accounts);
+const authSessionStore = Object.assign(Object.create(null), saved.sessions);
+const groupStore = Object.assign(Object.create(null), saved.groups);
+const tournamentStore = Object.assign(Object.create(null), saved.tournaments);
+const reportStore = saved.reports;
+const auditLog = saved.auditLog;
 
 function saveHistory() {
     const temp = dataFile + '.tmp';
@@ -90,7 +103,13 @@ function saveHistory() {
         profiles,
         stats: playerStats,
         directMessages: directMessageStore,
-        matches: matchHistory
+        matches: matchHistory,
+        accounts,
+        sessions: authSessionStore,
+        groups: groupStore,
+        tournaments: tournamentStore,
+        reports: reportStore,
+        auditLog
     }), { mode: 0o600 });
     fs.renameSync(temp, dataFile);
 }
@@ -308,6 +327,7 @@ function roomSummary(room) {
         hostSocketId: room.hostSocketId,
         winCondition: room.winCondition,
         mode: room.mode,
+        queueType: room.queueType || 'casual',
         maxPlayers: room.maxPlayers,
         players: room.players,
         isPublic: room.isPublic !== false,
@@ -412,6 +432,8 @@ function joinRoom(socket, room, player, eventName = 'room_created') {
             name: player.username,
             isGuest: !!player.isGuest,
             avatar: player.avatar || '',
+            roles: publicRoles(player.roles),
+            level: player.level || 1,
             ready: false,
             team: null,
             joinedAt: Date.now()
@@ -434,6 +456,417 @@ function joinRoom(socket, room, player, eventName = 'room_created') {
     return true;
 }
 
+
+// =========================================================
+// V12 SECURE ACCOUNTS / OWNER / ROLES
+// =========================================================
+const OWNER_EMAIL = String(process.env.OWNER_EMAIL || '').trim().toLowerCase();
+const OWNER_SETUP_KEY = String(process.env.OWNER_SETUP_KEY || '').trim();
+const RESERVED_OWNER_USERNAME = 'PRIME';
+const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
+function normalizeEmail(email) {
+    return String(email || '').trim().toLowerCase();
+}
+
+function normalizeUsernameKey(username) {
+    return String(username || '').trim().toLowerCase();
+}
+
+function isReservedOwnerName(username) {
+    return normalizeUsernameKey(username) === RESERVED_OWNER_USERNAME.toLowerCase();
+}
+
+function validUsername(username) {
+    return /^[A-Za-z0-9_]{3,20}$/.test(String(username || '').trim());
+}
+
+function defaultRoles() {
+    return { owner: false, moderator: false, streamer: false, tourneyHost: false };
+}
+
+function normalizeRoles(roles) {
+    return {
+        owner: !!roles?.owner,
+        moderator: !!roles?.moderator,
+        streamer: !!roles?.streamer,
+        tourneyHost: !!roles?.tourneyHost
+    };
+}
+
+function ensureAccountShape(account) {
+    if (!account) return null;
+    account.roles = normalizeRoles(account.roles);
+    account.xp = Number.isFinite(account.xp) ? account.xp : 0;
+    account.level = Math.max(1, Math.min(200, Number.isFinite(account.level) ? account.level : 1));
+    account.rating1v1 = Number.isFinite(account.rating1v1) ? account.rating1v1 : 1000;
+    account.ratingFFA = Number.isFinite(account.ratingFFA) ? account.ratingFFA : 1000;
+    account.warnings = Number.isFinite(account.warnings) ? account.warnings : 0;
+    account.mutedUntil = account.mutedUntil ?? null;
+    account.bannedUntil = account.bannedUntil ?? null;
+    account.banReason = String(account.banReason || '');
+    account.streamerLive = !!account.streamerLive;
+    account.createdAt ||= Date.now();
+    account.lastLoginAt ||= null;
+    return account;
+}
+
+for (const account of Object.values(accounts)) ensureAccountShape(account);
+
+function accountByEmail(email) {
+    return ensureAccountShape(accounts[normalizeEmail(email)] || null);
+}
+
+function accountByUsername(username) {
+    const key = normalizeUsernameKey(username);
+    return Object.values(accounts).map(ensureAccountShape).find(account => normalizeUsernameKey(account.username) === key) || null;
+}
+
+function publicRoles(roles) {
+    return normalizeRoles(roles);
+}
+
+function publicAccountState(account) {
+    account = ensureAccountShape(account);
+    if (!account) return null;
+    return {
+        username: account.username,
+        email: account.email,
+        roles: publicRoles(account.roles),
+        level: account.level,
+        xp: account.xp,
+        rating1v1: account.rating1v1,
+        ratingFFA: account.ratingFFA,
+        warnings: account.warnings,
+        mutedUntil: account.mutedUntil,
+        bannedUntil: account.bannedUntil,
+        banReason: account.banReason,
+        streamerLive: !!account.streamerLive,
+        createdAt: account.createdAt
+    };
+}
+
+function publicProfileState(username, viewer = null) {
+    const account = accountByUsername(username);
+    if (!account) return null;
+    const profile = profileFor(account.username);
+    const onlinePlayer = findSocketByUsername(account.username);
+    const activeRoom = Array.from(activeRoomsMap.values()).find(room => room.players.some(p => p.name === account.username));
+    return {
+        username: account.username,
+        avatar: profile.avatar || '',
+        roles: publicRoles(account.roles),
+        level: account.level,
+        rating1v1: account.rating1v1,
+        ratingFFA: account.ratingFFA,
+        matches: playerStats[account.username] || 0,
+        friendsCount: (profile.friends || []).length,
+        online: !!onlinePlayer && onlinePlayer.isOnline !== false,
+        playing: activeRoom ? String(activeRoom.mode || '').toUpperCase() : '',
+        streamerLive: !!account.streamerLive,
+        canSeeMusic: !!viewer && !viewer.isGuest && usersAreFriends(viewer.username, account.username)
+    };
+}
+
+function passwordHash(password, salt) {
+    return crypto.scryptSync(String(password), salt, 64).toString('hex');
+}
+
+function passwordMatches(account, password) {
+    if (!account?.passwordHash || !account?.passwordSalt) return false;
+    const actual = Buffer.from(passwordHash(password, account.passwordSalt), 'hex');
+    const expected = Buffer.from(account.passwordHash, 'hex');
+    return actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
+}
+
+function hashSessionToken(token) {
+    return crypto.createHash('sha256').update(String(token || '')).digest('hex');
+}
+
+function issueSessionToken(email) {
+    const raw = crypto.randomBytes(32).toString('hex');
+    authSessionStore[hashSessionToken(raw)] = {
+        email: normalizeEmail(email),
+        expiresAt: Date.now() + SESSION_TTL_MS
+    };
+    saveHistory();
+    return raw;
+}
+
+function accountFromToken(token) {
+    const hash = hashSessionToken(token);
+    const record = authSessionStore[hash];
+    if (!record) return null;
+    if (!record.expiresAt || record.expiresAt < Date.now()) {
+        delete authSessionStore[hash];
+        saveHistory();
+        return null;
+    }
+    const account = accountByEmail(record.email);
+    if (!account) {
+        delete authSessionStore[hash];
+        saveHistory();
+        return null;
+    }
+    return { account, hash };
+}
+
+function revokeSessionToken(token) {
+    const hash = hashSessionToken(token);
+    if (authSessionStore[hash]) {
+        delete authSessionStore[hash];
+        saveHistory();
+    }
+}
+
+function banIsActive(account) {
+    if (!account?.bannedUntil) return false;
+    return account.bannedUntil === -1 || account.bannedUntil > Date.now();
+}
+
+function muteIsActive(account) {
+    if (!account?.mutedUntil) return false;
+    return account.mutedUntil === -1 || account.mutedUntil > Date.now();
+}
+
+function isOwnerPlayer(player) {
+    return !!player?.roles?.owner;
+}
+
+function isModeratorPlayer(player) {
+    return !!player && (player.roles?.owner || player.roles?.moderator);
+}
+
+function canHostTournament(player) {
+    return !!player && (player.roles?.owner || player.roles?.tourneyHost);
+}
+
+function roleBadges(roles) {
+    const r = normalizeRoles(roles);
+    const badges = [];
+    if (r.owner) badges.push('DEV');
+    if (r.moderator) badges.push('MOD');
+    if (r.streamer) badges.push('STREAMER');
+    if (r.tourneyHost) badges.push('TOURNEY HOST');
+    return badges;
+}
+
+function logAudit(actor, action, target = '', details = '') {
+    auditLog.unshift({
+        id: crypto.randomUUID(),
+        actor: actor?.username || 'SYSTEM',
+        action: String(action || ''),
+        target: String(target || ''),
+        details: String(details || '').slice(0, 600),
+        timestamp: Date.now()
+    });
+    if (auditLog.length > 1000) auditLog.length = 1000;
+    saveHistory();
+}
+
+function syncAccountProgress(account) {
+    account = ensureAccountShape(account);
+    account.level = Math.max(1, Math.min(200, 1 + Math.floor(account.xp / 250)));
+    return account;
+}
+
+function attachAuthenticatedPlayer(socket, account, token = null, resumed = false) {
+    account = ensureAccountShape(account);
+    const player = connectedPlayers[socket.id];
+    if (!player || !account) return;
+
+    const profile = profileFor(account.username);
+    player.username = account.username;
+    player.email = account.email;
+    player.accountEmail = account.email;
+    player.isGuest = false;
+    player.isAuthenticated = true;
+    player.isOnline = profile.isOnline !== false;
+    player.avatar = profile.avatar || '';
+    player.friends = new Set(profile.friends || []);
+    player.friendRequests = new Set(profile.requests || []);
+    player.roles = publicRoles(account.roles);
+    player.level = account.level;
+    player.rating1v1 = account.rating1v1;
+    player.ratingFFA = account.ratingFFA;
+    player.sessionTokenHash = token ? hashSessionToken(token) : null;
+
+    account.lastLoginAt = Date.now();
+
+    for (const room of activeRoomsMap.values()) {
+        const member = room.players.find(p => p.id === socket.id);
+        if (!member) continue;
+        member.name = account.username;
+        member.isGuest = false;
+        member.avatar = player.avatar || '';
+        member.roles = publicRoles(account.roles);
+        member.level = account.level;
+        if (room.hostSocketId === socket.id) room.hostName = account.username;
+        io.to(room.roomId).emit('saved_room_update', room);
+    }
+
+    socket.emit('saved_friends', { friends: profile.friends || [], requests: profile.requests || [] });
+    socket.emit('friend_requests_update', Array.from(player.friendRequests));
+    socket.emit('saved_profile', { avatar: player.avatar || '' });
+    socket.emit('auth_success', {
+        token,
+        resumed,
+        user: publicAccountState(account),
+        badges: roleBadges(account.roles)
+    });
+    socket.emit('session_mode', { username: account.username, isGuest: false, savesStats: true });
+    saveHistory();
+    broadcastOnlineUsers();
+    broadcastPublicRooms();
+}
+
+function attachGuestPlayer(socket, requestedUsername) {
+    const player = connectedPlayers[socket.id];
+    if (!player) return;
+    let username = sanitizeUsername(requestedUsername || randomGuestName());
+    if (isReservedOwnerName(username) || accountByUsername(username)) {
+        const requested = username;
+        username = randomGuestName();
+        socket.emit('username_reserved', { message: isReservedOwnerName(requested) ? 'PRIME is reserved for the site owner.' : 'That username belongs to a saved account. Guests cannot impersonate saved accounts.' });
+    }
+    player.username = username;
+    player.email = null;
+    player.accountEmail = null;
+    player.isGuest = true;
+    player.isAuthenticated = false;
+    player.isOnline = true;
+    player.avatar = '';
+    player.friends = new Set();
+    player.friendRequests = new Set();
+    player.roles = defaultRoles();
+    player.level = 1;
+    player.rating1v1 = 1000;
+    player.ratingFFA = 1000;
+    socket.emit('saved_friends', { friends: [], requests: [] });
+    socket.emit('saved_profile', { avatar: '' });
+    socket.emit('session_mode', { username, isGuest: true, savesStats: false });
+    broadcastOnlineUsers();
+}
+
+function canModerateTarget(actor, targetAccount) {
+    if (!actor || !targetAccount) return false;
+    if (targetAccount.roles?.owner) return false;
+    if (actor.roles?.owner) return true;
+    if (actor.roles?.moderator && !targetAccount.roles?.moderator) return true;
+    return false;
+}
+
+function renameUserEverywhere(oldName, newName) {
+    if (!oldName || !newName || oldName === newName) return;
+
+    if (profiles[oldName]) {
+        profiles[newName] = profiles[oldName];
+        delete profiles[oldName];
+    }
+    if (Object.prototype.hasOwnProperty.call(playerStats, oldName)) {
+        playerStats[newName] = playerStats[oldName];
+        delete playerStats[oldName];
+    }
+
+    for (const profile of Object.values(profiles)) {
+        profile.friends = (profile.friends || []).map(name => normalizeUsernameKey(name) === normalizeUsernameKey(oldName) ? newName : name);
+        profile.requests = (profile.requests || []).map(name => normalizeUsernameKey(name) === normalizeUsernameKey(oldName) ? newName : name);
+    }
+
+    const rebuiltDMs = {};
+    for (const [key, messages] of Object.entries(directMessageStore)) {
+        let names;
+        try { names = JSON.parse(key); } catch { names = []; }
+        if (Array.isArray(names) && names.length === 2) {
+            names = names.map(name => normalizeUsernameKey(name) === normalizeUsernameKey(oldName) ? newName : name);
+            const newKey = getDMKey(names[0], names[1]);
+            rebuiltDMs[newKey] = (rebuiltDMs[newKey] || []).concat(messages.map(message => ({
+                ...message,
+                senderUsername: normalizeUsernameKey(message.senderUsername) === normalizeUsernameKey(oldName) ? newName : message.senderUsername
+            })));
+        } else {
+            rebuiltDMs[key] = messages;
+        }
+    }
+    for (const key of Object.keys(directMessageStore)) delete directMessageStore[key];
+    Object.assign(directMessageStore, rebuiltDMs);
+
+    for (const group of Object.values(groupStore)) {
+        if (group.owner === oldName) group.owner = newName;
+        group.admins = (group.admins || []).map(name => name === oldName ? newName : name);
+        group.members = (group.members || []).map(name => name === oldName ? newName : name);
+        for (const message of group.messages || []) {
+            if (message.senderUsername === oldName) message.senderUsername = newName;
+        }
+    }
+
+    for (const tournament of Object.values(tournamentStore)) {
+        if (tournament.hostUsername === oldName) tournament.hostUsername = newName;
+        tournament.participants = (tournament.participants || []).map(name => name === oldName ? newName : name);
+        tournament.invited = (tournament.invited || []).map(name => name === oldName ? newName : name);
+    }
+
+    for (const room of activeRoomsMap.values()) {
+        if (room.hostName === oldName) room.hostName = newName;
+        for (const member of room.players || []) {
+            if (member.name === oldName) member.name = newName;
+        }
+    }
+}
+
+function safeDurationMs(raw, fallbackMs = 60 * 60 * 1000) {
+    if (raw === 'permanent') return -1;
+    const numeric = Number(raw);
+    return Number.isFinite(numeric) && numeric > 0 ? numeric : fallbackMs;
+}
+
+function tournamentVisibleTo(tournament, player) {
+    if (!tournament || !player) return false;
+    if (tournament.isPublic) return true;
+    if (player.roles?.owner || player.roles?.moderator) return true;
+    if (tournament.hostUsername === player.username) return true;
+    return (tournament.invited || []).includes(player.username) || (tournament.participants || []).includes(player.username);
+}
+
+function tournamentListFor(player) {
+    return Object.values(tournamentStore)
+        .filter(t => tournamentVisibleTo(t, player))
+        .sort((a, b) => (a.startAt || 0) - (b.startAt || 0));
+}
+
+function groupVisibleTo(group, player) {
+    return !!group && !!player && !player.isGuest && (group.members || []).includes(player.username);
+}
+
+function groupSummary(group) {
+    return {
+        id: group.id,
+        name: group.name,
+        owner: group.owner,
+        admins: group.admins || [],
+        members: group.members || [],
+        createdAt: group.createdAt,
+        updatedAt: group.updatedAt || group.createdAt,
+        lastMessage: (group.messages || []).slice(-1)[0] || null
+    };
+}
+
+function reportsForModerators() {
+    return reportStore.slice().sort((a, b) => b.timestamp - a.timestamp);
+}
+
+function broadcastTournamentLists() {
+    for (const player of Object.values(connectedPlayers)) {
+        const socket = io.sockets.sockets.get(player.id);
+        if (!socket) continue;
+        socket.emit('tournament_list', {
+            tournaments: tournamentListFor(player),
+            canCreate: canHostTournament(player),
+            roles: publicRoles(player.roles)
+        });
+    }
+}
+
 // =========================================================
 // SOCKET SERVER
 // =========================================================
@@ -446,66 +879,149 @@ io.on('connection', socket => {
         isGuest: true,
         isOnline: true,
         avatar: '',
+        roles: defaultRoles(),
+        level: 1,
+        rating1v1: 1000,
+        ratingFFA: 1000,
+        accountEmail: null,
         friends: new Set(),
         friendRequests: new Set()
     };
 
     socket.on('set_user_session', userData => {
-        const player = connectedPlayers[socket.id];
-        if (!player) return;
+        // V12: this legacy event is GUEST-ONLY. If an older client claims it
+        // is a saved account, ignore the claim and wait for account_resume.
+        if (userData && userData.isGuest === false) return;
+        const requestedName = userData && userData.username ? userData.username : randomGuestName();
+        attachGuestPlayer(socket, requestedName);
+    });
 
-        const isGuest = !!(userData && userData.isGuest);
-        const username = sanitizeUsername(
-            userData && userData.username ? userData.username : randomGuestName()
-        );
+    socket.on('account_register', payload => {
+        const username = String(payload?.username || '').trim();
+        const email = normalizeEmail(payload?.email);
+        const password = String(payload?.password || '');
+        const ownerSetupKey = String(payload?.ownerSetupKey || '');
 
-        player.username = username;
-        player.email = isGuest ? null : (userData.email || null);
-        player.isGuest = isGuest;
-        player.isAuthenticated = !isGuest;
-        player.isOnline = true;
-
-        if (isGuest) {
-            player.avatar = '';
-            player.friends = new Set();
-            player.friendRequests = new Set();
-            socket.emit('saved_friends', { friends: [], requests: [] });
-            socket.emit('saved_profile', { avatar: '' });
-        } else {
-            const profile = profileFor(username);
-            player.avatar = profile.avatar || '';
-            player.friends = new Set(profile.friends || []);
-            player.friendRequests = new Set(profile.requests || []);
-            player.isOnline = profile.isOnline !== false;
-            socket.emit('saved_friends', {
-                friends: profile.friends || [],
-                requests: profile.requests || []
-            });
-            socket.emit('friend_requests_update', Array.from(player.friendRequests));
-            socket.emit('saved_profile', { avatar: player.avatar || '' });
-            if (!playerStats[username]) playerStats[username] = 0;
-            saveHistory();
+        if (!validUsername(username)) {
+            return socket.emit('auth_error', { message: 'Username must be 3-20 characters using only letters, numbers, or underscore.' });
+        }
+        if (!/^\S+@\S+\.\S+$/.test(email)) {
+            return socket.emit('auth_error', { message: 'Enter a valid email address.' });
+        }
+        if (password.length < 6) {
+            return socket.emit('auth_error', { message: 'Password must be at least 6 characters.' });
+        }
+        if (accountByEmail(email)) {
+            return socket.emit('auth_error', { message: 'That email already has an account. Log in instead.' });
+        }
+        if (accountByUsername(username)) {
+            return socket.emit('auth_error', { message: 'That username is already taken.' });
         }
 
-        // Keep the name fresh inside any live room after guest rename / login.
-        for (const room of activeRoomsMap.values()) {
-            const member = room.players.find(p => p.id === socket.id);
-            if (!member) continue;
-            member.name = username;
-            member.isGuest = isGuest;
-            member.avatar = player.avatar || '';
-            if (room.hostSocketId === socket.id) room.hostName = username;
-            io.to(room.roomId).emit('saved_room_update', room);
+        const wantsPrime = isReservedOwnerName(username);
+        const isOwnerEmail = !!OWNER_EMAIL && email === OWNER_EMAIL;
+
+        if (wantsPrime && !isOwnerEmail) {
+            return socket.emit('auth_error', { message: 'PRIME is reserved exclusively for the site owner.' });
+        }
+        if (isOwnerEmail && !wantsPrime) {
+            return socket.emit('auth_error', { message: 'The configured owner account must use the username PRIME.' });
+        }
+        if (wantsPrime) {
+            if (!OWNER_EMAIL || !OWNER_SETUP_KEY) {
+                return socket.emit('auth_error', { message: 'Owner setup is not configured on the server yet.' });
+            }
+            const a = Buffer.from(ownerSetupKey);
+            const b = Buffer.from(OWNER_SETUP_KEY);
+            if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+                return socket.emit('auth_error', { message: 'Wrong owner setup key. PRIME was not created.' });
+            }
         }
 
-        socket.emit('session_mode', {
-            username,
-            isGuest,
-            savesStats: !isGuest
+        const salt = crypto.randomBytes(16).toString('hex');
+        const account = ensureAccountShape({
+            email,
+            username: wantsPrime ? RESERVED_OWNER_USERNAME : username,
+            passwordSalt: salt,
+            passwordHash: passwordHash(password, salt),
+            roles: wantsPrime ? { owner: true, moderator: false, streamer: false, tourneyHost: false } : defaultRoles(),
+            xp: 0,
+            level: 1,
+            rating1v1: 1000,
+            ratingFFA: 1000,
+            warnings: 0,
+            mutedUntil: null,
+            bannedUntil: null,
+            banReason: '',
+            streamerLive: false,
+            createdAt: Date.now(),
+            lastLoginAt: Date.now()
         });
 
+        accounts[email] = account;
+        profileFor(account.username);
+        const token = issueSessionToken(email);
+        logAudit({ username: account.username }, wantsPrime ? 'OWNER_ACCOUNT_CREATED' : 'ACCOUNT_CREATED', account.username, email);
+        attachAuthenticatedPlayer(socket, account, token, false);
+    });
+
+    socket.on('account_login', payload => {
+        const email = normalizeEmail(payload?.email);
+        const password = String(payload?.password || '');
+        const account = accountByEmail(email);
+        if (!account || !passwordMatches(account, password)) {
+            return socket.emit('auth_error', { message: 'Incorrect email or password.' });
+        }
+        if (banIsActive(account)) {
+            const expires = account.bannedUntil === -1 ? 'Permanent' : new Date(account.bannedUntil).toLocaleString();
+            return socket.emit('auth_error', { message: `This account is banned. ${account.banReason || 'No reason given.'} (${expires})` });
+        }
+        const token = issueSessionToken(email);
+        attachAuthenticatedPlayer(socket, account, token, false);
+    });
+
+    socket.on('account_resume', ({ token }) => {
+        const found = accountFromToken(token);
+        if (!found) {
+            return socket.emit('auth_session_invalid', { message: 'Your saved login expired. You can keep playing as a guest or log in again.' });
+        }
+        if (banIsActive(found.account)) {
+            return socket.emit('auth_session_invalid', { message: `This account is banned. ${found.account.banReason || ''}` });
+        }
+        attachAuthenticatedPlayer(socket, found.account, token, true);
+    });
+
+    socket.on('account_logout', ({ token }) => {
+        revokeSessionToken(token);
+        attachGuestPlayer(socket, randomGuestName());
+    });
+
+    socket.on('account_rename', ({ newUsername }) => {
+        const player = connectedPlayers[socket.id];
+        if (!player || player.isGuest) return socket.emit('account_required', { message: 'Log in to rename a saved account.' });
+        const account = accountByEmail(player.accountEmail);
+        if (!account) return;
+        const next = String(newUsername || '').trim();
+        if (!validUsername(next)) return socket.emit('account_rename_error', { message: 'Username must be 3-20 letters, numbers, or underscore.' });
+        if (account.roles.owner && !isReservedOwnerName(next)) {
+            return socket.emit('account_rename_error', { message: 'The OWNER account is permanently named PRIME.' });
+        }
+        if (!account.roles.owner && isReservedOwnerName(next)) {
+            return socket.emit('account_rename_error', { message: 'PRIME is reserved for the OWNER.' });
+        }
+        const collision = accountByUsername(next);
+        if (collision && collision.email !== account.email) {
+            return socket.emit('account_rename_error', { message: 'That username is already taken.' });
+        }
+        const old = account.username;
+        if (old === next) return;
+        renameUserEverywhere(old, next);
+        account.username = next;
+        player.username = next;
+        logAudit(player, 'USERNAME_CHANGED', next, `${old} -> ${next}`);
+        saveHistory();
+        socket.emit('account_renamed', { username: next, user: publicAccountState(account) });
         broadcastOnlineUsers();
-        broadcastLeaderboard();
         broadcastPublicRooms();
     });
 
@@ -619,6 +1135,11 @@ io.on('connection', socket => {
             return;
         }
 
+        const senderAccount = accountByUsername(sender.username);
+        if (muteIsActive(senderAccount)) {
+            return socket.emit('dm_error', { message: 'You are currently muted.' });
+        }
+
         const targetName = sanitizeUsername(targetUsername);
         if (!usersAreFriends(sender.username, targetName)) {
             return socket.emit('dm_error', { message: 'You can only message users on your friends list.' });
@@ -627,12 +1148,13 @@ io.on('connection', socket => {
         const key = getDMKey(sender.username, targetName);
         directMessageStore[key] ||= [];
         const msg = {
+            id: crypto.randomUUID(),
             senderUsername: sender.username,
             message: moderateText(message.trim()),
-            timestamp: Date.now()
+            timestamp: Date.now(),
+            editedAt: null
         };
         directMessageStore[key].push(msg);
-        if (directMessageStore[key].length > 500) directMessageStore[key].shift();
         saveHistory();
 
         const target = findSocketByUsername(targetName);
@@ -673,11 +1195,20 @@ io.on('connection', socket => {
             return;
         }
         playerStats[player.username] = (playerStats[player.username] || 0) + 1;
+        const account = accountByUsername(player.username);
+        if (account) {
+            account.xp += 25;
+            syncAccountProgress(account);
+            player.level = account.level;
+        }
         saveHistory();
         broadcastLeaderboard();
+        broadcastOnlineUsers();
         socket.emit('account_match_recorded', {
             saved: true,
-            matches: playerStats[player.username]
+            matches: playerStats[player.username],
+            level: account?.level || 1,
+            xp: account?.xp || 0
         });
     });
 
@@ -726,8 +1257,8 @@ io.on('connection', socket => {
             isPublic: false,
             createdAt: Date.now(),
             players: [
-                { id: challengerSocketId, name: challenger.username, isGuest: challenger.isGuest, avatar: challenger.avatar || '', ready: false, team: null, joinedAt: Date.now() },
-                { id: socket.id, name: sanitizeUsername(targetUsername || player.username), isGuest: player.isGuest, avatar: player.avatar || '', ready: false, team: null, joinedAt: Date.now() }
+                { id: challengerSocketId, name: challenger.username, isGuest: challenger.isGuest, avatar: challenger.avatar || '', roles: publicRoles(challenger.roles), level: challenger.level || 1, ready: false, team: null, joinedAt: Date.now() },
+                { id: socket.id, name: sanitizeUsername(targetUsername || player.username), isGuest: player.isGuest, avatar: player.avatar || '', roles: publicRoles(player.roles), level: player.level || 1, ready: false, team: null, joinedAt: Date.now() }
             ],
             messages: []
         };
@@ -762,6 +1293,7 @@ io.on('connection', socket => {
             smashUrl: cleanUrl,
             winCondition: escapeHTML(data.winCondition || 'First to 3'),
             mode,
+            queueType: data?.queueType === 'ranked' ? 'ranked' : 'casual',
             maxPlayers: 2,
             isPublic: data.isPublic !== false,
             createdAt: Date.now(),
@@ -775,11 +1307,12 @@ io.on('connection', socket => {
     });
 
     // ---------------- FFA ----------------
-    socket.on('play_ffa', () => {
+    socket.on('play_ffa', options => {
         const player = connectedPlayers[socket.id];
         if (!player) return;
+        const wantedQueue = options?.queueType === 'ranked' ? 'ranked' : 'casual';
         const room = Array.from(activeRoomsMap.values()).find(
-            r => r.mode === 'ffa' && r.isPublic !== false && r.players.length < r.maxPlayers
+            r => r.mode === 'ffa' && r.isPublic !== false && r.players.length < r.maxPlayers && (r.queueType || 'casual') === wantedQueue
         );
         if (!room) {
             return socket.emit('ffa_no_lobby', {
@@ -804,6 +1337,7 @@ io.on('connection', socket => {
             smashUrl: 'https://smashkarts.io',
             winCondition: 'Free for all',
             mode: 'ffa',
+            queueType: options?.queueType === 'ranked' ? 'ranked' : 'casual',
             maxPlayers,
             isPublic: !(options && options.isPublic === false),
             createdAt: Date.now(),
@@ -947,6 +1481,9 @@ io.on('connection', socket => {
         const room = activeRoomsMap.get(roomId);
         const player = connectedPlayers[socket.id];
         if (!room || !player || !socket.rooms.has(roomId)) return;
+        if (!player.isGuest && muteIsActive(accountByUsername(player.username))) {
+            return socket.emit('room_error', { message: 'You are currently muted.' });
+        }
         if (typeof message !== 'string' || !message.trim()) return;
 
         const msg = {
@@ -1005,6 +1542,539 @@ io.on('connection', socket => {
         broadcastOnlineUsers();
     });
 
+
+    // ---------------- V12 PUBLIC PROFILES ----------------
+    socket.on('get_public_profile', ({ username }) => {
+        const viewer = connectedPlayers[socket.id];
+        const profile = publicProfileState(username, viewer);
+        socket.emit('public_profile', profile || null);
+    });
+
+    // ---------------- V12 DIRECT MESSAGE EDIT / DELETE / REPORT ----------------
+    socket.on('edit_direct_message', ({ targetUsername, messageId, message }) => {
+        const sender = connectedPlayers[socket.id];
+        if (!sender || sender.isGuest || !messageId || typeof message !== 'string' || !message.trim()) return;
+        const targetName = sanitizeUsername(targetUsername);
+        if (!usersAreFriends(sender.username, targetName)) return;
+        const key = getDMKey(sender.username, targetName);
+        const history = directMessageStore[key] || [];
+        const item = history.find(entry => entry.id === messageId && entry.senderUsername === sender.username);
+        if (!item) return;
+        item.message = moderateText(message.trim());
+        item.editedAt = Date.now();
+        saveHistory();
+        const payload = { targetUsername: targetName, history };
+        socket.emit('dm_history_updated', payload);
+        const target = findSocketByUsername(targetName);
+        if (target) io.to(target.id).emit('dm_history_updated', { targetUsername: sender.username, history });
+    });
+
+    socket.on('delete_direct_message', ({ targetUsername, messageId }) => {
+        const sender = connectedPlayers[socket.id];
+        if (!sender || sender.isGuest || !messageId) return;
+        const targetName = sanitizeUsername(targetUsername);
+        const key = getDMKey(sender.username, targetName);
+        const history = directMessageStore[key] || [];
+        const index = history.findIndex(entry => entry.id === messageId && entry.senderUsername === sender.username);
+        if (index < 0) return;
+        history.splice(index, 1);
+        saveHistory();
+        socket.emit('dm_history_updated', { targetUsername: targetName, history });
+        const target = findSocketByUsername(targetName);
+        if (target) io.to(target.id).emit('dm_history_updated', { targetUsername: sender.username, history });
+    });
+
+    socket.on('report_message', ({ type, targetUsername, groupId, messageId, reason }) => {
+        const reporter = connectedPlayers[socket.id];
+        if (!reporter || reporter.isGuest || !messageId) return;
+        let source = [];
+        let context = [];
+        let reported = null;
+        let location = '';
+
+        if (type === 'group') {
+            const group = groupStore[groupId];
+            if (!groupVisibleTo(group, reporter)) return;
+            source = group.messages || [];
+            location = `Group: ${group.name}`;
+        } else {
+            const targetName = sanitizeUsername(targetUsername);
+            if (!usersAreFriends(reporter.username, targetName)) return;
+            source = directMessageStore[getDMKey(reporter.username, targetName)] || [];
+            location = `DM with ${targetName}`;
+        }
+
+        const index = source.findIndex(entry => entry.id === messageId);
+        if (index < 0) return;
+        reported = source[index];
+        context = source.slice(Math.max(0, index - 2), Math.min(source.length, index + 3)).map(entry => ({
+            id: entry.id,
+            senderUsername: entry.senderUsername,
+            message: entry.message,
+            timestamp: entry.timestamp
+        }));
+
+        const report = {
+            id: crypto.randomUUID(),
+            reporter: reporter.username,
+            reportedUser: reported.senderUsername,
+            messageId,
+            reason: String(reason || 'No reason given').slice(0, 300),
+            location,
+            context,
+            status: 'open',
+            timestamp: Date.now()
+        };
+        reportStore.push(report);
+        saveHistory();
+        socket.emit('report_submitted', { id: report.id });
+        for (const mod of Object.values(connectedPlayers)) {
+            if (isModeratorPlayer(mod)) io.to(mod.id).emit('moderation_report_received', report);
+        }
+    });
+
+    // ---------------- V12 GROUP CHATS ----------------
+    socket.on('get_groups', () => {
+        const player = connectedPlayers[socket.id];
+        if (!player || player.isGuest) return socket.emit('group_list', []);
+        socket.emit('group_list', Object.values(groupStore).filter(group => groupVisibleTo(group, player)).map(groupSummary));
+    });
+
+    socket.on('create_group', ({ name, members }) => {
+        const player = connectedPlayers[socket.id];
+        if (!player || player.isGuest) return socket.emit('account_required', { message: 'Log in to create a group.' });
+        const cleanName = String(name || '').trim().slice(0, 40);
+        if (cleanName.length < 2) return socket.emit('group_error', { message: 'Give the group a name.' });
+        const requested = Array.isArray(members) ? members : [];
+        const unique = [];
+        for (const raw of requested) {
+            const username = sanitizeUsername(raw);
+            if (username === player.username || unique.includes(username)) continue;
+            if (!usersAreFriends(player.username, username)) continue;
+            if (!accountByUsername(username)) continue;
+            unique.push(username);
+            if (unique.length >= 49) break;
+        }
+        const group = {
+            id: crypto.randomUUID(),
+            name: cleanName,
+            owner: player.username,
+            admins: [],
+            members: [player.username, ...unique],
+            messages: [],
+            createdAt: Date.now(),
+            updatedAt: Date.now()
+        };
+        groupStore[group.id] = group;
+        saveHistory();
+        socket.emit('group_created', groupSummary(group));
+        for (const memberName of group.members) {
+            const member = findSocketByUsername(memberName);
+            if (member) io.to(member.id).emit('group_list_changed');
+        }
+    });
+
+    socket.on('open_group', ({ groupId }) => {
+        const player = connectedPlayers[socket.id];
+        const group = groupStore[groupId];
+        if (!groupVisibleTo(group, player)) return socket.emit('group_error', { message: 'You do not have access to that group.' });
+        socket.emit('group_snapshot', group);
+    });
+
+    socket.on('send_group_message', ({ groupId, message }) => {
+        const player = connectedPlayers[socket.id];
+        const group = groupStore[groupId];
+        if (!groupVisibleTo(group, player) || typeof message !== 'string' || !message.trim()) return;
+        const account = accountByUsername(player.username);
+        if (muteIsActive(account)) return socket.emit('group_error', { message: 'You are currently muted.' });
+        const msg = {
+            id: crypto.randomUUID(),
+            senderUsername: player.username,
+            message: moderateText(message.trim()),
+            timestamp: Date.now(),
+            editedAt: null
+        };
+        group.messages ||= [];
+        group.messages.push(msg);
+        group.updatedAt = Date.now();
+        saveHistory();
+        for (const memberName of group.members) {
+            const member = findSocketByUsername(memberName);
+            if (!member) continue;
+            io.to(member.id).emit('group_message', { groupId, message: msg, group });
+            if (memberName !== player.username && msg.message.toLowerCase().includes('@' + memberName.toLowerCase())) {
+                io.to(member.id).emit('group_mention', { groupId, groupName: group.name, from: player.username, message: msg.message });
+            }
+        }
+    });
+
+    socket.on('edit_group_message', ({ groupId, messageId, message }) => {
+        const player = connectedPlayers[socket.id];
+        const group = groupStore[groupId];
+        if (!groupVisibleTo(group, player) || !messageId || typeof message !== 'string' || !message.trim()) return;
+        const item = (group.messages || []).find(entry => entry.id === messageId && entry.senderUsername === player.username);
+        if (!item) return;
+        item.message = moderateText(message.trim());
+        item.editedAt = Date.now();
+        group.updatedAt = Date.now();
+        saveHistory();
+        for (const memberName of group.members) {
+            const member = findSocketByUsername(memberName);
+            if (member) io.to(member.id).emit('group_snapshot', group);
+        }
+    });
+
+    socket.on('delete_group_message', ({ groupId, messageId }) => {
+        const player = connectedPlayers[socket.id];
+        const group = groupStore[groupId];
+        if (!groupVisibleTo(group, player) || !messageId) return;
+        const index = (group.messages || []).findIndex(entry => entry.id === messageId && entry.senderUsername === player.username);
+        if (index < 0) return;
+        group.messages.splice(index, 1);
+        group.updatedAt = Date.now();
+        saveHistory();
+        for (const memberName of group.members) {
+            const member = findSocketByUsername(memberName);
+            if (member) io.to(member.id).emit('group_snapshot', group);
+        }
+    });
+
+    socket.on('group_member_action', ({ groupId, targetUsername, action }) => {
+        const player = connectedPlayers[socket.id];
+        const group = groupStore[groupId];
+        if (!groupVisibleTo(group, player)) return;
+        const canManage = group.owner === player.username || (group.admins || []).includes(player.username);
+        if (!canManage) return;
+        const target = sanitizeUsername(targetUsername);
+        if (!group.members.includes(target) || target === group.owner) return;
+        if (action === 'remove') {
+            group.members = group.members.filter(name => name !== target);
+            group.admins = (group.admins || []).filter(name => name !== target);
+        } else if (action === 'make_admin' && group.owner === player.username) {
+            if (!group.admins.includes(target)) group.admins.push(target);
+        } else if (action === 'remove_admin' && group.owner === player.username) {
+            group.admins = group.admins.filter(name => name !== target);
+        }
+        group.updatedAt = Date.now();
+        saveHistory();
+        for (const memberName of [...group.members, target]) {
+            const member = findSocketByUsername(memberName);
+            if (member) io.to(member.id).emit('group_list_changed');
+        }
+    });
+
+    socket.on('create_group_party', ({ groupId, mode, smashUrl }) => {
+        const player = connectedPlayers[socket.id];
+        const group = groupStore[groupId];
+        if (!groupVisibleTo(group, player)) return;
+        const normalizedMode = mode === 'ffa24' ? 'ffa24' : mode === 'ffa12' ? 'ffa12' : '1v1';
+        let cleanUrl = 'https://smashkarts.io';
+        let maxPlayers = 12;
+        let roomMode = 'ffa';
+        if (normalizedMode === '1v1') {
+            cleanUrl = extractSmashUrl(smashUrl);
+            if (!cleanUrl) return socket.emit('group_error', { message: 'Paste a valid Smash Karts link/code for the 1v1 party.' });
+            maxPlayers = 2;
+            roomMode = '1v1';
+        } else if (normalizedMode === 'ffa24') {
+            maxPlayers = 24;
+        }
+
+        leaveAllRoomsExcept(socket);
+        const roomId = crypto.randomUUID();
+        const room = {
+            roomId,
+            hostName: player.username,
+            hostSocketId: socket.id,
+            smashUrl: cleanUrl,
+            winCondition: roomMode === '1v1' ? 'Group 1v1' : 'Group FFA',
+            mode: roomMode,
+            queueType: 'casual',
+            maxPlayers,
+            isPublic: false,
+            createdAt: Date.now(),
+            groupId,
+            players: [],
+            messages: []
+        };
+        activeRoomsMap.set(roomId, room);
+        addRoomHistory(room);
+        joinRoom(socket, room, player, roomMode === 'ffa' ? 'ffa_lobby_ready' : 'room_created');
+
+        const msg = {
+            id: crypto.randomUUID(),
+            senderUsername: player.username,
+            message: `${player.username} started a ${roomMode === 'ffa' ? `FFA ${maxPlayers}` : '1v1'} party.`,
+            type: 'party',
+            party: { roomId, mode: roomMode, maxPlayers },
+            timestamp: Date.now(),
+            editedAt: null
+        };
+        group.messages ||= [];
+        group.messages.push(msg);
+        group.updatedAt = Date.now();
+        saveHistory();
+        for (const memberName of group.members) {
+            const member = findSocketByUsername(memberName);
+            if (member) io.to(member.id).emit('group_message', { groupId, message: msg, group });
+        }
+    });
+
+    // ---------------- V12 TOURNAMENTS ----------------
+    socket.on('get_tournaments', () => {
+        const player = connectedPlayers[socket.id];
+        if (!player) return;
+        socket.emit('tournament_list', {
+            tournaments: tournamentListFor(player),
+            canCreate: canHostTournament(player),
+            roles: publicRoles(player.roles)
+        });
+    });
+
+    socket.on('create_tournament', payload => {
+        const player = connectedPlayers[socket.id];
+        if (!canHostTournament(player)) return socket.emit('tournament_error', { message: 'You need TOURNEY HOST permission.' });
+        const name = String(payload?.name || '').trim().slice(0, 60);
+        const mode = payload?.mode === 'ffa' ? 'ffa' : '1v1';
+        const capacity = mode === 'ffa' ? (Number(payload?.capacity) === 24 ? 24 : 12) : Math.max(4, Math.min(64, Number(payload?.capacity) || 16));
+        if (name.length < 3) return socket.emit('tournament_error', { message: 'Tournament name is too short.' });
+        const invited = String(payload?.invited || '').split(',').map(s => sanitizeUsername(s.trim())).filter(Boolean);
+        const tournament = {
+            id: crypto.randomUUID(),
+            name,
+            hostUsername: player.username,
+            mode,
+            capacity,
+            isPublic: payload?.isPublic !== false,
+            rules: String(payload?.rules || '').slice(0, 1200),
+            startAt: Number(payload?.startAt) || Date.now(),
+            registrationOpen: true,
+            status: 'registration',
+            invited: [...new Set(invited)],
+            participants: [],
+            bracket: null,
+            createdAt: Date.now()
+        };
+        tournamentStore[tournament.id] = tournament;
+        saveHistory();
+        logAudit(player, 'TOURNAMENT_CREATED', tournament.name, tournament.isPublic ? 'public' : 'private');
+        socket.emit('tournament_created', tournament);
+        for (const invitedName of tournament.invited) {
+            const target = findSocketByUsername(invitedName);
+            if (target) io.to(target.id).emit('tournament_invite', tournament);
+        }
+        broadcastTournamentLists();
+    });
+
+    socket.on('register_tournament', ({ tournamentId }) => {
+        const player = connectedPlayers[socket.id];
+        const tournament = tournamentStore[tournamentId];
+        if (!player || player.isGuest || !tournament || !tournamentVisibleTo(tournament, player)) return;
+        if (!tournament.registrationOpen || tournament.status !== 'registration') return socket.emit('tournament_error', { message: 'Registration is closed.' });
+        if (tournament.participants.includes(player.username)) return;
+        if (tournament.participants.length >= tournament.capacity) return socket.emit('tournament_error', { message: 'Tournament is full.' });
+        tournament.participants.push(player.username);
+        saveHistory();
+        broadcastTournamentLists();
+    });
+
+    socket.on('start_tournament', ({ tournamentId }) => {
+        const player = connectedPlayers[socket.id];
+        const tournament = tournamentStore[tournamentId];
+        if (!tournament || !player) return;
+        const canStart = player.roles?.owner || player.username === tournament.hostUsername;
+        if (!canStart) return;
+        tournament.registrationOpen = false;
+        tournament.status = 'active';
+        const entrants = tournament.participants.slice();
+        if (tournament.mode === '1v1') {
+            const pairs = [];
+            for (let i = 0; i < entrants.length; i += 2) pairs.push({ a: entrants[i] || null, b: entrants[i + 1] || null, winner: null });
+            tournament.bracket = { type: '1v1', rounds: [{ name: 'Round 1', matches: pairs }] };
+        } else {
+            tournament.bracket = tournament.capacity === 24
+                ? { type: 'ffa', heats: [entrants.slice(0, 12), entrants.slice(12, 24)], final: [] }
+                : { type: 'ffa', heats: [entrants.slice(0, 12)], final: entrants.slice(0, 12) };
+        }
+        saveHistory();
+        logAudit(player, 'TOURNAMENT_STARTED', tournament.name, `${entrants.length} entrants`);
+        broadcastTournamentLists();
+    });
+
+    socket.on('invite_tournament_player', ({ tournamentId, username }) => {
+        const player = connectedPlayers[socket.id];
+        const tournament = tournamentStore[tournamentId];
+        if (!player || !tournament) return;
+        if (!(player.roles?.owner || player.username === tournament.hostUsername)) return;
+        const targetName = sanitizeUsername(username);
+        if (!accountByUsername(targetName)) return socket.emit('tournament_error', { message: 'That account was not found.' });
+        tournament.invited ||= [];
+        if (!tournament.invited.includes(targetName)) tournament.invited.push(targetName);
+        saveHistory();
+        const target = findSocketByUsername(targetName);
+        if (target) io.to(target.id).emit('tournament_invite', tournament);
+        broadcastTournamentLists();
+    });
+
+    // ---------------- V12 STREAMER ----------------
+    socket.on('set_streamer_live', ({ live }) => {
+        const player = connectedPlayers[socket.id];
+        if (!player || player.isGuest || !(player.roles?.streamer || player.roles?.owner)) return;
+        const account = accountByEmail(player.accountEmail);
+        if (!account) return;
+        account.streamerLive = !!live;
+        saveHistory();
+        broadcastOnlineUsers();
+        socket.emit('streamer_state', { live: account.streamerLive });
+    });
+
+    // ---------------- V12 ADMIN / MODERATION ----------------
+    socket.on('admin_get_dashboard', () => {
+        const actor = connectedPlayers[socket.id];
+        if (!isOwnerPlayer(actor)) return;
+        socket.emit('admin_dashboard', {
+            users: Object.values(accounts).map(account => ({
+                ...publicAccountState(account),
+                avatar: profileFor(account.username).avatar || '',
+                online: !!findSocketByUsername(account.username),
+                badges: roleBadges(account.roles)
+            })).sort((a, b) => a.username.localeCompare(b.username)),
+            reports: reportsForModerators(),
+            audit: auditLog.slice(0, 200),
+            stats: {
+                accounts: Object.keys(accounts).length,
+                online: Object.values(connectedPlayers).filter(p => !p.isGuest).length,
+                groups: Object.keys(groupStore).length,
+                tournaments: Object.keys(tournamentStore).length,
+                openReports: reportStore.filter(r => r.status === 'open').length
+            }
+        });
+    });
+
+    socket.on('moderation_get_reports', () => {
+        const actor = connectedPlayers[socket.id];
+        if (!isModeratorPlayer(actor)) return;
+        socket.emit('moderation_reports', reportsForModerators());
+    });
+
+    socket.on('admin_set_roles', ({ username, roles }) => {
+        const actor = connectedPlayers[socket.id];
+        if (!isOwnerPlayer(actor)) return;
+        const account = accountByUsername(username);
+        if (!account || account.roles.owner) return;
+        account.roles.moderator = !!roles?.moderator;
+        account.roles.streamer = !!roles?.streamer;
+        account.roles.tourneyHost = !!roles?.tourneyHost;
+        logAudit(actor, 'ROLES_CHANGED', account.username, JSON.stringify(account.roles));
+        saveHistory();
+        const target = findSocketByUsername(account.username);
+        if (target) {
+            target.roles = publicRoles(account.roles);
+            io.to(target.id).emit('account_state_changed', publicAccountState(account));
+        }
+        broadcastOnlineUsers();
+        broadcastTournamentLists();
+        socket.emit('admin_refresh');
+    });
+
+    socket.on('admin_moderation_action', ({ username, action, duration, reason }) => {
+        const actor = connectedPlayers[socket.id];
+        const account = accountByUsername(username);
+        if (!isModeratorPlayer(actor) || !account || !canModerateTarget(actor, account)) return;
+        const now = Date.now();
+        const durationMs = safeDurationMs(duration);
+        if (action === 'warn') {
+            account.warnings += 1;
+        } else if (action === 'mute') {
+            account.mutedUntil = durationMs === -1 ? -1 : now + durationMs;
+        } else if (action === 'unmute') {
+            account.mutedUntil = null;
+        } else if (action === 'ban') {
+            account.bannedUntil = durationMs === -1 ? -1 : now + durationMs;
+            account.banReason = String(reason || 'Banned by moderation').slice(0, 300);
+            const live = findSocketByUsername(account.username);
+            if (live) {
+                io.to(live.id).emit('moderation_notice', { message: `You were banned. ${account.banReason}` });
+                const liveSocket = io.sockets.sockets.get(live.id);
+                if (liveSocket) setTimeout(() => liveSocket.disconnect(true), 150);
+            }
+        } else if (action === 'unban') {
+            account.bannedUntil = null;
+            account.banReason = '';
+        } else if (action === 'reset_avatar') {
+            profileFor(account.username).avatar = '';
+        } else if (action === 'clear_warnings') {
+            account.warnings = 0;
+        } else if (action === 'kick') {
+            const targetSocket = findSocketByUsername(account.username);
+            if (targetSocket) {
+                io.to(targetSocket.id).emit('moderation_notice', { message: reason || 'You were kicked by a moderator.' });
+                targetSocket.socket?.disconnect?.(true);
+                const liveSocket = io.sockets.sockets.get(targetSocket.id);
+                if (liveSocket) liveSocket.disconnect(true);
+            }
+        }
+        logAudit(actor, `MOD_${String(action).toUpperCase()}`, account.username, String(reason || ''));
+        saveHistory();
+        const target = findSocketByUsername(account.username);
+        if (target) io.to(target.id).emit('account_state_changed', publicAccountState(account));
+        socket.emit('admin_refresh');
+    });
+
+    socket.on('admin_set_progress', ({ username, level, rating1v1, ratingFFA }) => {
+        const actor = connectedPlayers[socket.id];
+        if (!isOwnerPlayer(actor)) return;
+        const account = accountByUsername(username);
+        if (!account || account.roles.owner) return;
+        if (Number.isFinite(Number(level))) {
+            account.level = Math.max(1, Math.min(200, Math.round(Number(level))));
+            account.xp = (account.level - 1) * 250;
+        }
+        if (Number.isFinite(Number(rating1v1))) account.rating1v1 = Math.max(0, Math.round(Number(rating1v1)));
+        if (Number.isFinite(Number(ratingFFA))) account.ratingFFA = Math.max(0, Math.round(Number(ratingFFA)));
+        logAudit(actor, 'PROGRESS_CHANGED', account.username, `L${account.level} 1v1:${account.rating1v1} FFA:${account.ratingFFA}`);
+        saveHistory();
+        const target = findSocketByUsername(account.username);
+        if (target) io.to(target.id).emit('account_state_changed', publicAccountState(account));
+        broadcastOnlineUsers();
+        socket.emit('admin_refresh');
+    });
+
+    socket.on('admin_force_username', ({ username, newUsername }) => {
+        const actor = connectedPlayers[socket.id];
+        if (!isOwnerPlayer(actor)) return;
+        const account = accountByUsername(username);
+        if (!account || account.roles.owner) return;
+        const next = String(newUsername || '').trim();
+        if (!validUsername(next) || isReservedOwnerName(next) || accountByUsername(next)) return socket.emit('admin_error', { message: 'That username cannot be used.' });
+        const old = account.username;
+        renameUserEverywhere(old, next);
+        account.username = next;
+        logAudit(actor, 'FORCE_RENAME', next, `${old} -> ${next}`);
+        saveHistory();
+        const target = findSocketByUsername(old);
+        if (target) {
+            target.username = next;
+            io.to(target.id).emit('forced_username_changed', { username: next });
+        }
+        broadcastOnlineUsers();
+        socket.emit('admin_refresh');
+    });
+
+    socket.on('resolve_report', ({ reportId, status }) => {
+        const actor = connectedPlayers[socket.id];
+        if (!isModeratorPlayer(actor)) return;
+        const report = reportStore.find(r => r.id === reportId);
+        if (!report) return;
+        report.status = ['resolved', 'dismissed'].includes(status) ? status : 'resolved';
+        report.resolvedBy = actor.username;
+        report.resolvedAt = Date.now();
+        logAudit(actor, 'REPORT_' + report.status.toUpperCase(), report.reportedUser, report.id);
+        saveHistory();
+        socket.emit('admin_refresh');
+    });
+
+
     socket.on('disconnect', () => {
         for (const roomId of Array.from(activeRoomsMap.keys())) {
             leaveLiveRoom(socket, roomId);
@@ -1023,7 +2093,13 @@ function broadcastOnlineUsers() {
             username: p.username,
             isGuest: !!p.isGuest,
             avatar: p.avatar || '',
-            friends: p.isGuest ? [] : Array.from(p.friends || [])
+            friends: p.isGuest ? [] : Array.from(p.friends || []),
+            roles: publicRoles(p.roles),
+            badges: roleBadges(p.roles),
+            level: p.level || 1,
+            rating1v1: p.rating1v1 || 1000,
+            ratingFFA: p.ratingFFA || 1000,
+            streamerLive: !p.isGuest && !!accountByUsername(p.username)?.streamerLive
         }));
 
     io.emit('online_users_update', {
@@ -3331,4 +4407,939 @@ function installMegaArena() {
     // Ensure the guest/account session reaches the server even if the old
     // DOMContentLoaded handler already ran unusually early.
     updateUserUI();
+}
+
+// ============================================================================
+// V12 PLATFORM LAYER
+// Secure accounts + OWNER/DEV + PRIME reservation + groups + tournaments +
+// profiles + permanent Discord-style messages + guide + streamer tools.
+// ============================================================================
+function installV12Platform() {
+    const SECURE_KEY = 'smash_secure_account_v12';
+    const QUEUE_KEY = 'smash_queue_type_v12';
+    const STREAMER_PREF_KEY = 'smash_streamer_prefs_v12';
+    let accountState = null;
+    let groupsCache = [];
+    let activeGroupId = null;
+    let activeGroupSnapshot = null;
+    let tournamentsCache = [];
+    let canCreateTournament = false;
+    let adminSelectedUsername = null;
+    let pendingAuthAttempt = null;
+
+    function readLocal(key, fallback = null) {
+        try {
+            const value = JSON.parse(localStorage.getItem(key));
+            return value == null ? fallback : value;
+        } catch {
+            return fallback;
+        }
+    }
+
+    function writeLocal(key, value) {
+        try { localStorage.setItem(key, JSON.stringify(value)); } catch {}
+    }
+
+    function secureSession() {
+        return readLocal(SECURE_KEY, null);
+    }
+
+    function storeSecureSession(token, user) {
+        const session = { token, ...user };
+        writeLocal(SECURE_KEY, session);
+        localStorage.setItem('user_session', JSON.stringify(session));
+        accountState = user;
+    }
+
+    function clearSecureSession() {
+        localStorage.removeItem(SECURE_KEY);
+        localStorage.removeItem('user_session');
+        accountState = null;
+    }
+
+    function roleList(roles) {
+        const result = [];
+        if (roles?.owner) result.push({ text: 'DEV', cls: 'owner' });
+        if (roles?.moderator) result.push({ text: 'MOD', cls: 'mod' });
+        if (roles?.streamer) result.push({ text: 'STREAMER', cls: 'streamer' });
+        if (roles?.tourneyHost) result.push({ text: 'TOURNEY HOST', cls: 'tourney' });
+        return result;
+    }
+
+    function badgeHTML(roles) {
+        return roleList(roles).map(role => `<span class="v12-role-badge ${role.cls}">${role.text}</span>`).join('');
+    }
+
+    function avatarFor(username) {
+        const user = (onlineUsersCache || []).find(item => item.username === username);
+        return user?.avatar || '';
+    }
+
+    function fillAvatarBox(box, avatar, name) {
+        if (!box) return;
+        box.replaceChildren();
+        if (avatar) {
+            const img = document.createElement('img');
+            img.src = avatar;
+            img.alt = `${name || 'User'} profile picture`;
+            img.style.width = '100%';
+            img.style.height = '100%';
+            img.style.objectFit = 'cover';
+            img.style.borderRadius = '999px';
+            box.appendChild(img);
+        } else {
+            box.textContent = String(name || '?').split(/[\s_-]+/).filter(Boolean).slice(0,2).map(part => part[0]?.toUpperCase() || '').join('') || '?';
+        }
+    }
+
+    function injectStyles() {
+        if (document.getElementById('v12Styles')) return;
+        const style = document.createElement('style');
+        style.id = 'v12Styles';
+        style.textContent = `
+            .v12-role-badge{display:inline-flex;align-items:center;padding:2px 6px;border-radius:999px;font:900 8px Inter,sans-serif;letter-spacing:.03em;border:1px solid #ffffff25;white-space:nowrap}
+            .v12-role-badge.owner{background:#7c3aed;color:#fff;border-color:#c4b5fd}.v12-role-badge.mod{background:#dc2626;color:#fff}.v12-role-badge.streamer{background:#ec4899;color:#fff}.v12-role-badge.tourney{background:#eab308;color:#172554}
+            #headerRoleBadges{display:flex;align-items:center;gap:4px;flex-wrap:wrap;margin-top:3px}
+            #ownerAdminButton{border:1px solid #c4b5fd;background:#6d28d9;color:white;font:900 10px Inter,sans-serif;padding:8px 10px;border-radius:12px;cursor:pointer}
+            .v12-modal-card{background:#102653;border:2px solid #ffe238;border-radius:22px;box-shadow:0 20px 60px #0009;color:white}
+            .v12-grid{display:grid;grid-template-columns:260px minmax(0,1fr);gap:12px;min-height:520px}.v12-list{background:#0d2258;border:1px solid #ffffff1d;border-radius:14px;padding:8px;overflow:auto}.v12-detail{background:#132e70;border:1px solid #ffffff1d;border-radius:14px;padding:14px;overflow:auto}
+            .v12-user-row{width:100%;display:flex;align-items:center;justify-content:space-between;gap:8px;border:0;border-radius:10px;background:transparent;color:white;padding:9px;text-align:left;cursor:pointer}.v12-user-row:hover,.v12-user-row.active{background:#ffffff12}
+            .v12-pill{display:inline-flex;padding:3px 7px;border-radius:999px;background:#ffffff12;border:1px solid #ffffff1e;font-size:9px;font-weight:800}
+            .v12-section{background:#0f245b;border:1px solid #ffffff1c;border-radius:14px;padding:12px;margin-top:10px}.v12-section-title{color:#ffe238;font:900 10px Inter,sans-serif;text-transform:uppercase;letter-spacing:.07em;margin-bottom:8px}
+            .v12-small-btn{border:1px solid #ffffff25;border-radius:9px;background:#244a9d;color:white;font:900 9px Inter,sans-serif;padding:7px 8px;cursor:pointer}.v12-small-btn.red{background:#b91c1c}.v12-small-btn.green{background:#059669}.v12-small-btn.yellow{background:#ffd318;color:#142f75}.v12-small-btn.purple{background:#6d28d9}
+            .v12-actions{display:flex;gap:5px;flex-wrap:wrap;margin-top:5px;opacity:.25;transition:.15s}.discord-message:hover .v12-actions{opacity:1}
+            .discord-composer{position:sticky;bottom:0;z-index:3;background:#182b62;flex:0 0 auto}.discord-chat{min-height:0}.discord-messages{min-height:0;overflow-y:auto!important}
+            .v12-group-row{border-left:3px solid #8b5cf6}.v12-mention{background:#facc1530;border-radius:3px;padding:0 2px;color:#fde68a;font-weight:900}
+            .v12-profile-hero{display:grid;grid-template-columns:120px minmax(0,1fr);gap:18px;align-items:center}.v12-profile-avatar{width:120px;height:120px;border-radius:50%;overflow:hidden;background:#1e3a8a;display:grid;place-items:center;font-size:32px;font-weight:900;border:4px solid #ffffff35}.v12-profile-avatar img{width:100%;height:100%;object-fit:cover}
+            .v12-stat-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:12px}.v12-stat{background:#102653;border:1px solid #ffffff1a;border-radius:12px;padding:10px;text-align:center}.v12-stat b{display:block;color:#ffe238;font-size:18px}.v12-stat span{font-size:9px;color:#b9c9ef;text-transform:uppercase;font-weight:900}
+            .v12-group-header{display:flex;align-items:center;justify-content:space-between;gap:8px}.v12-group-member{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 0;border-bottom:1px solid #ffffff12}
+            #btnNavTournaments,#btnNavStreamer{font-family:Bungee,sans-serif;font-size:9px;line-height:1.05}
+            .v12-tournament-card{background:#173477;border:1px solid #ffffff1d;border-radius:14px;padding:12px;margin-bottom:9px}.v12-bracket{display:flex;gap:18px;overflow-x:auto;padding:10px 0}.v12-round{min-width:220px}.v12-match{background:#102653;border:1px solid #ffffff20;border-radius:10px;padding:8px;margin:8px 0}
+            #guideModal .v12-guide-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.v12-guide-card{background:#102653;border:1px solid #ffffff1f;border-radius:14px;padding:12px}.v12-guide-card h4{color:#ffe238;font-weight:900;font-size:11px;margin-bottom:5px}.v12-guide-card p{font-size:10px;color:#c8d6f7;line-height:1.45}
+            #v12QueueSelector{display:flex;gap:6px;padding:5px;background:#102653;border:1px solid #ffffff1d;border-radius:14px}.v12-queue-btn{flex:1;border:0;border-radius:10px;padding:8px;color:#dbe7ff;background:transparent;font:900 10px Inter,sans-serif;cursor:pointer}.v12-queue-btn.active{background:#ffd318;color:#142f75}
+            @media(max-width:760px){.v12-grid{grid-template-columns:1fr}.v12-list{max-height:200px}.v12-stat-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.v12-profile-hero{grid-template-columns:1fr;text-align:center}.v12-profile-avatar{margin:auto}#guideModal .v12-guide-grid{grid-template-columns:1fr}}
+        `;
+        document.head.appendChild(style);
+    }
+
+    function injectHeaderBadges() {
+        const userTag = document.getElementById('userDisplayTag');
+        if (!userTag) return;
+        const container = userTag.parentElement?.parentElement;
+        if (!container) return;
+        let badges = document.getElementById('headerRoleBadges');
+        if (!badges) {
+            badges = document.createElement('div');
+            badges.id = 'headerRoleBadges';
+            container.appendChild(badges);
+        }
+        badges.innerHTML = badgeHTML(accountState?.roles);
+        let ownerButton = document.getElementById('ownerAdminButton');
+        if (!ownerButton) {
+            ownerButton = document.createElement('button');
+            ownerButton.id = 'ownerAdminButton';
+            ownerButton.textContent = '🛡 ADMIN';
+            ownerButton.onclick = openAdminPanel;
+            document.getElementById('onlineCounterBtn')?.parentElement?.appendChild(ownerButton);
+        }
+        ownerButton.classList.toggle('hidden', !accountState?.roles?.owner);
+
+        let level = document.getElementById('headerLevelBadge');
+        if (!level) {
+            level = document.createElement('span');
+            level.id = 'headerLevelBadge';
+            level.className = 'v12-pill';
+            userTag.parentElement?.appendChild(level);
+        }
+        level.textContent = accountState ? `LVL ${accountState.level || 1}` : 'LVL 1';
+    }
+
+    function updateConditionalNavigation() {
+        const tourney = document.getElementById('btnNavTournaments');
+        const streamer = document.getElementById('btnNavStreamer');
+        const hasTournaments = tournamentsCache.length > 0;
+        if (tourney) tourney.classList.toggle('hidden', !(hasTournaments || canCreateTournament || accountState?.roles?.owner || accountState?.roles?.moderator));
+        if (streamer) streamer.classList.toggle('hidden', !(accountState?.roles?.streamer || accountState?.roles?.owner));
+    }
+
+    function accountSessionPayload(user) {
+        return {
+            username: user.username,
+            email: user.email,
+            roles: user.roles,
+            level: user.level,
+            xp: user.xp,
+            rating1v1: user.rating1v1,
+            ratingFFA: user.ratingFFA,
+            warnings: user.warnings,
+            streamerLive: user.streamerLive
+        };
+    }
+
+    // ------------------------------------------------------------------
+    // SECURE AUTHENTICATION
+    // ------------------------------------------------------------------
+    handleAuthSubmit = function (event, type) {
+        event.preventDefault();
+        if (type === 'register') {
+            const username = String(document.getElementById('regUsername')?.value || '').trim();
+            const email = String(document.getElementById('regEmail')?.value || '').trim();
+            const password = String(document.getElementById('regPassword')?.value || '');
+            let ownerSetupKey = '';
+            if (username.toLowerCase() === 'prime') {
+                ownerSetupKey = window.prompt('PRIME is the OWNER account. Enter your one-time OWNER_SETUP_KEY from Render:') || '';
+                if (!ownerSetupKey) return;
+            }
+            pendingAuthAttempt = { type, username, email, password, ownerSetupKey };
+            socket.emit('account_register', pendingAuthAttempt);
+        } else {
+            const email = String(document.getElementById('loginEmail')?.value || '').trim();
+            const password = String(document.getElementById('loginPassword')?.value || '');
+            pendingAuthAttempt = { type, email, password };
+            socket.emit('account_login', pendingAuthAttempt);
+        }
+    };
+
+    AuthSession.logout = function () {
+        const session = secureSession();
+        if (session?.token) socket.emit('account_logout', { token: session.token });
+        clearSecureSession();
+        window.location.reload();
+    };
+
+    const baseSaveNewUsername = saveNewUsername;
+    saveNewUsername = function () {
+        const next = String(document.getElementById('newUsernameInput')?.value || '').trim();
+        if (!next) return;
+        const session = secureSession();
+        if (session?.token) {
+            socket.emit('account_rename', { newUsername: next });
+            return;
+        }
+        if (next.toLowerCase() === 'prime') {
+            showToast('PRIME is reserved for the OWNER account.', '🛡️');
+            return;
+        }
+        baseSaveNewUsername();
+    };
+
+    socket.on('auth_success', data => {
+        if (!data?.user) return;
+        accountState = data.user;
+        const existing = secureSession();
+        const token = data.token || existing?.token;
+        if (token) storeSecureSession(token, accountSessionPayload(data.user));
+        if (!data.resumed) {
+            try {
+                const legacy = JSON.parse(localStorage.getItem('registered_users') || '[]');
+                const filtered = legacy.filter(item => String(item.email || '').toLowerCase() !== String(data.user.email || '').toLowerCase());
+                localStorage.setItem('registered_users', JSON.stringify(filtered));
+            } catch {}
+            showToast(data.user.roles?.owner ? 'OWNER / DEV account authenticated.' : `Logged in as ${data.user.username}.`, data.user.roles?.owner ? '🛡️' : '✅');
+            setTimeout(() => window.location.reload(), 250);
+            return;
+        }
+        const tag = document.getElementById('userDisplayTag');
+        if (tag) tag.textContent = data.user.username;
+        const mode = document.getElementById('accountModeLabel');
+        if (mode) mode.textContent = data.user.roles?.owner ? 'OWNER / DEV' : 'Saved Account';
+        injectHeaderBadges();
+        updateConditionalNavigation();
+        socket.emit('get_groups');
+        socket.emit('get_tournaments');
+    });
+
+    socket.on('auth_error', data => {
+        const message = data?.message || 'Could not log in.';
+        if (pendingAuthAttempt?.type === 'login' && /incorrect email or password/i.test(message)) {
+            // Smooth migration from the older browser-only account system.
+            try {
+                const legacy = JSON.parse(localStorage.getItem('registered_users') || '[]');
+                const found = legacy.find(u => String(u.email || '').toLowerCase() === pendingAuthAttempt.email.toLowerCase() && u.password === pendingAuthAttempt.password);
+                if (found && confirm('This looks like one of your older browser-only accounts. Convert it to the new secure account system now?')) {
+                    let ownerSetupKey = '';
+                    if (String(found.username || '').toLowerCase() === 'prime') ownerSetupKey = prompt('Enter OWNER_SETUP_KEY to migrate PRIME:') || '';
+                    socket.emit('account_register', { username: found.username, email: found.email, password: found.password, ownerSetupKey });
+                    return;
+                }
+            } catch {}
+        }
+        showToast(message, '❌');
+    });
+
+    socket.on('auth_session_invalid', data => {
+        clearSecureSession();
+        showToast(data?.message || 'Your login expired.', '⚠️');
+        setTimeout(() => window.location.reload(), 700);
+    });
+
+    socket.on('account_renamed', data => {
+        const session = secureSession();
+        if (session) {
+            session.username = data.username;
+            writeLocal(SECURE_KEY, session);
+            localStorage.setItem('user_session', JSON.stringify(session));
+        }
+        showToast(`Username changed to ${data.username}.`, '✏️');
+        closeEditUsernameModal();
+        setTimeout(() => window.location.reload(), 250);
+    });
+
+    socket.on('account_rename_error', data => showToast(data?.message || 'Could not rename account.', '❌'));
+    socket.on('username_reserved', data => showToast(data?.message || 'That username is reserved.', '🛡️'));
+    socket.on('forced_username_changed', data => {
+        const session = secureSession();
+        if (session) {
+            session.username = data.username;
+            writeLocal(SECURE_KEY, session);
+            localStorage.setItem('user_session', JSON.stringify(session));
+        }
+        showToast(`Your username was changed to ${data.username} by the OWNER.`, '🛡️');
+        setTimeout(() => window.location.reload(), 500);
+    });
+    socket.on('moderation_notice', data => showToast(data?.message || 'Moderator action applied.', '🛡️'));
+
+    socket.on('account_state_changed', user => {
+        if (!user) return;
+        accountState = user;
+        const session = secureSession();
+        if (session) storeSecureSession(session.token, accountSessionPayload(user));
+        injectHeaderBadges();
+        updateConditionalNavigation();
+    });
+
+    // ------------------------------------------------------------------
+    // GUIDE IN SETTINGS
+    // ------------------------------------------------------------------
+    function injectGuide() {
+        const settingsCard = document.querySelector('#settingsModal .w-full.max-w-xl');
+        if (settingsCard && !document.getElementById('settingsGuideButton')) {
+            const wrap = document.createElement('div');
+            wrap.className = 'hub-card mt-4';
+            wrap.innerHTML = `<span class="dock-label">Help</span><p class="text-[11px] text-blue-200 mb-3">Learn 1v1, FFA, lobbies, friends, messages, groups, Spotify, tournaments, roles, and ranked play.</p><button id="settingsGuideButton" class="dock-action yellow">❓ HOW EVERYTHING WORKS</button>`;
+            settingsCard.appendChild(wrap);
+            wrap.querySelector('button').onclick = openGuide;
+        }
+
+        if (!document.getElementById('guideModal')) {
+            const modal = document.createElement('div');
+            modal.id = 'guideModal';
+            modal.className = 'hidden fixed inset-0 modal-overlay z-[90] flex items-center justify-center p-4 exclusive-modal';
+            modal.innerHTML = `<div class="v12-modal-card w-full max-w-4xl p-6 max-h-[90vh] overflow-y-auto"><div class="flex justify-between gap-3 items-center mb-4"><div><h3 class="font-bungee text-xl text-yellow-300">❓ HOW EVERYTHING WORKS</h3><p class="text-[11px] text-blue-200">Quick directions for the whole site.</p></div><button class="v12-small-btn red" id="guideClose">✕ CLOSE</button></div><div class="v12-guide-grid">
+                <div class="v12-guide-card"><h4>1v1</h4><p>Choose Casual or Ranked, paste a Smash Karts share link/code, create a lobby, chat, ready up, then join the game.</p></div>
+                <div class="v12-guide-card"><h4>FFA</h4><p>Choose 12 or 24 players. Public lobbies can be found by everyone; private lobbies are invite-only.</p></div>
+                <div class="v12-guide-card"><h4>Paste Code</h4><p>You can paste a room code, full Smash Karts link, or the entire “Come play Smash Karts” share message. The full link is preserved for popup players.</p></div>
+                <div class="v12-guide-card"><h4>Friends + DMs</h4><p>Add saved accounts from Online Players. Messages stay saved. You can edit/delete your own messages and report abusive messages.</p></div>
+                <div class="v12-guide-card"><h4>Groups</h4><p>Create Discord-like groups with up to 50 friends. Group owners can appoint admins. Use @username mentions to get someone’s attention.</p></div>
+                <div class="v12-guide-card"><h4>Profiles + Levels</h4><p>Saved accounts get circular PFPs, public roles, Level 1-200, separate 1v1/FFA ratings, match count, and tournament history as it grows.</p></div>
+                <div class="v12-guide-card"><h4>Tournaments</h4><p>Public tournaments appear only when available. Private tournaments appear only for invited players. Tourney Hosts can create and manage them.</p></div>
+                <div class="v12-guide-card"><h4>Roles</h4><p>DEV is the OWNER. MOD handles moderation. STREAMER gets creator tools. TOURNEY HOST can create tournaments. Roles are public badges.</p></div>
+                <div class="v12-guide-card"><h4>Spotify</h4><p>Music stays in its own organized area. Premium can use fuller playback controls; Free users use Spotify’s supported playback experience.</p></div>
+                <div class="v12-guide-card"><h4>Guest vs Account</h4><p>Guests can play. Saved accounts keep friends, DMs, PFP, progression, roles, tournament access, and other permanent data.</p></div>
+            </div></div>`;
+            document.body.appendChild(modal);
+            modal.querySelector('#guideClose').onclick = () => modal.classList.add('hidden');
+        }
+    }
+
+    function openGuide() {
+        document.querySelectorAll('.exclusive-modal').forEach(el => el.classList.add('hidden'));
+        document.getElementById('guideModal')?.classList.remove('hidden');
+    }
+
+    // ------------------------------------------------------------------
+    // PUBLIC PROFILE PAGE
+    // ------------------------------------------------------------------
+    function injectProfilePage() {
+        if (document.getElementById('profileTab')) return;
+        const setup = document.getElementById('setupTab');
+        if (!setup?.parentElement) return;
+        const tab = document.createElement('div');
+        tab.id = 'profileTab';
+        tab.className = 'tab-content hidden space-y-4';
+        tab.innerHTML = `<button id="profileBackButton" class="v12-small-btn">← BACK</button><div id="profilePageContent" class="hub-card"><div class="text-center text-blue-200 text-xs py-10">Loading profile…</div></div>`;
+        setup.parentElement.insertBefore(tab, setup);
+        tab.querySelector('#profileBackButton').onclick = () => showTab('messagesTab');
+    }
+
+    window.openPlayerProfile = function (username) {
+        if (!username) return;
+        injectProfilePage();
+        document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
+        document.querySelectorAll('.sidebar-btn').forEach(btn => btn.classList.remove('active'));
+        document.getElementById('profileTab')?.classList.remove('hidden');
+        const content = document.getElementById('profilePageContent');
+        if (content) content.innerHTML = '<div class="text-center text-blue-200 text-xs py-10">Loading profile…</div>';
+        socket.emit('get_public_profile', { username });
+    };
+
+    socket.on('public_profile', profile => {
+        const content = document.getElementById('profilePageContent');
+        if (!content || document.getElementById('profileTab')?.classList.contains('hidden')) return;
+        if (!profile) {
+            content.innerHTML = '<div class="text-center text-red-200 text-xs py-10">Profile not found.</div>';
+            return;
+        }
+        const avatar = profile.avatar ? `<img src="${profile.avatar}" alt="">` : escapeHTML(String(profile.username || '?').slice(0,2).toUpperCase());
+        content.innerHTML = `<div class="v12-profile-hero"><div class="v12-profile-avatar">${avatar}</div><div><div class="flex gap-2 items-center flex-wrap"><h2 class="font-bungee text-2xl text-white">${escapeHTML(profile.username)}</h2>${badgeHTML(profile.roles)}${profile.streamerLive ? '<span class="v12-role-badge streamer">● LIVE</span>' : ''}</div><div class="text-yellow-300 font-black mt-2">LEVEL ${profile.level}</div><div class="text-xs text-blue-200 mt-1">${profile.online ? '🟢 Online' : '⚫ Offline'}${profile.playing ? ` · Playing ${escapeHTML(profile.playing)}` : ''}</div></div></div><div class="v12-stat-grid"><div class="v12-stat"><b>${profile.rating1v1}</b><span>1v1 Rating</span></div><div class="v12-stat"><b>${profile.ratingFFA}</b><span>FFA Rating</span></div><div class="v12-stat"><b>${profile.matches}</b><span>Matches</span></div><div class="v12-stat"><b>${profile.friendsCount}</b><span>Friends</span></div></div><div class="v12-section"><div class="v12-section-title">Music privacy</div><div class="text-xs text-blue-200">${profile.canSeeMusic ? 'You are friends, so shared Spotify activity can appear here when enabled.' : 'Currently-playing music is visible to friends only.'}</div></div>`;
+    });
+
+    // Make Online Players names/PFPs open the full profile page.
+    renderOnlineUsersList = function (users) {
+        const container = document.getElementById('onlineUsersList');
+        if (!container) return;
+        container.replaceChildren();
+        const me = AuthSession.getUser()?.username || '';
+        (users || []).forEach(user => {
+            if (user.id === socket.id || user.username === me) return;
+            const row = document.createElement('div');
+            row.className = 'flex justify-between items-center gap-3 bg-blue-950/80 p-3 rounded-2xl border border-white/10';
+            const identity = document.createElement('button');
+            identity.className = 'flex items-center gap-2 min-w-0 text-left flex-1';
+            identity.onclick = () => { closeOnlineModal(); openPlayerProfile(user.username); };
+            const avatar = document.createElement('div');
+            avatar.className = 'round-user-avatar';
+            fillAvatarBox(avatar, user.avatar || '', user.username);
+            const copy = document.createElement('div');
+            copy.className = 'min-w-0';
+            copy.innerHTML = `<div class="font-bold text-xs text-white truncate">${escapeHTML(user.username)} <span class="text-[9px] text-yellow-300">LVL ${user.level || 1}</span></div><div class="flex gap-1 flex-wrap mt-1">${badgeHTML(user.roles)}</div>`;
+            identity.append(avatar, copy);
+            const action = document.createElement('div');
+            if (isUserFriend(user.username)) action.innerHTML = '<span class="text-[10px] font-black text-emerald-300 px-2 py-1 rounded-lg bg-emerald-500/10 border border-emerald-400/30">✓ FRIEND</span>';
+            else if (user.isGuest) action.innerHTML = '<span class="text-[9px] text-blue-300">Guest</span>';
+            else {
+                const add = document.createElement('button');
+                add.className = 'bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold px-2.5 py-1.5 rounded-lg';
+                add.textContent = '+ ADD FRIEND';
+                add.onclick = () => sendFriendRequest(user.id, user.username);
+                action.appendChild(add);
+            }
+            row.append(identity, action);
+            container.appendChild(row);
+        });
+        if (!container.children.length) container.innerHTML = '<p class="text-xs text-blue-200 text-center py-4">Nobody else is online right now.</p>';
+    };
+
+    // Public role/level badges inside lobby player lists.
+    const baseLobbyRendererV12 = updatePreGameLobbyUI;
+    updatePreGameLobbyUI = function (room) {
+        baseLobbyRendererV12(room);
+        const list = document.getElementById('preGamePlayerList');
+        if (!list || !room?.players) return;
+        Array.from(list.children).forEach((row, index) => {
+            const player = room.players[index];
+            if (!player) return;
+            const nameArea = row.querySelector('.font-bold') || row.firstElementChild;
+            if (!nameArea || row.querySelector('.v12-lobby-badges')) return;
+            const badges = document.createElement('span');
+            badges.className = 'v12-lobby-badges inline-flex gap-1 ml-1 align-middle';
+            badges.innerHTML = `<span class="v12-pill">LVL ${player.level || 1}</span>${badgeHTML(player.roles)}`;
+            nameArea.appendChild(badges);
+        });
+    };
+
+    function decorateGameDockPlayers(room) {
+        const list = document.getElementById('gameDockPlayerList');
+        if (!list || !room?.players) return;
+        Array.from(list.children).forEach((row, index) => {
+            const player = room.players[index];
+            if (!player || row.querySelector('.v12-lobby-badges')) return;
+            const name = row.querySelector('.font-bold');
+            if (!name) return;
+            const badges = document.createElement('span');
+            badges.className = 'v12-lobby-badges inline-flex gap-1 ml-1 align-middle';
+            badges.innerHTML = `<span class="v12-pill">LVL ${player.level || 1}</span>${badgeHTML(player.roles)}`;
+            name.appendChild(badges);
+        });
+    }
+    socket.on('saved_room_update', room => setTimeout(() => decorateGameDockPlayers(room), 0));
+    socket.on('room_created', room => setTimeout(() => decorateGameDockPlayers(room), 0));
+    socket.on('ffa_lobby_ready', room => setTimeout(() => decorateGameDockPlayers(room), 0));
+
+    // ------------------------------------------------------------------
+    // PERMANENT DISCORD-LIKE DMs: edit, delete, report, fixed composer
+    // ------------------------------------------------------------------
+    function renderMessageText(element, text, mentionName = null) {
+        element.textContent = text || '';
+        if (!mentionName || !String(text).toLowerCase().includes('@' + mentionName.toLowerCase())) return;
+        element.classList.add('bg-yellow-400/10', 'rounded-md', 'px-1');
+    }
+
+    renderDMMessages = function (history) {
+        const container = document.getElementById('tabDMMessages');
+        if (!container) return;
+        container.replaceChildren();
+        if (!activeDMTargetUser) {
+            container.innerHTML = '<div class="h-full grid place-items-center text-center text-blue-200 text-xs">Select a friend to start messaging.</div>';
+            return;
+        }
+        if (!history?.length) {
+            container.innerHTML = `<div class="h-full grid place-items-center text-center text-blue-200 text-xs">This is the beginning of your conversation with ${escapeHTML(activeDMTargetUser)}.</div>`;
+            return;
+        }
+        const me = AuthSession.getUser()?.username || 'Player';
+        history.forEach(message => {
+            const own = message.senderUsername === me;
+            const row = document.createElement('div');
+            row.className = 'discord-message';
+            const avatar = document.createElement('button');
+            avatar.className = 'discord-avatar big';
+            fillAvatarBox(avatar, '', message.senderUsername);
+            avatar.onclick = () => openPlayerProfile(message.senderUsername);
+            const body = document.createElement('div');
+            body.className = 'min-w-0';
+            const head = document.createElement('div');
+            const name = document.createElement('button');
+            name.className = 'discord-message-name';
+            name.textContent = own ? 'You' : message.senderUsername;
+            name.onclick = () => openPlayerProfile(message.senderUsername);
+            const time = document.createElement('span');
+            time.className = 'discord-message-time';
+            time.textContent = message.timestamp ? new Date(message.timestamp).toLocaleString([], { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }) : '';
+            if (message.editedAt) time.textContent += ' · edited';
+            head.append(name, time);
+            const text = document.createElement('div');
+            text.className = 'discord-message-text';
+            renderMessageText(text, message.message, me);
+            body.append(head, text);
+            if (message.id) {
+                const actions = document.createElement('div');
+                actions.className = 'v12-actions';
+                if (own) {
+                    const edit = document.createElement('button');
+                    edit.className = 'v12-small-btn'; edit.textContent = 'EDIT';
+                    edit.onclick = () => { const next = prompt('Edit message:', message.message); if (next && next.trim()) socket.emit('edit_direct_message', { targetUsername: activeDMTargetUser, messageId: message.id, message: next.trim() }); };
+                    const del = document.createElement('button');
+                    del.className = 'v12-small-btn red'; del.textContent = 'DELETE';
+                    del.onclick = () => { if (confirm('Delete this message?')) socket.emit('delete_direct_message', { targetUsername: activeDMTargetUser, messageId: message.id }); };
+                    actions.append(edit, del);
+                } else {
+                    const report = document.createElement('button');
+                    report.className = 'v12-small-btn red'; report.textContent = 'REPORT';
+                    report.onclick = () => { const reason = prompt('Why are you reporting this message?') || 'No reason given'; socket.emit('report_message', { type:'dm', targetUsername: activeDMTargetUser, messageId: message.id, reason }); };
+                    actions.appendChild(report);
+                }
+                body.appendChild(actions);
+            }
+            row.append(avatar, body);
+            container.appendChild(row);
+        });
+        container.scrollTop = container.scrollHeight;
+    };
+
+    socket.on('dm_history_updated', data => {
+        if (data.targetUsername === activeDMTargetUser && !activeGroupId) renderDMMessages(data.history || []);
+    });
+    socket.on('report_submitted', () => showToast('Report sent to moderators.', '🛡️'));
+
+    // ------------------------------------------------------------------
+    // GROUP CHATS
+    // ------------------------------------------------------------------
+    function injectGroupsUI() {
+        const header = document.querySelector('#messagesTab > .flex.justify-between');
+        if (header && !document.getElementById('createGroupButton')) {
+            const actions = header.lastElementChild?.parentElement === header ? header : null;
+            const button = document.createElement('button');
+            button.id = 'createGroupButton';
+            button.className = 'bg-purple-600 hover:bg-purple-500 text-white font-black text-xs px-4 py-2 rounded-xl';
+            button.textContent = '+ CREATE GROUP';
+            button.onclick = openCreateGroupModal;
+            header.appendChild(button);
+        }
+        if (!document.getElementById('createGroupModal')) {
+            const modal = document.createElement('div');
+            modal.id = 'createGroupModal';
+            modal.className = 'hidden fixed inset-0 modal-overlay z-[90] flex items-center justify-center p-4 exclusive-modal';
+            modal.innerHTML = `<div class="v12-modal-card w-full max-w-lg p-5"><div class="flex justify-between items-center"><h3 class="font-bungee text-lg text-yellow-300">CREATE GROUP</h3><button class="v12-small-btn red" id="groupModalClose">✕</button></div><input id="newGroupName" class="smash-input w-full px-3 py-2 rounded-xl text-xs mt-4" placeholder="Group name"><div class="v12-section"><div class="v12-section-title">Choose up to 49 friends</div><div id="newGroupFriendChoices" class="max-h-64 overflow-y-auto space-y-1"></div></div><button id="createGroupConfirm" class="dock-action yellow mt-3">CREATE GROUP</button></div>`;
+            document.body.appendChild(modal);
+            modal.querySelector('#groupModalClose').onclick = () => modal.classList.add('hidden');
+            modal.querySelector('#createGroupConfirm').onclick = () => {
+                const name = document.getElementById('newGroupName')?.value || '';
+                const members = Array.from(document.querySelectorAll('#newGroupFriendChoices input:checked')).map(input => input.value);
+                socket.emit('create_group', { name, members });
+            };
+        }
+    }
+
+    function openCreateGroupModal() {
+        const session = secureSession();
+        if (!session) return openOptionalLogin();
+        const choices = document.getElementById('newGroupFriendChoices');
+        choices.replaceChildren();
+        const friends = getLocalFriends(AuthSession.getUser()?.username || '');
+        friends.slice(0, 49).forEach(name => {
+            const label = document.createElement('label');
+            label.className = 'flex items-center gap-2 p-2 rounded-lg hover:bg-white/5 text-xs';
+            label.innerHTML = `<input type="checkbox" value="${escapeHTML(name)}"><span>${escapeHTML(name)}</span>`;
+            choices.appendChild(label);
+        });
+        document.querySelectorAll('.exclusive-modal').forEach(el => el.classList.add('hidden'));
+        document.getElementById('createGroupModal')?.classList.remove('hidden');
+    }
+
+    function appendGroupsToSidebar() {
+        const container = document.getElementById('friendsTabList');
+        if (!container || !secureSession()) return;
+        const label = document.createElement('div');
+        label.className = 'discord-section-label';
+        label.textContent = `Groups — ${groupsCache.length}`;
+        container.appendChild(label);
+        if (!groupsCache.length) {
+            const empty = document.createElement('div');
+            empty.className = 'text-[10px] text-blue-200 p-2';
+            empty.textContent = 'No groups yet. Create one with your friends.';
+            container.appendChild(empty);
+            return;
+        }
+        groupsCache.forEach(group => {
+            const row = document.createElement('button');
+            row.className = `discord-friend v12-group-row${activeGroupId === group.id ? ' active' : ''}`;
+            row.onclick = () => openGroup(group.id);
+            row.innerHTML = `<div class="discord-avatar">G</div><div class="min-w-0 flex-1"><div class="text-xs font-black truncate">${escapeHTML(group.name)}</div><div class="text-[9px] text-blue-200 truncate">${group.members.length} members</div></div>`;
+            container.appendChild(row);
+        });
+    }
+
+    const baseUpdateFriendsTabListV12 = updateFriendsTabList;
+    updateFriendsTabList = function () {
+        baseUpdateFriendsTabListV12();
+        appendGroupsToSidebar();
+    };
+
+    const baseShowMessagesV12 = showMessagesTab;
+    showMessagesTab = function () {
+        baseShowMessagesV12();
+        socket.emit('get_groups');
+    };
+
+    const baseOpenDmV12 = openTabDMWith;
+    openTabDMWith = function (username) {
+        activeGroupId = null;
+        activeGroupSnapshot = null;
+        baseOpenDmV12(username);
+    };
+
+    function openGroup(groupId) {
+        activeGroupId = groupId;
+        activeDMTargetUser = null;
+        const header = document.getElementById('activeDMChatHeader');
+        if (header) header.textContent = 'Loading group…';
+        const status = document.getElementById('dmChatStatus');
+        if (status) status.textContent = 'Group chat';
+        document.getElementById('tabDMMessages').innerHTML = '<div class="h-full grid place-items-center text-xs text-blue-200">Loading group…</div>';
+        socket.emit('open_group', { groupId });
+        updateFriendsTabList();
+    }
+
+    function renderGroup(group) {
+        if (!group || group.id !== activeGroupId) return;
+        activeGroupSnapshot = group;
+        const me = AuthSession.getUser()?.username || '';
+        const header = document.getElementById('activeDMChatHeader');
+        if (header) header.textContent = group.name;
+        const status = document.getElementById('dmChatStatus');
+        if (status) status.textContent = `${group.members.length} members · Owner: ${group.owner}`;
+        const avatar = document.getElementById('dmChatAvatar');
+        if (avatar) avatar.textContent = 'G';
+        const container = document.getElementById('tabDMMessages');
+        container.replaceChildren();
+
+        const memberCard = document.createElement('div');
+        memberCard.className = 'v12-section';
+        memberCard.innerHTML = `<div class="v12-group-header"><div><div class="v12-section-title">Group members</div><div class="text-[10px] text-blue-200">Owner and admins can manage members.</div></div><span class="v12-pill">${group.members.length}/50</span></div>`;
+        const canManage = group.owner === me || (group.admins || []).includes(me);
+        if (canManage) {
+            const members = document.createElement('div');
+            members.className = 'mt-2';
+            group.members.forEach(memberName => {
+                const row = document.createElement('div');
+                row.className = 'v12-group-member';
+                const role = memberName === group.owner ? 'OWNER' : (group.admins || []).includes(memberName) ? 'ADMIN' : 'MEMBER';
+                row.innerHTML = `<button class="text-xs font-bold text-white" onclick="openPlayerProfile('${escapeHTML(memberName)}')">${escapeHTML(memberName)}</button><span class="v12-pill">${role}</span>`;
+                if (memberName !== group.owner && memberName !== me) {
+                    const actions = document.createElement('div');
+                    if (group.owner === me) {
+                        const admin = document.createElement('button');
+                        admin.className = 'v12-small-btn';
+                        admin.textContent = (group.admins || []).includes(memberName) ? 'REMOVE ADMIN' : 'MAKE ADMIN';
+                        admin.onclick = () => socket.emit('group_member_action', { groupId: group.id, targetUsername: memberName, action: (group.admins || []).includes(memberName) ? 'remove_admin' : 'make_admin' });
+                        actions.appendChild(admin);
+                    }
+                    const remove = document.createElement('button');
+                    remove.className = 'v12-small-btn red ml-1'; remove.textContent = 'REMOVE';
+                    remove.onclick = () => socket.emit('group_member_action', { groupId: group.id, targetUsername: memberName, action:'remove' });
+                    actions.appendChild(remove);
+                    row.appendChild(actions);
+                }
+                members.appendChild(row);
+            });
+            memberCard.appendChild(members);
+        }
+        const partyBar = document.createElement('div');
+        partyBar.className = 'v12-section';
+        partyBar.innerHTML = '<div class="v12-section-title">Party</div><button class="dock-action yellow">🎮 START PARTY</button>';
+        partyBar.querySelector('button').onclick = () => {
+            const choice = prompt('Start which party? Type: 1v1, ffa12, or ffa24', 'ffa12');
+            if (!choice) return;
+            const mode = choice.toLowerCase().replace(/\s+/g, '');
+            if (!['1v1','ffa12','ffa24'].includes(mode)) return showToast('Use 1v1, ffa12, or ffa24.', '⚠️');
+            let smashUrl = '';
+            if (mode === '1v1') {
+                const raw = prompt('Paste the Smash Karts room link/code for this 1v1:') || '';
+                smashUrl = extractSmashUrlClient(raw);
+                if (!smashUrl) return showToast('That is not a valid Smash Karts room link/code.', '❌');
+            }
+            socket.emit('create_group_party', { groupId: group.id, mode, smashUrl });
+        };
+        container.appendChild(partyBar);
+
+        (group.messages || []).forEach(message => {
+            const own = message.senderUsername === me;
+            const row = document.createElement('div');
+            row.className = 'discord-message';
+            const av = document.createElement('button');
+            av.className = 'discord-avatar big'; av.textContent = String(message.senderUsername || '?').slice(0,2).toUpperCase();
+            av.onclick = () => openPlayerProfile(message.senderUsername);
+            const body = document.createElement('div'); body.className = 'min-w-0';
+            const head = document.createElement('div');
+            head.innerHTML = `<button class="discord-message-name" onclick="openPlayerProfile('${escapeHTML(message.senderUsername)}')">${escapeHTML(message.senderUsername)}</button><span class="discord-message-time">${message.timestamp ? new Date(message.timestamp).toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : ''}${message.editedAt ? ' · edited' : ''}</span>`;
+            const text = document.createElement('div'); text.className = 'discord-message-text'; renderMessageText(text, message.message, me);
+            if (message.type === 'party' && message.party?.roomId) {
+                const party = document.createElement('div');
+                party.className = 'v12-section mt-2';
+                party.innerHTML = `<div class="font-black text-yellow-300">🎮 ${String(message.party.mode || '').toUpperCase()} PARTY</div><div class="text-[10px] text-blue-200 mt-1">${message.party.maxPlayers || 2} player lobby</div>`;
+                const join = document.createElement('button');
+                join.className = 'v12-small-btn green mt-2';
+                join.textContent = 'JOIN LOBBY';
+                join.onclick = () => socket.emit('rejoin_room', { roomId: message.party.roomId });
+                party.appendChild(join);
+                body.append(head, text, party);
+            } else {
+                body.append(head, text);
+            }
+            const actions = document.createElement('div'); actions.className = 'v12-actions';
+            if (own) {
+                const edit = document.createElement('button'); edit.className='v12-small-btn'; edit.textContent='EDIT'; edit.onclick=()=>{const next=prompt('Edit message:',message.message);if(next&&next.trim())socket.emit('edit_group_message',{groupId:group.id,messageId:message.id,message:next.trim()});};
+                const del = document.createElement('button'); del.className='v12-small-btn red'; del.textContent='DELETE'; del.onclick=()=>{if(confirm('Delete this message?'))socket.emit('delete_group_message',{groupId:group.id,messageId:message.id});};
+                actions.append(edit,del);
+            } else {
+                const report = document.createElement('button'); report.className='v12-small-btn red'; report.textContent='REPORT'; report.onclick=()=>{const reason=prompt('Why are you reporting this message?')||'No reason given';socket.emit('report_message',{type:'group',groupId:group.id,messageId:message.id,reason});}; actions.appendChild(report);
+            }
+            body.appendChild(actions); row.append(av,body); container.appendChild(row);
+        });
+        container.scrollTop = container.scrollHeight;
+    }
+
+    const baseSendDmV12 = sendTabDM;
+    sendTabDM = function () {
+        if (!activeGroupId) return baseSendDmV12();
+        const input = document.getElementById('tabDMInput');
+        const message = String(input?.value || '').trim();
+        if (!message) return;
+        socket.emit('send_group_message', { groupId: activeGroupId, message });
+        input.value = '';
+        input.focus();
+    };
+
+    socket.on('group_list', groups => { groupsCache = Array.isArray(groups) ? groups : []; updateFriendsTabList(); });
+    socket.on('group_list_changed', () => socket.emit('get_groups'));
+    socket.on('group_created', group => { document.getElementById('createGroupModal')?.classList.add('hidden'); showToast(`Group created: ${group.name}`, '👥'); socket.emit('get_groups'); openGroup(group.id); });
+    socket.on('group_snapshot', group => { if (group?.id === activeGroupId) renderGroup(group); socket.emit('get_groups'); });
+    socket.on('group_message', data => { if (data.groupId === activeGroupId) renderGroup(data.group); else { incrementUnreadBadge(); showToast(`New group message`, '👥'); } socket.emit('get_groups'); });
+    socket.on('group_mention', data => showToast(`${data.from} mentioned you in ${data.groupName}`, '@'));
+    socket.on('group_error', data => showToast(data?.message || 'Group action failed.', '❌'));
+
+    // ------------------------------------------------------------------
+    // TOURNAMENTS
+    // ------------------------------------------------------------------
+    function injectTournamentUI() {
+        const sidebar = document.querySelector('#mainDashboard aside');
+        if (sidebar && !document.getElementById('btnNavTournaments')) {
+            const btn = document.createElement('button');
+            btn.id = 'btnNavTournaments'; btn.className = 'sidebar-btn hidden w-12 h-12 rounded-2xl flex items-center justify-center shadow-lg'; btn.title='Tournaments'; btn.textContent='TOURNEY'; btn.onclick=openTournamentPage;
+            const music = document.getElementById('btnNavMusic'); sidebar.insertBefore(btn, music || null);
+        }
+        const setup = document.getElementById('setupTab');
+        if (setup?.parentElement && !document.getElementById('tournamentTab')) {
+            const tab = document.createElement('div'); tab.id='tournamentTab'; tab.className='tab-content hidden space-y-4';
+            tab.innerHTML = `<div class="flex justify-between items-center border-b border-white/10 pb-4"><div><h2 class="font-bungee text-xl text-yellow-300">🏆 TOURNAMENTS</h2><p class="text-xs text-blue-200">Only available public tournaments and your private invites appear here.</p></div><button class="v12-small-btn" onclick="socket.emit('get_tournaments')">↻ REFRESH</button></div><div id="tournamentCreateArea"></div><div id="tournamentAvailable"></div>`;
+            setup.parentElement.insertBefore(tab, setup);
+        }
+    }
+
+    window.openTournamentPage = function () {
+        document.querySelectorAll('.tab-content').forEach(el=>el.classList.add('hidden'));
+        document.querySelectorAll('.sidebar-btn').forEach(btn=>btn.classList.remove('active'));
+        document.getElementById('tournamentTab')?.classList.remove('hidden');
+        document.getElementById('btnNavTournaments')?.classList.add('active');
+        socket.emit('get_tournaments');
+    };
+
+    function renderTournamentPage() {
+        const available = document.getElementById('tournamentAvailable');
+        const create = document.getElementById('tournamentCreateArea');
+        if (!available || !create) return;
+        create.replaceChildren();
+        if (canCreateTournament) {
+            const panel = document.createElement('div'); panel.className='hub-card mb-4';
+            panel.innerHTML = `<div class="v12-section-title">Create tournament</div><div class="grid grid-cols-1 md:grid-cols-2 gap-2"><input id="tName" class="smash-input px-3 py-2 rounded-xl text-xs" placeholder="Tournament name"><select id="tMode" class="smash-input px-3 py-2 rounded-xl text-xs"><option value="1v1">1v1</option><option value="ffa">FFA</option></select><input id="tCapacity" type="number" min="4" max="64" value="16" class="smash-input px-3 py-2 rounded-xl text-xs" placeholder="Players"><input id="tStart" type="datetime-local" class="smash-input px-3 py-2 rounded-xl text-xs"><select id="tPrivacy" class="smash-input px-3 py-2 rounded-xl text-xs"><option value="public">Public</option><option value="private">Private invite-only</option></select><input id="tInvites" class="smash-input px-3 py-2 rounded-xl text-xs" placeholder="Private invites: name1, name2"></div><textarea id="tRules" class="smash-input w-full px-3 py-2 rounded-xl text-xs mt-2" rows="3" placeholder="Rules"></textarea><button id="tCreateBtn" class="dock-action yellow mt-2">CREATE TOURNAMENT</button>`;
+            create.appendChild(panel);
+            panel.querySelector('#tCreateBtn').onclick=()=>{
+                const mode=document.getElementById('tMode').value;
+                let capacity=Number(document.getElementById('tCapacity').value||16);
+                if(mode==='ffa') capacity=capacity>=24?24:12;
+                const startRaw=document.getElementById('tStart').value;
+                socket.emit('create_tournament',{name:document.getElementById('tName').value,mode,capacity,startAt:startRaw?new Date(startRaw).getTime():Date.now(),isPublic:document.getElementById('tPrivacy').value==='public',invited:document.getElementById('tInvites').value,rules:document.getElementById('tRules').value});
+            };
+        }
+        available.replaceChildren();
+        if (!tournamentsCache.length) {
+            available.innerHTML='<div class="hub-card text-center text-xs text-blue-200">No tournaments are available to you right now.</div>';
+            return;
+        }
+        tournamentsCache.forEach(t=>{
+            const card=document.createElement('div'); card.className='v12-tournament-card';
+            const registered=(t.participants||[]).includes(AuthSession.getUser()?.username||'');
+            card.innerHTML=`<div class="flex justify-between gap-3"><div><div class="font-bungee text-sm text-white">${escapeHTML(t.name)}</div><div class="text-[10px] text-blue-200 mt-1">${String(t.mode).toUpperCase()} · ${(t.participants||[]).length}/${t.capacity} · ${t.isPublic?'Public':'Private'} · Host: ${escapeHTML(t.hostUsername)}</div><div class="text-[10px] text-blue-200">${new Date(t.startAt).toLocaleString()}</div></div><span class="v12-pill">${escapeHTML(t.status)}</span></div><div class="text-xs text-white/80 mt-2 whitespace-pre-wrap">${escapeHTML(t.rules||'No extra rules.')}</div><div class="flex gap-2 flex-wrap mt-3" data-actions></div><div data-bracket></div>`;
+            const actions=card.querySelector('[data-actions]');
+            if(t.status==='registration'&&!registered){const reg=document.createElement('button');reg.className='v12-small-btn green';reg.textContent='REGISTER';reg.onclick=()=>socket.emit('register_tournament',{tournamentId:t.id});actions.appendChild(reg);} else if(registered){actions.insertAdjacentHTML('beforeend','<span class="v12-pill">✓ REGISTERED</span>');}
+            const mine=t.hostUsername===AuthSession.getUser()?.username||accountState?.roles?.owner;
+            if(mine&&t.status==='registration'){const start=document.createElement('button');start.className='v12-small-btn yellow';start.textContent='START TOURNAMENT';start.onclick=()=>{if(confirm('Close registration and start?'))socket.emit('start_tournament',{tournamentId:t.id});};actions.appendChild(start);}
+            if(mine&&!t.isPublic){const invite=document.createElement('button');invite.className='v12-small-btn purple';invite.textContent='INVITE PLAYER';invite.onclick=()=>{const username=prompt('Username to invite:');if(username)socket.emit('invite_tournament_player',{tournamentId:t.id,username});};actions.appendChild(invite);}
+            const bracket=card.querySelector('[data-bracket]');
+            if(t.bracket?.type==='1v1'){
+                bracket.className='v12-bracket';
+                (t.bracket.rounds||[]).forEach(round=>{const col=document.createElement('div');col.className='v12-round';col.innerHTML=`<div class="v12-section-title">${escapeHTML(round.name)}</div>`;(round.matches||[]).forEach(m=>{const match=document.createElement('div');match.className='v12-match';match.innerHTML=`<div>${escapeHTML(m.a||'BYE')}</div><div class="text-blue-300 text-[9px]">vs</div><div>${escapeHTML(m.b||'BYE')}</div>`;col.appendChild(match);});bracket.appendChild(col);});
+            } else if(t.bracket?.type==='ffa'){
+                bracket.className='v12-section'; bracket.innerHTML=`<div class="v12-section-title">FFA heats</div>${(t.bracket.heats||[]).map((heat,i)=>`<div class="text-xs mt-2"><b>Heat ${i+1}:</b> ${heat.map(escapeHTML).join(', ')||'Waiting'}</div>`).join('')}`;
+            }
+            available.appendChild(card);
+        });
+    }
+
+    socket.on('tournament_list', data=>{tournamentsCache=Array.isArray(data?.tournaments)?data.tournaments:[];canCreateTournament=!!data?.canCreate;updateConditionalNavigation();renderTournamentPage();});
+    socket.on('tournament_created', t=>{showToast(`Tournament created: ${t.name}`,'🏆');socket.emit('get_tournaments');});
+    socket.on('tournament_invite', t=>{showToast(`Private tournament invite: ${t.name}`,'🏆');socket.emit('get_tournaments');});
+    socket.on('tournament_error', data=>showToast(data?.message||'Tournament action failed.','❌'));
+
+    // ------------------------------------------------------------------
+    // STREAMER PAGE
+    // ------------------------------------------------------------------
+    function injectStreamerUI() {
+        const sidebar=document.querySelector('#mainDashboard aside');
+        if(sidebar&&!document.getElementById('btnNavStreamer')){const btn=document.createElement('button');btn.id='btnNavStreamer';btn.className='sidebar-btn hidden w-12 h-12 rounded-2xl flex items-center justify-center shadow-lg';btn.textContent='STREAM';btn.title='Streamer tools';btn.onclick=openStreamerPage;const music=document.getElementById('btnNavMusic');sidebar.insertBefore(btn,music||null);}
+        const setup=document.getElementById('setupTab');
+        if(setup?.parentElement&&!document.getElementById('streamerTab')){const tab=document.createElement('div');tab.id='streamerTab';tab.className='tab-content hidden space-y-4';tab.innerHTML=`<h2 class="font-bungee text-xl text-pink-300">STREAMER TOOLS</h2><div class="hub-card"><div class="grid md:grid-cols-2 gap-3"><label class="v12-section"><div class="v12-section-title">Live badge</div><input id="streamerLiveToggle" type="checkbox"> <span class="text-xs">Show LIVE on your public profile</span></label><label class="v12-section"><div class="v12-section-title">Hide room code</div><input id="streamerHideCode" type="checkbox"> <span class="text-xs">Hide your room code on your own game bar while streaming</span></label><label class="v12-section"><div class="v12-section-title">Streamer-safe notifications</div><input id="streamerSafeNotifications" type="checkbox"> <span class="text-xs">Reduce private info in popups</span></label></div></div>`;setup.parentElement.insertBefore(tab,setup);tab.querySelector('#streamerLiveToggle').onchange=e=>socket.emit('set_streamer_live',{live:e.target.checked});['streamerHideCode','streamerSafeNotifications'].forEach(id=>tab.querySelector('#'+id).onchange=saveStreamerPrefs);}
+    }
+    function streamerPrefs(){return readLocal(STREAMER_PREF_KEY,{hideCode:false,safeNotifications:false});}
+    function saveStreamerPrefs(){const prefs={hideCode:!!document.getElementById('streamerHideCode')?.checked,safeNotifications:!!document.getElementById('streamerSafeNotifications')?.checked};writeLocal(STREAMER_PREF_KEY,prefs);const code=document.getElementById('copyRoomCodeBtn');if(code)code.style.visibility=prefs.hideCode?'hidden':'';}
+    window.openStreamerPage=function(){document.querySelectorAll('.tab-content').forEach(el=>el.classList.add('hidden'));document.querySelectorAll('.sidebar-btn').forEach(btn=>btn.classList.remove('active'));document.getElementById('streamerTab')?.classList.remove('hidden');document.getElementById('btnNavStreamer')?.classList.add('active');const prefs=streamerPrefs();if(document.getElementById('streamerLiveToggle'))document.getElementById('streamerLiveToggle').checked=!!accountState?.streamerLive;if(document.getElementById('streamerHideCode'))document.getElementById('streamerHideCode').checked=!!prefs.hideCode;if(document.getElementById('streamerSafeNotifications'))document.getElementById('streamerSafeNotifications').checked=!!prefs.safeNotifications;};
+    socket.on('streamer_state',data=>{if(accountState)accountState.streamerLive=!!data?.live;injectHeaderBadges();});
+
+    // ------------------------------------------------------------------
+    // RANKED / CASUAL
+    // ------------------------------------------------------------------
+    let queueType = localStorage.getItem(QUEUE_KEY) === 'ranked' ? 'ranked' : 'casual';
+    function injectQueueSelector() {
+        if (document.getElementById('v12QueueSelector')) return;
+        const setup=document.getElementById('setupTab');
+        const createButton=setup?.querySelector('button[onclick="createLobby()"]');
+        if(setup&&createButton){const wrap=document.createElement('div');wrap.id='v12QueueSelector';wrap.innerHTML='<button class="v12-queue-btn" data-q="casual">CASUAL</button><button class="v12-queue-btn" data-q="ranked">RANKED</button>';setup.insertBefore(wrap,createButton);wrap.querySelectorAll('button').forEach(btn=>btn.onclick=()=>{queueType=btn.dataset.q;localStorage.setItem(QUEUE_KEY,queueType);refreshQueueButtons();});}
+        const ffa=document.getElementById('ffaTab');
+        if(ffa&&!document.getElementById('v12FfaQueue')){const wrap=document.createElement('div');wrap.id='v12FfaQueue';wrap.className='hub-card';wrap.innerHTML='<span class="dock-label">Match type</span><div id="v12FfaQueueInner" class="flex gap-2"><button class="v12-queue-btn flex-1" data-q="casual">CASUAL</button><button class="v12-queue-btn flex-1" data-q="ranked">RANKED</button></div>';ffa.insertBefore(wrap,ffa.children[1]||null);wrap.querySelectorAll('button').forEach(btn=>btn.onclick=()=>{queueType=btn.dataset.q;localStorage.setItem(QUEUE_KEY,queueType);refreshQueueButtons();});}
+        refreshQueueButtons();
+    }
+    function refreshQueueButtons(){document.querySelectorAll('[data-q]').forEach(btn=>btn.classList.toggle('active',btn.dataset.q===queueType));}
+
+    createLobby = function () {
+        const user=AuthSession.getUser();
+        let smashUrlInput=document.getElementById('smashUrl')?.value.trim()||'';
+        smashUrlInput=extractSmashUrlClient(smashUrlInput);
+        if(!smashUrlInput)return showToast('Error: A valid Smash Karts room link or code is required!','⚠️');
+        socket.emit('create_room',{playerName:user?.username||'Player',smashUrl:smashUrlInput,winCondition:document.getElementById('winCondition')?.value||'First to 3',mode:'1v1',queueType});
+    };
+    playFFAFromPage=function(){socket.emit('play_ffa',{queueType});};
+    createFFAFromPage=function(){socket.emit('create_ffa_lobby',{maxPlayers:Number(document.getElementById('ffaMaxPlayers')?.value||12),isPublic:document.getElementById('ffaPrivacy')?.value!=='private',queueType});};
+
+    // ------------------------------------------------------------------
+    // OWNER / DEV ADMIN PANEL
+    // ------------------------------------------------------------------
+    function injectAdminPanel() {
+        if (document.getElementById('adminModal')) return;
+        const modal=document.createElement('div');modal.id='adminModal';modal.className='hidden fixed inset-0 modal-overlay z-[100] flex items-center justify-center p-4 exclusive-modal';
+        modal.innerHTML=`<div class="v12-modal-card w-full max-w-6xl p-5 max-h-[94vh] overflow-hidden"><div class="flex justify-between items-center gap-3 mb-3"><div><h2 class="font-bungee text-xl text-purple-300">🛡 OWNER / DEV CONTROL CENTER</h2><p class="text-[10px] text-blue-200">PRIME only. Server-enforced permissions.</p></div><button id="adminClose" class="v12-small-btn red">✕ CLOSE</button></div><div id="adminStats" class="flex gap-2 flex-wrap mb-3"></div><div class="v12-grid"><div class="v12-list"><input id="adminSearch" class="smash-input w-full px-3 py-2 rounded-xl text-xs mb-2" placeholder="Search players..."><div id="adminUserList"></div></div><div class="v12-detail"><div id="adminUserDetail" class="text-xs text-blue-200">Select an account.</div><div class="v12-section"><div class="v12-section-title">Reports</div><div id="adminReports" class="max-h-44 overflow-y-auto"></div></div><div class="v12-section"><div class="v12-section-title">Audit log</div><div id="adminAudit" class="max-h-40 overflow-y-auto"></div></div></div></div></div>`;
+        document.body.appendChild(modal);modal.querySelector('#adminClose').onclick=()=>modal.classList.add('hidden');modal.querySelector('#adminSearch').oninput=()=>renderAdminUsers(window.__v12AdminData);
+    }
+
+    window.openAdminPanel = function () {
+        if (!accountState?.roles?.owner) return;
+        document.querySelectorAll('.exclusive-modal').forEach(el=>el.classList.add('hidden'));
+        document.getElementById('adminModal')?.classList.remove('hidden');
+        socket.emit('admin_get_dashboard');
+    };
+
+    function renderAdminUsers(data) {
+        if(!data)return;window.__v12AdminData=data;
+        const list=document.getElementById('adminUserList');if(!list)return;list.replaceChildren();
+        const q=String(document.getElementById('adminSearch')?.value||'').toLowerCase();
+        (data.users||[]).filter(u=>!q||u.username.toLowerCase().includes(q)||u.email.toLowerCase().includes(q)).forEach(user=>{const btn=document.createElement('button');btn.className=`v12-user-row${adminSelectedUsername===user.username?' active':''}`;btn.innerHTML=`<div><div class="font-black text-xs">${escapeHTML(user.username)} <span class="text-yellow-300">L${user.level}</span></div><div class="text-[9px] text-blue-200">${escapeHTML(user.email)} · ${user.online?'online':'offline'}</div><div class="flex gap-1 mt-1">${badgeHTML(user.roles)}</div></div><span>›</span>`;btn.onclick=()=>{adminSelectedUsername=user.username;renderAdminUsers(data);renderAdminDetail(user);};list.appendChild(btn);});
+    }
+
+    function renderAdminDetail(user) {
+        const box=document.getElementById('adminUserDetail');if(!box)return;
+        if(user.roles?.owner){box.innerHTML=`<div class="v12-section"><div class="font-bungee text-lg text-purple-300">${escapeHTML(user.username)} · OWNER / DEV</div><p class="text-xs text-blue-200 mt-2">The OWNER role cannot be edited, banned, muted, renamed, or transferred from this panel.</p></div>`;return;}
+        box.innerHTML=`<div class="flex justify-between gap-3"><div><div class="font-bungee text-lg text-white">${escapeHTML(user.username)}</div><div class="text-[10px] text-blue-200">${escapeHTML(user.email)}</div></div><div class="flex gap-1">${badgeHTML(user.roles)}</div></div>
+        <div class="v12-section"><div class="v12-section-title">Permissions</div><label class="mr-3"><input id="admMod" type="checkbox" ${user.roles?.moderator?'checked':''}> MOD</label><label class="mr-3"><input id="admStreamer" type="checkbox" ${user.roles?.streamer?'checked':''}> STREAMER</label><label><input id="admTourney" type="checkbox" ${user.roles?.tourneyHost?'checked':''}> TOURNEY HOST</label><button id="admSaveRoles" class="v12-small-btn purple ml-2">SAVE ROLES</button></div>
+        <div class="v12-section"><div class="v12-section-title">Moderation</div><input id="admReason" class="smash-input w-full px-2 py-2 rounded-lg text-xs" placeholder="Reason / note"><div class="flex gap-1 flex-wrap mt-2"><button data-action="warn" class="v12-small-btn yellow">WARN</button><button data-action="mute" data-duration="600000" class="v12-small-btn">MUTE 10M</button><button data-action="mute" data-duration="3600000" class="v12-small-btn">MUTE 1H</button><button data-action="mute" data-duration="86400000" class="v12-small-btn">MUTE 24H</button><button data-action="unmute" class="v12-small-btn">UNMUTE</button><button data-action="kick" class="v12-small-btn red">KICK</button><button data-action="ban" data-duration="3600000" class="v12-small-btn red">BAN 1H</button><button data-action="ban" data-duration="86400000" class="v12-small-btn red">BAN 24H</button><button data-action="ban" data-duration="604800000" class="v12-small-btn red">BAN 7D</button><button data-action="ban" data-duration="permanent" class="v12-small-btn red">PERMA BAN</button><button data-action="unban" class="v12-small-btn green">UNBAN</button><button data-action="clear_warnings" class="v12-small-btn">CLEAR WARNINGS</button><button data-action="reset_avatar" class="v12-small-btn">RESET PFP</button></div><div class="text-[10px] text-blue-200 mt-2">Warnings: ${user.warnings||0} · Muted: ${user.mutedUntil?String(user.mutedUntil):'No'} · Banned: ${user.bannedUntil?String(user.bannedUntil):'No'}</div></div>
+        <div class="v12-section"><div class="v12-section-title">Progress / skill</div><div class="grid grid-cols-3 gap-2"><input id="admLevel" type="number" min="1" max="200" value="${user.level}" class="smash-input px-2 py-2 rounded-lg text-xs"><input id="admR1" type="number" value="${user.rating1v1}" class="smash-input px-2 py-2 rounded-lg text-xs"><input id="admRF" type="number" value="${user.ratingFFA}" class="smash-input px-2 py-2 rounded-lg text-xs"></div><button id="admSaveProgress" class="v12-small-btn green mt-2">SAVE LEVEL + RATINGS</button></div>
+        <div class="v12-section"><div class="v12-section-title">Account tools</div><button id="admRename" class="v12-small-btn">FORCE USERNAME</button> <button id="admProfile" class="v12-small-btn">OPEN PROFILE</button></div>`;
+        box.querySelector('#admSaveRoles').onclick=()=>socket.emit('admin_set_roles',{username:user.username,roles:{moderator:box.querySelector('#admMod').checked,streamer:box.querySelector('#admStreamer').checked,tourneyHost:box.querySelector('#admTourney').checked}});
+        box.querySelectorAll('[data-action]').forEach(btn=>btn.onclick=()=>{const reason=box.querySelector('#admReason').value||'';const action=btn.dataset.action;if((action==='ban'||action==='kick')&&!reason&&!confirm('No reason entered. Continue?'))return;socket.emit('admin_moderation_action',{username:user.username,action,duration:btn.dataset.duration,reason});});
+        box.querySelector('#admSaveProgress').onclick=()=>socket.emit('admin_set_progress',{username:user.username,level:Number(box.querySelector('#admLevel').value),rating1v1:Number(box.querySelector('#admR1').value),ratingFFA:Number(box.querySelector('#admRF').value)});
+        box.querySelector('#admRename').onclick=()=>{const next=prompt('Force new username for '+user.username+':');if(next)socket.emit('admin_force_username',{username:user.username,newUsername:next});};
+        box.querySelector('#admProfile').onclick=()=>{document.getElementById('adminModal').classList.add('hidden');openPlayerProfile(user.username);};
+    }
+
+    function renderAdminDashboard(data) {
+        const stats=document.getElementById('adminStats');if(stats)stats.innerHTML=Object.entries(data.stats||{}).map(([k,v])=>`<span class="v12-pill">${escapeHTML(k)}: ${v}</span>`).join('');
+        renderAdminUsers(data);
+        if(adminSelectedUsername){const user=(data.users||[]).find(u=>u.username===adminSelectedUsername);if(user)renderAdminDetail(user);}
+        const reports=document.getElementById('adminReports');if(reports){reports.replaceChildren();(data.reports||[]).slice(0,50).forEach(report=>{const row=document.createElement('div');row.className='p-2 border-b border-white/10 text-[10px]';row.innerHTML=`<div><b>${escapeHTML(report.reporter)}</b> reported <b>${escapeHTML(report.reportedUser)}</b> · ${escapeHTML(report.location)} · <span class="v12-pill">${escapeHTML(report.status)}</span></div><div class="text-blue-200 mt-1">${escapeHTML(report.reason)}</div><div class="mt-1">${(report.context||[]).map(c=>`<div>${escapeHTML(c.senderUsername)}: ${escapeHTML(c.message)}</div>`).join('')}</div>`;if(report.status==='open'){const a=document.createElement('div');a.className='flex gap-1 mt-2';['resolved','dismissed'].forEach(status=>{const b=document.createElement('button');b.className='v12-small-btn';b.textContent=status.toUpperCase();b.onclick=()=>socket.emit('resolve_report',{reportId:report.id,status});a.appendChild(b);});row.appendChild(a);}reports.appendChild(row);});}
+        const audit=document.getElementById('adminAudit');if(audit){audit.innerHTML=(data.audit||[]).slice(0,100).map(item=>`<div class="text-[9px] py-1 border-b border-white/10"><b>${escapeHTML(item.actor)}</b> · ${escapeHTML(item.action)} · ${escapeHTML(item.target)}<div class="text-blue-300">${new Date(item.timestamp).toLocaleString()} ${escapeHTML(item.details||'')}</div></div>`).join('');}
+    }
+    socket.on('admin_dashboard',renderAdminDashboard);socket.on('admin_refresh',()=>socket.emit('admin_get_dashboard'));socket.on('admin_error',data=>showToast(data?.message||'Admin action failed.','❌'));socket.on('moderation_report_received',()=>{if(accountState?.roles?.owner)showToast('New moderation report.','🛡️');});
+
+    // ------------------------------------------------------------------
+    // INITIALIZE
+    // ------------------------------------------------------------------
+    injectStyles();
+    injectGuide();
+    injectProfilePage();
+    injectGroupsUI();
+    injectTournamentUI();
+    injectStreamerUI();
+    injectQueueSelector();
+    injectAdminPanel();
+
+    // Old browser-only sessions are no longer trusted as authenticated.
+    const secure = secureSession();
+    if (!secure?.token) {
+        const rawOld = localStorage.getItem('user_session');
+        if (rawOld) localStorage.removeItem('user_session');
+        accountState = null;
+        const guest = AuthSession.getUser();
+        socket.emit('set_user_session', { username: guest?.username || 'Guest', isGuest: true });
+    } else {
+        accountState = secure;
+        socket.emit('account_resume', { token: secure.token });
+    }
+
+    injectHeaderBadges();
+    socket.emit('get_groups');
+    socket.emit('get_tournaments');
+
+    socket.on('connect', () => {
+        const session = secureSession();
+        if (session?.token) socket.emit('account_resume', { token: session.token });
+    });
 }
