@@ -904,1271 +904,927 @@ server.listen(PORT, () => {
 // Injected AFTER your existing script.js.
 // ============================================================================
 function installMegaArena() {
-    // ------------------------------------------------------------------------
-    // GUEST MODE: login is OPTIONAL.
-    // ------------------------------------------------------------------------
-    const ACCOUNT_KEY = 'user_session';
-    const GUEST_KEY = 'smash_guest_profile_v3';
-    const PREF_KEY = 'smash_mega_preferences_v3';
-    const PROGRESS_KEY = 'smash_mega_progress_v3';
-    const ROOM_HISTORY_KEY = 'smash_room_code_history_v3';
-    const MUSIC_FAVORITES_KEY = 'smash_music_favorites_v3';
-    const NOTES_KEY = 'smash_notes_v3';
+    const GUEST_KEY = 'smash_guest_profile_v4';
+    const NOTES_KEY = 'smash_arena_notes_v4';
+    const PREF_KEY = 'smash_arena_preferences_v4';
+    const SESSION_STARTED = Date.now();
 
-    function safeJSON(key, fallback) {
+    function readJSON(key, fallback) {
         try {
-            const parsed = JSON.parse(localStorage.getItem(key));
-            return parsed == null ? fallback : parsed;
+            const value = JSON.parse(localStorage.getItem(key));
+            return value == null ? fallback : value;
         } catch {
             return fallback;
         }
     }
 
-    function saveJSON(key, value) {
-        try {
-            localStorage.setItem(key, JSON.stringify(value));
-        } catch {}
+    function writeJSON(key, value) {
+        try { localStorage.setItem(key, JSON.stringify(value)); } catch {}
     }
 
-    function randomGuestNameClient() {
-        return 'Guest-' + Math.random().toString(36).slice(2, 6).toUpperCase();
+    function randomGuestName() {
+        const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+        let suffix = '';
+        for (let i = 0; i < 4; i++) suffix += chars[Math.floor(Math.random() * chars.length)];
+        return `Guest-${suffix}`;
     }
 
-    function accountUser() {
+    function getAccountSession() {
         try {
-            const raw = localStorage.getItem(ACCOUNT_KEY);
+            const raw = localStorage.getItem('user_session');
             if (!raw) return null;
             const user = JSON.parse(raw);
-            if (!user || !user.username) return null;
+            if (!user || !user.username || !user.email) return null;
             return { ...user, isGuest: false };
         } catch {
             return null;
         }
     }
 
-    function guestUser() {
-        let guest = safeJSON(GUEST_KEY, null);
+    function getGuestSession() {
+        let guest = readJSON(GUEST_KEY, null);
         if (!guest || !guest.username) {
             guest = {
-                username: randomGuestNameClient(),
+                username: randomGuestName(),
                 email: null,
                 isGuest: true,
                 createdAt: Date.now()
             };
-            saveJSON(GUEST_KEY, guest);
+            writeJSON(GUEST_KEY, guest);
         }
         return { ...guest, isGuest: true };
     }
 
-    function currentArenaUser() {
-        return accountUser() || guestUser();
+    function isRealAccount() {
+        return !!getAccountSession();
     }
 
-    function isAccountMode() {
-        return !!accountUser();
-    }
-
+    // ---------------------------------------------------------------------
+    // OPTIONAL LOGIN / GUEST MODE
+    // The site's original script thinks a session is required. We make a
+    // guest session count as enough to PLAY, while the server still knows
+    // whether this is a real account for persistent features.
+    // ---------------------------------------------------------------------
     const originalAuthLogin = AuthSession.login.bind(AuthSession);
 
-    AuthSession.getUser = currentArenaUser;
-    AuthSession.isLoggedIn = () => true;
-    AuthSession.logout = function () {
-        localStorage.removeItem(ACCOUNT_KEY);
-        window.location.reload();
+    AuthSession.getUser = function () {
+        return getAccountSession() || getGuestSession();
     };
+
+    AuthSession.isLoggedIn = function () {
+        return true;
+    };
+
     AuthSession.login = function (email, username) {
         originalAuthLogin(email, username);
-        const current = accountUser();
-        if (current) socket.emit('set_user_session', current);
-        setTimeout(refreshAccountChrome, 0);
+        setTimeout(() => updateAccountUI(), 0);
     };
 
-    // Prevent guests from being auto-logged-out for inactivity.
-    const originalCheckInactivity = AuthSession.checkInactivity.bind(AuthSession);
-    AuthSession.checkInactivity = function () {
-        if (!isAccountMode()) return;
-        return originalCheckInactivity();
+    AuthSession.logout = function () {
+        localStorage.removeItem('user_session');
+        window.location.reload();
     };
 
-    // ------------------------------------------------------------------------
-    // PREFERENCES / PROGRESSION
-    // ------------------------------------------------------------------------
-    const defaults = {
-        theme: 'midnight',
-        accent: '#ffd318',
-        compact: false,
-        largeText: false,
-        reducedMotion: false,
-        performance: false,
-        sound: true,
-        chatSound: true,
-        autoHideToolbar: false,
-        showPlayerNames: true,
-        quickChat: true,
-        musicOpen: false,
-        lastSpotify: '',
-        lobbyFilter: 'all',
-        lobbySearch: '',
-        notifications: true
+    function closeExclusiveModals(exceptId = null) {
+        [
+            'settingsModal',
+            'editUsernameModal',
+            'authModal',
+            'onlineUsersModal',
+            'preGameLobbyModal',
+            'makeCodeModal',
+            'findGameModal'
+        ].forEach(id => {
+            if (id === exceptId) return;
+            document.getElementById(id)?.classList.add('hidden');
+        });
+    }
+
+    function showExclusiveModal(id) {
+        closeExclusiveModals(id);
+        document.getElementById(id)?.classList.remove('hidden');
+    }
+
+    window.closeAuthModalOptional = function () {
+        document.getElementById('authModal')?.classList.add('hidden');
     };
 
-    let prefs = { ...defaults, ...safeJSON(PREF_KEY, {}) };
-    let progress = { xp: 0, sessionMatches: 0, accountMatches: 0, streak: 0, lastPlayDate: '', achievements: [], ...safeJSON(PROGRESS_KEY, {}) };
-    let roomCodeHistory = safeJSON(ROOM_HISTORY_KEY, []);
-    let musicFavorites = safeJSON(MUSIC_FAVORITES_KEY, []);
-    let notesState = safeJSON(NOTES_KEY, { match: '', players: {} });
-    let matchStartedAt = 0;
-    let pageStartedAt = Date.now();
-    let lastRoomId = localStorage.getItem('smash_last_room_id_v3') || '';
-    let connectionStartedAt = Date.now();
-    let readyState = false;
+    window.openOptionalLogin = function () {
+        showExclusiveModal('authModal');
+    };
 
-    function savePrefs() { saveJSON(PREF_KEY, prefs); }
-    function saveProgress() { if (isAccountMode()) saveJSON(PROGRESS_KEY, progress); }
+    // Override the old modal openers so two full-screen windows cannot stack.
+    const originalOpenOnlineModal = openOnlineModal;
+    openOnlineModal = function () {
+        closeExclusiveModals('onlineUsersModal');
+        originalOpenOnlineModal();
+    };
 
-    function levelFromXP(xp) {
-        return Math.max(1, Math.floor(Math.sqrt(Math.max(0, xp) / 100)) + 1);
-    }
+    const originalOpenMakeCodeModal = openMakeCodeModal;
+    openMakeCodeModal = function () {
+        closeExclusiveModals('makeCodeModal');
+        originalOpenMakeCodeModal();
+    };
 
-    function addXP(amount, reason) {
-        if (!isAccountMode()) return;
-        const oldLevel = levelFromXP(progress.xp);
-        progress.xp += Math.max(0, Number(amount) || 0);
-        const newLevel = levelFromXP(progress.xp);
-        saveProgress();
-        updateProfileStats();
-        if (newLevel > oldLevel) {
-            showToast(`Level up! You reached Level ${newLevel}.`, '⭐');
-            unlockAchievement('level_' + newLevel, `Reached Level ${newLevel}`);
-        } else if (reason) {
-            updateXPToast(reason, amount);
-        }
-    }
+    const originalOpenFindGameModal = openFindGameModal;
+    openFindGameModal = function () {
+        closeExclusiveModals('findGameModal');
+        originalOpenFindGameModal();
+    };
 
-    function updateXPToast(reason, amount) {
-        if (!prefs.notifications) return;
-        const box = document.getElementById('megaMiniNotice');
-        if (!box) return;
-        box.textContent = `+${amount} XP · ${reason}`;
-        box.classList.add('show');
-        clearTimeout(box._timer);
-        box._timer = setTimeout(() => box.classList.remove('show'), 1700);
-    }
+    const originalPromptEditUsername = promptEditUsername;
+    promptEditUsername = function () {
+        closeExclusiveModals('editUsernameModal');
+        originalPromptEditUsername();
+    };
 
-    function unlockAchievement(id, label) {
-        if (!isAccountMode()) return;
-        if (progress.achievements.includes(id)) return;
-        progress.achievements.push(id);
-        saveProgress();
-        showToast(`Achievement unlocked: ${label}`, '🏅');
-    }
+    // Settings are a normal Arena Hub page now, not a floating window.
+    openSettingsModal = function () {
+        openHubPage('settings');
+    };
 
-    function updateDailyStreak() {
-        if (!isAccountMode()) return;
-        const today = new Date().toISOString().slice(0, 10);
-        if (progress.lastPlayDate === today) return;
-        const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
-        progress.streak = progress.lastPlayDate === yesterday ? (progress.streak || 0) + 1 : 1;
-        progress.lastPlayDate = today;
-        saveProgress();
-        if (progress.streak >= 3) unlockAchievement('streak_3', '3-day streak');
-        if (progress.streak >= 7) unlockAchievement('streak_7', '7-day streak');
-    }
+    closeSettingsModal = function () {
+        document.getElementById('settingsModal')?.classList.add('hidden');
+    };
 
-    // ------------------------------------------------------------------------
-    // CSS
-    // ------------------------------------------------------------------------
-    const style = document.createElement('style');
-    style.id = 'megaArenaStyle';
-    style.textContent = `
-        :root { --mega-accent:${prefs.accent}; }
-        #megaAccountBar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-        .mega-chip{display:inline-flex;align-items:center;gap:6px;padding:7px 10px;border:1px solid #ffffff24;border-radius:999px;background:#0b1f55cc;color:#fff;font:800 11px Inter,sans-serif;white-space:nowrap}
-        .mega-chip strong{color:var(--mega-accent)}
-        .mega-button{border:1px solid #ffffff28;background:#214794;color:white;border-radius:12px;padding:9px 12px;font:900 11px Inter,sans-serif;cursor:pointer;transition:.16s transform,.16s filter}
-        .mega-button:hover{filter:brightness(1.12);transform:translateY(-1px)}
-        .mega-button.primary{background:var(--mega-accent);color:#12285f;border-color:#fff8}
-        .mega-button.danger{background:#9f2941}
-        .mega-button.good{background:#14865f}
-        #megaGuestBanner{position:fixed;left:50%;top:10px;transform:translateX(-50%);z-index:210;background:#0f2864ee;border:1px solid var(--mega-accent);border-radius:16px;padding:8px 12px;color:white;font:800 11px Inter,sans-serif;box-shadow:0 12px 30px #0008;display:flex;gap:10px;align-items:center}
-        #megaGuestBanner.hidden{display:none}
-        #megaMiniNotice{position:fixed;left:50%;bottom:20px;transform:translate(-50%,20px);opacity:0;pointer-events:none;z-index:260;background:#0e235cee;color:#fff;border:1px solid var(--mega-accent);padding:9px 13px;border-radius:999px;font:900 11px Inter,sans-serif;transition:.2s}
-        #megaMiniNotice.show{opacity:1;transform:translate(-50%,0)}
-        #megaConnectionBanner{position:fixed;inset:auto 12px 12px auto;z-index:230;padding:8px 10px;border-radius:12px;background:#132d6eeb;border:1px solid #ffffff30;color:#fff;font:800 10px Inter,sans-serif}
-        #megaConnectionBanner.offline{background:#831f36;border-color:#ff91a5}
-        #megaDrawer,#megaCommandPalette,#megaProfilePanel,#megaNotesPanel,#megaShortcutsPanel{position:fixed;z-index:240;background:#112a68f7;border:1px solid #ffffff30;color:#fff;box-shadow:0 20px 70px #000a;backdrop-filter:blur(18px)}
-        #megaDrawer{right:16px;top:92px;width:min(390px,calc(100vw - 32px));max-height:calc(100dvh - 112px);overflow:auto;border-radius:20px;padding:14px}
-        .mega-section{background:#071a48a8;border:1px solid #ffffff18;border-radius:16px;padding:12px;margin-top:10px}
-        .mega-section h3{font:900 12px Inter,sans-serif;color:var(--mega-accent);margin:0 0 8px}
-        .mega-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
-        .mega-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-        .mega-input,.mega-select,.mega-textarea{width:100%;box-sizing:border-box;background:#061943;color:white;border:1px solid #ffffff28;border-radius:12px;padding:9px 10px;font:700 11px Inter,sans-serif;outline:none}
-        .mega-input:focus,.mega-select:focus,.mega-textarea:focus{border-color:var(--mega-accent)}
-        .mega-textarea{min-height:90px;resize:vertical}
-        #megaCommandPalette{left:50%;top:14vh;transform:translateX(-50%);width:min(620px,calc(100vw - 32px));border-radius:22px;padding:14px}
-        #megaCommandResults{max-height:55vh;overflow:auto;margin-top:8px}
-        .mega-command{width:100%;text-align:left;border:0;border-radius:12px;background:transparent;color:#fff;padding:11px;cursor:pointer;font:800 12px Inter,sans-serif;display:flex;justify-content:space-between;gap:14px}
-        .mega-command:hover,.mega-command.active{background:#ffffff16}
-        #megaProfilePanel,#megaNotesPanel,#megaShortcutsPanel{left:50%;top:50%;transform:translate(-50%,-50%);width:min(620px,calc(100vw - 32px));max-height:82vh;overflow:auto;border-radius:22px;padding:16px}
-        #gameLobbyMegaInfo{display:flex;align-items:center;gap:8px;min-width:0;max-width:min(46vw,620px);padding:7px 10px;border:1px solid #ffffff2d;border-radius:18px;background:#0e245c;color:white;font:800 11px Inter,sans-serif}
-        #gameLobbyMegaCount{color:var(--mega-accent);white-space:nowrap}
-        #gameLobbyMegaNames{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-        #megaReadyBadge{color:#72f6b7;white-space:nowrap}
-        .mega-lobby-player{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center;padding:9px;border-radius:12px;background:#0d2765;border:1px solid #ffffff16;margin-bottom:6px}
-        .mega-player-sub{font-size:9px;color:#9db5e8;margin-top:2px}
-        .mega-ready{color:#72f6b7}.mega-notready{color:#ffca69}
-        #megaLobbyTools{margin-top:10px;display:flex;gap:6px;flex-wrap:wrap}
-        #megaReactionTray{position:fixed;right:20px;bottom:20px;z-index:220;display:flex;gap:6px}
-        .mega-reaction{font-size:20px;animation:megaFloat 1.7s ease forwards;pointer-events:none;background:#0e245ed9;border:1px solid #ffffff2a;border-radius:999px;padding:6px 9px}
-        @keyframes megaFloat{0%{transform:translateY(0) scale(.8);opacity:0}15%{opacity:1;transform:translateY(-6px) scale(1)}100%{transform:translateY(-85px) scale(1.1);opacity:0}}
-        body.mega-large-text{font-size:112%}
-        body.mega-compact .arena-button{padding:7px 9px!important;font-size:11px!important}
-        body.mega-compact #arenaToolbar{padding:7px 12px!important;min-height:58px!important}
-        body.mega-performance *{backdrop-filter:none!important;box-shadow:none!important;text-shadow:none!important}
-        body.mega-reduced-motion *,body.mega-reduced-motion *:before,body.mega-reduced-motion *:after{animation:none!important;transition:none!important;scroll-behavior:auto!important}
-        body.mega-theme-neon{background:radial-gradient(circle at top,#25105f,#07142e 48%,#030814)!important}
-        body.mega-theme-sunset{background:radial-gradient(circle at top,#6c254c,#1c2452 45%,#08142e)!important}
-        body.mega-theme-carbon{background:radial-gradient(circle at top,#27313d,#0f1720 50%,#05080d)!important}
-        #megaMusicFrame{width:100%;height:152px;border:0;border-radius:12px;background:#061943}
-        #megaSessionWidget{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-        #megaQuickBar{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
-        #megaQuickBar button{font-size:13px}
-        #megaOfflineToast{position:fixed;inset:0;display:none;place-items:center;z-index:300;background:#020817d9;color:#fff;text-align:center;padding:20px}
-        #megaOfflineToast.show{display:grid}
-        @media(max-width:760px){#gameLobbyMegaInfo{max-width:100%;width:100%}.arena-brand{width:100%}.mega-grid{grid-template-columns:1fr}#megaGuestBanner{top:auto;bottom:12px;width:calc(100vw - 24px);justify-content:center}}
-    `;
-    document.head.appendChild(style);
+    // Guest rename stays guest. It does NOT accidentally create a fake login.
+    saveNewUsername = function () {
+        const input = document.getElementById('newUsernameInput');
+        const name = String(input?.value || '').trim().slice(0, 20);
+        if (!name) return;
 
-    // ------------------------------------------------------------------------
-    // CORE DOM HELPERS
-    // ------------------------------------------------------------------------
-    function el(tag, attrs = {}, children = []) {
-        const node = document.createElement(tag);
-        for (const [key, value] of Object.entries(attrs)) {
-            if (key === 'class') node.className = value;
-            else if (key === 'text') node.textContent = value;
-            else if (key === 'html') node.innerHTML = value;
-            else if (key.startsWith('on') && typeof value === 'function') node.addEventListener(key.slice(2), value);
-            else node.setAttribute(key, value);
-        }
-        for (const child of [].concat(children || [])) {
-            if (child == null) continue;
-            node.appendChild(typeof child === 'string' ? document.createTextNode(child) : child);
-        }
-        return node;
-    }
+        const account = getAccountSession();
+        if (account) {
+            const oldName = account.username;
+            account.username = name;
+            localStorage.setItem('user_session', JSON.stringify(account));
 
-    function closeNode(id) {
-        document.getElementById(id)?.remove();
-    }
-
-    function openLoginModal() {
-        const modal = document.getElementById('authModal');
-        if (modal) modal.classList.remove('hidden');
-    }
-
-    function sendCurrentSession() {
-        const user = currentArenaUser();
-        socket.emit('set_user_session', user);
-    }
-
-    function guestRename() {
-        const current = guestUser();
-        const raw = prompt('Guest name:', current.username);
-        if (raw == null) return;
-        const name = raw.trim().replace(/[^A-Za-z0-9 _-]/g, '').slice(0, 20);
-        if (!name) return showToast('Enter a name first.', '⚠️');
-        const updated = { ...current, username: name, isGuest: true };
-        saveJSON(GUEST_KEY, updated);
-        sendCurrentSession();
-        refreshAccountChrome();
-        showToast(`Guest name changed to ${name}.`, '👤');
-    }
-
-    // Original edit-name flow would accidentally create a saved login for guests.
-    const originalSaveNewUsername = window.saveNewUsername;
-    window.saveNewUsername = function () {
-        if (!isAccountMode()) {
-            const input = document.getElementById('newUsernameInput');
-            if (input && input.value.trim()) {
-                const name = input.value.trim().replace(/[^A-Za-z0-9 _-]/g, '').slice(0, 20);
-                saveJSON(GUEST_KEY, { ...guestUser(), username: name, isGuest: true });
-                closeEditUsernameModal();
-                sendCurrentSession();
-                refreshAccountChrome();
-                showToast('Guest name updated. Log in if you want it tied to saved stats.', '👤');
-                return;
+            const users = AuthSession.getRegisteredUsers();
+            const match = users.find(u =>
+                String(u.email || '').toLowerCase() === String(account.email || '').toLowerCase()
+            );
+            if (match) {
+                match.username = name;
+                localStorage.setItem('registered_users', JSON.stringify(users));
             }
+
+            showToast(`Username changed from ${oldName} to ${name}.`, '✏️');
+        } else {
+            const guest = getGuestSession();
+            guest.username = name.startsWith('Guest-') ? name : name;
+            writeJSON(GUEST_KEY, guest);
+            showToast(`Guest name changed to ${name}.`, '✏️');
         }
-        return originalSaveNewUsername && originalSaveNewUsername();
+
+        closeEditUsernameModal();
+        updateUserUI();
+        updateAccountUI();
     };
 
-    // ------------------------------------------------------------------------
-    // ACCOUNT / GUEST CHROME
-    // ------------------------------------------------------------------------
-    function refreshAccountChrome() {
-        const user = currentArenaUser();
+    // Do not use the original updateUserUI because we need to mark guests.
+    updateUserUI = function () {
+        const user = AuthSession.getUser();
+        const account = getAccountSession();
         const tag = document.getElementById('userDisplayTag');
         if (tag) tag.textContent = user.username;
 
-        let bar = document.getElementById('megaAccountBar');
-        const header = document.querySelector('#mainDashboard header');
-        if (!bar && header) {
-            const oldLogout = header.querySelector('button[onclick*="AuthSession.logout"]');
-            bar = el('div', { id: 'megaAccountBar' });
-            if (oldLogout) oldLogout.replaceWith(bar);
-            else header.appendChild(bar);
-        }
-        if (!bar) return;
-        bar.replaceChildren();
-
-        const modeChip = el('span', {
-            class: 'mega-chip',
-            html: isAccountMode()
-                ? `💾 <strong>ACCOUNT</strong> · stats saved`
-                : `⚡ <strong>GUEST</strong> · play instantly`
+        socket.emit('set_user_session', {
+            username: user.username,
+            email: account ? account.email : null,
+            isGuest: !account
         });
-        bar.appendChild(modeChip);
 
-        const profileBtn = el('button', { class: 'mega-button', text: '👤 PROFILE' });
-        profileBtn.onclick = openProfilePanel;
-        bar.appendChild(profileBtn);
+        updateAccountUI();
+    };
 
-        const historyBtn = el('button', { class: 'mega-button', text: '📜 HISTORY' });
-        historyBtn.onclick = () => {
-            if (!isAccountMode()) {
-                showToast('Log in to save and view match history.', '💾');
-                return openLoginModal();
+    function updateAccountUI() {
+        const user = AuthSession.getUser();
+        const account = getAccountSession();
+        const isGuest = !account;
+
+        const tag = document.getElementById('userDisplayTag');
+        if (tag) tag.textContent = user.username;
+
+        const mode = document.getElementById('accountModeLabel');
+        if (mode) mode.textContent = isGuest ? 'Guest Mode' : 'Saved Account';
+
+        const headerButton = document.getElementById('headerAccountButton');
+        if (headerButton) {
+            headerButton.textContent = isGuest ? 'LOG IN TO SAVE STATS' : 'LOG OUT';
+            headerButton.onclick = isGuest ? openOptionalLogin : () => AuthSession.logout();
+            headerButton.className = isGuest
+                ? 'bg-yellow-400 hover:bg-yellow-300 text-blue-950 text-xs font-black px-4 py-2 rounded-xl'
+                : 'bg-red-600 hover:bg-red-500 text-white text-xs font-bold px-4 py-2 rounded-xl';
+        }
+
+        const hubName = document.getElementById('hubProfileName');
+        if (hubName) hubName.textContent = user.username;
+
+        const hubMode = document.getElementById('hubProfileMode');
+        if (hubMode) hubMode.textContent = isGuest
+            ? 'Guest Mode · gameplay works, permanent account stats are off'
+            : `Saved account · ${account.email}`;
+
+        const hubLogin = document.getElementById('hubLoginButton');
+        const hubAccount = document.getElementById('hubAccountAction');
+        [hubLogin, hubAccount].forEach(button => {
+            if (!button) return;
+            button.textContent = isGuest ? 'LOG IN TO SAVE STATS' : 'LOG OUT TO GUEST MODE';
+            button.onclick = isGuest ? openOptionalLogin : () => AuthSession.logout();
+        });
+
+        const guestMessage = document.getElementById('guestMessagesNotice');
+        if (guestMessage) guestMessage.classList.toggle('hidden', !isGuest);
+
+        const progress = document.getElementById('hubProgressText');
+        if (progress) {
+            if (isGuest) {
+                progress.textContent = 'Guest progress stays local. Log in to keep match history and leaderboard stats permanently.';
+            } else {
+                const localBoard = readJSON('saved_leaderboard', []);
+                const row = localBoard.find(p => p.username === account.username);
+                const matches = row ? Number(row.matches || 0) : 0;
+                const level = Math.max(1, Math.floor(matches / 5) + 1);
+                progress.textContent = `Level ${level} · ${matches} games recorded on this browser`;
             }
-            openHistoryPanel();
-        };
-        bar.appendChild(historyBtn);
+        }
+    }
 
-        if (isAccountMode()) {
-            const logout = el('button', { class: 'mega-button danger', text: 'LOG OUT' });
-            logout.onclick = () => AuthSession.logout();
-            bar.appendChild(logout);
+    // Friend/DM actions explain account requirement immediately instead of
+    // letting a guest think the button is broken.
+    const originalSendFriendRequest = sendFriendRequest;
+    sendFriendRequest = function (targetSocketId, username) {
+        if (!isRealAccount()) {
+            showToast('Log in if you want to save friends.', '🔒');
+            openOptionalLogin();
+            return;
+        }
+        originalSendFriendRequest(targetSocketId, username);
+    };
+
+    // ---------------------------------------------------------------------
+    // NORMAL DASHBOARD PAGES
+    // ---------------------------------------------------------------------
+    function activateDashboardTab(tabId, navId) {
+        closeExclusiveModals();
+        document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
+        document.querySelectorAll('.sidebar-btn').forEach(btn => btn.classList.remove('active'));
+        document.getElementById(tabId)?.classList.remove('hidden');
+        document.getElementById(navId)?.classList.add('active');
+    }
+
+    window.openFfaPage = function () {
+        activateDashboardTab('ffaTab', 'btnNavFFA');
+    };
+
+    window.playFFAFromPage = function () {
+        socket.emit('play_ffa');
+    };
+
+    window.createFFAFromPage = function () {
+        const maxPlayers = Number(document.getElementById('ffaMaxPlayers')?.value || 12);
+        const isPublic = document.getElementById('ffaPrivacy')?.value !== 'private';
+        socket.emit('create_ffa_lobby', { maxPlayers, isPublic });
+    };
+
+    window.openHubPage = function (panel = 'profile') {
+        const game = document.getElementById('gameScreen');
+        if (game && !game.classList.contains('hidden')) {
+            // While playing, stay in the game and use the single dock instead.
+            if (panel === 'music') openGameDock('music');
+            else openGameDock('tools');
+            return;
+        }
+        activateDashboardTab('hubTab', 'btnNavHub');
+        openHubPanel(panel);
+    };
+
+    window.openHubPanel = function (name) {
+        const valid = ['profile', 'music', 'history', 'notes', 'settings', 'shortcuts'];
+        if (!valid.includes(name)) name = 'profile';
+
+        document.querySelectorAll('.hub-panel').forEach(el => el.classList.add('hidden'));
+        document.querySelectorAll('.hub-sub-button').forEach(el => el.classList.remove('active'));
+        document.getElementById(`hub${name.charAt(0).toUpperCase() + name.slice(1)}Panel`)?.classList.remove('hidden');
+        document.querySelector(`[data-hub="${name}"]`)?.classList.add('active');
+
+        if (name === 'history') requestSavedHistory();
+        if (name === 'notes') loadArenaNotes();
+        if (name === 'settings') syncHubSettings();
+        updateAccountUI();
+    };
+
+    // Keep original 1v1 / 2v2 switching, but clear FFA/Hub active states.
+    const originalSwitchMatchMode = switchMatchMode;
+    switchMatchMode = function (mode) {
+        originalSwitchMatchMode(mode);
+        document.getElementById('btnNavFFA')?.classList.remove('active');
+        document.getElementById('btnNavHub')?.classList.remove('active');
+    };
+
+    // ---------------------------------------------------------------------
+    // SINGLE IN-GAME DOCK
+    // ---------------------------------------------------------------------
+    let activeDockTab = null;
+
+    function dockTitle(tab) {
+        return {
+            lobby: '👥 LOBBY',
+            chat: '💬 LOBBY CHAT',
+            music: '🎵 SPOTIFY',
+            tools: '⚡ TOOLS'
+        }[tab] || 'ARENA';
+    }
+
+    window.openGameDock = function (tab = 'lobby') {
+        const screen = document.getElementById('gameScreen');
+        const isGameOpen = screen && !screen.classList.contains('hidden');
+
+        if (!isGameOpen) {
+            if (tab === 'lobby' || tab === 'chat') {
+                if (activeRoomData) openPreGameLobby(activeRoomData);
+                else showToast('You are not in a lobby yet.', 'ℹ️');
+            } else if (tab === 'music') {
+                closeExclusiveModals();
+                openHubPage('music');
+            } else {
+                closeExclusiveModals();
+                openHubPage('settings');
+            }
+            return;
+        }
+
+        activeDockTab = tab;
+        screen.classList.add('game-dock-open');
+        document.getElementById('gameDockTitle').textContent = dockTitle(tab);
+
+        document.querySelectorAll('.game-dock-panel').forEach(el => el.classList.add('hidden'));
+        document.querySelectorAll('.dock-tab-button').forEach(el => el.classList.remove('active'));
+
+        const panelMap = {
+            lobby: 'dockLobbyPanel',
+            chat: 'dockChatPanel',
+            music: 'dockMusicPanel',
+            tools: 'dockToolsPanel'
+        };
+        document.getElementById(panelMap[tab])?.classList.remove('hidden');
+        document.querySelector(`[data-dock-tab="${tab}"]`)?.classList.add('active');
+
+        document.getElementById('gameLobbyButton')?.classList.toggle('active', tab === 'lobby');
+        document.getElementById('gameMusicButton')?.classList.toggle('active', tab === 'music');
+        document.getElementById('arenaChatButton')?.classList.toggle('active', tab === 'chat');
+        document.getElementById('arenaOptionsButton')?.classList.toggle('active', tab === 'tools');
+
+        if (activeRoomData) refreshRoomUI(activeRoomData);
+        if (tab === 'chat') {
+            document.getElementById('toggleChatBtnLabel').textContent = 'Hide Chat';
+            document.getElementById('matchChatInput')?.focus();
         } else {
-            const login = el('button', { class: 'mega-button primary', text: 'LOG IN TO SAVE STATS' });
-            login.onclick = openLoginModal;
-            bar.appendChild(login);
-            const rename = el('button', { class: 'mega-button', text: '✏️ GUEST NAME' });
-            rename.onclick = guestRename;
-            bar.appendChild(rename);
+            document.getElementById('toggleChatBtnLabel').textContent = 'Show Chat';
         }
+    };
 
-        let banner = document.getElementById('megaGuestBanner');
-        if (!banner) {
-            banner = el('div', { id: 'megaGuestBanner' });
-            document.body.appendChild(banner);
-        }
-        banner.classList.toggle('hidden', isAccountMode());
-        if (!isAccountMode()) {
-            banner.replaceChildren(
-                el('span', { text: 'Playing as guest — gameplay works normally; login only if you want saved stats, friends, and history.' }),
-                (() => {
-                    const btn = el('button', { class: 'mega-button primary', text: 'LOG IN' });
-                    btn.onclick = openLoginModal;
-                    return btn;
-                })()
-            );
-        }
-    }
-
-    // ------------------------------------------------------------------------
-    // PROFILE / PROGRESSION
-    // ------------------------------------------------------------------------
-    function updateProfileStats() {
-        const level = levelFromXP(progress.xp);
-        document.getElementById('megaLevelValue')?.replaceChildren(document.createTextNode(String(level)));
-        document.getElementById('megaXPValue')?.replaceChildren(document.createTextNode(String(progress.xp)));
-        document.getElementById('megaStreakValue')?.replaceChildren(document.createTextNode(String(progress.streak || 0)));
-        document.getElementById('megaAchievementValue')?.replaceChildren(document.createTextNode(String(progress.achievements.length)));
-    }
-
-    function openProfilePanel() {
-        closeNode('megaProfilePanel');
-        const user = currentArenaUser();
-        const panel = el('div', { id: 'megaProfilePanel' });
-        const top = el('div', { class: 'mega-row' });
-        top.append(
-            el('div', { html: `<div style="font-size:30px">🏎️</div><div style="font-weight:900;font-size:18px">${escapeHTML(user.username)}</div><div style="font-size:10px;color:#9db5e8">${isAccountMode() ? 'Saved account profile' : 'Guest profile · stats reset/not saved to leaderboard'}</div>` }),
-            (() => { const b = el('button', { class: 'mega-button', text: '✕ CLOSE' }); b.onclick = () => panel.remove(); return b; })()
-        );
-        top.style.justifyContent = 'space-between';
-        panel.appendChild(top);
-
-        const stats = el('div', { class: 'mega-grid mega-section' });
-        const cards = [
-            ['LEVEL', levelFromXP(progress.xp), 'megaLevelValue'],
-            ['XP', progress.xp, 'megaXPValue'],
-            ['STREAK', progress.streak || 0, 'megaStreakValue'],
-            ['ACHIEVEMENTS', progress.achievements.length, 'megaAchievementValue'],
-            ['SESSION MATCHES', progress.sessionMatches || 0, 'megaSessionMatches'],
-            ['STATUS', isAccountMode() ? 'SAVED' : 'GUEST', 'megaStatusValue']
-        ];
-        cards.forEach(([label, value, id]) => {
-            stats.appendChild(el('div', { class: 'mega-chip', html: `<span>${label}</span><strong id="${id}">${value}</strong>` }));
-        });
-        panel.appendChild(stats);
-
-        const challenge = el('div', { class: 'mega-section' });
-        challenge.appendChild(el('h3', { text: '🎯 DAILY / RANDOM CHALLENGE' }));
-        const challenges = [
-            'Win without using the shield power-up.',
-            'Get 3 eliminations before your first death.',
-            'Play one full round using a kart you rarely use.',
-            'Finish a round without stopping for more than 2 seconds.',
-            'Challenge a friend or join a public lobby.',
-            'Use lobby chat to say GG after the match.',
-            'Play one 2v2 and one FFA match.',
-            'Try to survive for 90 seconds without an elimination.'
-        ];
-        const challengeText = el('div', { class: 'mega-chip', text: challenges[(new Date().getDate() + levelFromXP(progress.xp)) % challenges.length] });
-        challengeText.style.whiteSpace = 'normal';
-        challenge.appendChild(challengeText);
-        const random = el('button', { class: 'mega-button', text: '🎲 RANDOMIZE' });
-        random.onclick = () => challengeText.textContent = challenges[Math.floor(Math.random() * challenges.length)];
-        challenge.appendChild(random);
-        panel.appendChild(challenge);
-
-        if (!isAccountMode()) {
-            const login = el('div', { class: 'mega-section' });
-            login.appendChild(el('h3', { text: '💾 WANT THIS TO SAVE?' }));
-            login.appendChild(el('div', { text: 'Login is optional. It only unlocks persistent stats, history, friends, DMs, XP, streaks, and achievements.' }));
-            const btn = el('button', { class: 'mega-button primary', text: 'LOG IN / CREATE ACCOUNT' });
-            btn.onclick = openLoginModal;
-            login.appendChild(btn);
-            panel.appendChild(login);
-        }
-
-        document.body.appendChild(panel);
-    }
-
-    // ------------------------------------------------------------------------
-    // HISTORY PANEL
-    // ------------------------------------------------------------------------
-    function openHistoryPanel() {
-        socket.emit('get_saved_match_history');
-        closeNode('megaHistoryPanel');
-        const panel = el('div', { id: 'megaHistoryPanel' });
-        panel.style.cssText = 'position:fixed;z-index:245;left:50%;top:50%;transform:translate(-50%,-50%);width:min(760px,calc(100vw - 32px));max-height:82vh;overflow:auto;border-radius:22px;padding:16px;background:#112a68f7;border:1px solid #ffffff30;color:white;box-shadow:0 20px 70px #000a;backdrop-filter:blur(18px)';
-        const top = el('div', { class: 'mega-row' });
-        top.style.justifyContent = 'space-between';
-        top.append(el('h2', { text: '📜 SAVED MATCH HISTORY' }), (() => { const b = el('button', { class: 'mega-button', text: '✕ CLOSE' }); b.onclick = () => panel.remove(); return b; })());
-        panel.append(top, el('div', { id: 'megaHistoryList', text: 'Loading…' }));
-        document.body.appendChild(panel);
-    }
-
-    socket.on('saved_match_history', rooms => {
-        const list = document.getElementById('megaHistoryList');
-        if (!list) return;
-        list.replaceChildren();
-        if (!rooms.length) return list.appendChild(el('div', { class: 'mega-section', text: 'No saved matches yet.' }));
-        rooms.forEach(room => {
-            const item = el('details', { class: 'mega-section' });
-            item.appendChild(el('summary', { text: `${new Date(room.createdAt || Date.now()).toLocaleString()} · ${(room.mode || '').toUpperCase()} · ${(room.participants || []).join(', ')}` }));
-            const chat = el('div', { style: 'margin-top:8px;font-size:11px' });
-            (room.messages || []).slice(-30).forEach(msg => chat.appendChild(el('div', { text: `${msg.senderName}: ${msg.message}` })));
-            if (!(room.messages || []).length) chat.textContent = 'No chat messages.';
-            item.appendChild(chat);
-            list.appendChild(item);
-        });
-    });
-
-    // ------------------------------------------------------------------------
-    // THEMES / ACCESSIBILITY / SETTINGS DRAWER
-    // ------------------------------------------------------------------------
-    function applyPrefs() {
-        document.documentElement.style.setProperty('--mega-accent', prefs.accent || '#ffd318');
-        document.body.classList.toggle('mega-compact', !!prefs.compact);
-        document.body.classList.toggle('mega-large-text', !!prefs.largeText);
-        document.body.classList.toggle('mega-reduced-motion', !!prefs.reducedMotion);
-        document.body.classList.toggle('mega-performance', !!prefs.performance);
-        document.body.classList.remove('mega-theme-neon', 'mega-theme-sunset', 'mega-theme-carbon');
-        if (prefs.theme && prefs.theme !== 'midnight') document.body.classList.add('mega-theme-' + prefs.theme);
-        savePrefs();
-    }
-
-    function makeToggle(label, key) {
-        const wrap = el('label', { class: 'mega-row' });
-        wrap.style.justifyContent = 'space-between';
-        wrap.appendChild(el('span', { text: label }));
-        const input = el('input', { type: 'checkbox' });
-        input.checked = !!prefs[key];
-        input.onchange = () => { prefs[key] = input.checked; applyPrefs(); };
-        wrap.appendChild(input);
-        return wrap;
-    }
-
-    function openMegaDrawer() {
-        closeNode('megaDrawer');
-        const drawer = el('div', { id: 'megaDrawer' });
-        const top = el('div', { class: 'mega-row' });
-        top.style.justifyContent = 'space-between';
-        top.append(el('h2', { text: '⚡ ARENA PLUS' }), (() => { const b = el('button', { class: 'mega-button', text: '✕' }); b.onclick = () => drawer.remove(); return b; })());
-        drawer.appendChild(top);
-
-        const appearance = el('div', { class: 'mega-section' });
-        appearance.appendChild(el('h3', { text: '🎨 APPEARANCE & PERFORMANCE' }));
-        const theme = el('select', { class: 'mega-select' });
-        [['midnight','Midnight'],['neon','Neon'],['sunset','Sunset'],['carbon','Carbon']].forEach(([v,l]) => theme.appendChild(el('option', { value:v, text:l })));
-        theme.value = prefs.theme;
-        theme.onchange = () => { prefs.theme = theme.value; applyPrefs(); };
-        appearance.append(theme, makeToggle('Compact toolbar', 'compact'), makeToggle('Large text', 'largeText'), makeToggle('Reduced motion', 'reducedMotion'), makeToggle('Performance mode', 'performance'), makeToggle('Show player names in game bar', 'showPlayerNames'), makeToggle('Sound / feedback', 'sound'));
-        const accent = el('input', { type: 'color', value: prefs.accent });
-        accent.oninput = () => { prefs.accent = accent.value; applyPrefs(); };
-        appearance.appendChild(el('div', { class: 'mega-row' }, [el('span', { text: 'Accent color' }), accent]));
-        drawer.appendChild(appearance);
-
-        const utility = el('div', { class: 'mega-section' });
-        utility.appendChild(el('h3', { text: '🛠️ QUICK TOOLS' }));
-        const toolGrid = el('div', { class: 'mega-grid' });
-        [
-            ['👤 Profile', openProfilePanel],
-            ['📝 Notes', openNotesPanel],
-            ['⌨️ Shortcuts', openShortcutsPanel],
-            ['🔎 Command Palette', openCommandPalette],
-            ['🎲 Dice', () => showToast(`You rolled ${1 + Math.floor(Math.random()*6)}.`, '🎲')],
-            ['🪙 Coin Flip', () => showToast(Math.random() < .5 ? 'Heads!' : 'Tails!', '🪙')],
-            ['📋 Copy Invite', copyCurrentInvite],
-            ['↩️ Rejoin Last Lobby', rejoinLastRoom]
-        ].forEach(([label, fn]) => { const b = el('button', { class: 'mega-button', text: label }); b.onclick = fn; toolGrid.appendChild(b); });
-        utility.appendChild(toolGrid);
-        drawer.appendChild(utility);
-
-        document.body.appendChild(drawer);
-    }
-
-    // ------------------------------------------------------------------------
-    // MUSIC / SPOTIFY
-    // ------------------------------------------------------------------------
-    function spotifyEmbedUrl(raw) {
-        if (!raw) return null;
-        try {
-            const url = new URL(raw.trim());
-            if (url.hostname !== 'open.spotify.com') return null;
-            const parts = url.pathname.split('/').filter(Boolean);
-            if (parts.length < 2) return null;
-            const type = parts[0];
-            const id = parts[1];
-            if (!['track','playlist','album','artist','episode','show'].includes(type)) return null;
-            if (!/^[A-Za-z0-9]+$/.test(id)) return null;
-            return `https://open.spotify.com/embed/${type}/${id}?utm_source=generator`;
-        } catch {
-            return null;
-        }
-    }
-
-    function openMusicDrawer() {
-        closeNode('megaMusicPanel');
-        const panel = el('div', { id: 'megaMusicPanel' });
-        panel.style.cssText = 'position:fixed;right:16px;top:92px;z-index:246;width:min(420px,calc(100vw - 32px));max-height:calc(100vh - 110px);overflow:auto;border-radius:20px;padding:14px;background:#112a68f7;border:1px solid #ffffff30;color:#fff;box-shadow:0 20px 70px #000a;backdrop-filter:blur(18px)';
-        const top = el('div', { class: 'mega-row' });
-        top.style.justifyContent = 'space-between';
-        top.append(el('h2', { text: '🎵 SPOTIFY MUSIC' }), (() => { const b = el('button', { class: 'mega-button', text: '✕' }); b.onclick = () => panel.remove(); return b; })());
-        panel.appendChild(top);
-
-        const input = el('input', { class: 'mega-input', placeholder: 'Paste Spotify track / playlist / album link…' });
-        input.value = prefs.lastSpotify || '';
-        const load = el('button', { class: 'mega-button primary', text: '▶ LOAD MUSIC' });
-        const favorite = el('button', { class: 'mega-button', text: '⭐ FAVORITE' });
-        const row = el('div', { class: 'mega-row' }, [input, load, favorite]);
-        input.style.flex = '1';
-        panel.appendChild(row);
-
-        const frame = el('iframe', { id: 'megaMusicFrame', allow: 'autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture', loading: 'lazy' });
-        panel.appendChild(frame);
-
-        function loadSpotify(raw, quiet = false) {
-            const embed = spotifyEmbedUrl(raw);
-            if (!embed) {
-                if (!quiet) showToast('Paste an open.spotify.com track, playlist, album, artist, show, or episode link.', '🎵');
-                return false;
+    window.closeGameDock = function () {
+        const screen = document.getElementById('gameScreen');
+        screen?.classList.remove('game-dock-open');
+        activeDockTab = null;
+        document.querySelectorAll('.arena-button').forEach(button => {
+            if (['gameLobbyButton', 'gameMusicButton', 'arenaChatButton', 'arenaOptionsButton'].includes(button.id)) {
+                button.classList.remove('active');
             }
-            frame.src = embed;
-            prefs.lastSpotify = raw.trim();
-            savePrefs();
-            if (!quiet) showToast('Spotify loaded.', '🎵');
-            return true;
-        }
-
-        load.onclick = () => loadSpotify(input.value);
-        input.onkeydown = e => { if (e.key === 'Enter') loadSpotify(input.value); };
-        favorite.onclick = () => {
-            const raw = input.value.trim();
-            if (!spotifyEmbedUrl(raw)) return showToast('Load a valid Spotify link first.', '⚠️');
-            if (!musicFavorites.includes(raw)) musicFavorites.unshift(raw);
-            musicFavorites = musicFavorites.slice(0, 20);
-            saveJSON(MUSIC_FAVORITES_KEY, musicFavorites);
-            renderFavorites();
-        };
-
-        const favBox = el('div', { class: 'mega-section' });
-        favBox.appendChild(el('h3', { text: '⭐ FAVORITE SPOTIFY LINKS' }));
-        const favList = el('div');
-        favBox.appendChild(favList);
-        panel.appendChild(favBox);
-
-        function renderFavorites() {
-            favList.replaceChildren();
-            if (!musicFavorites.length) return favList.appendChild(el('div', { text: 'No favorites yet.' }));
-            musicFavorites.forEach((url, index) => {
-                const r = el('div', { class: 'mega-row' });
-                const b = el('button', { class: 'mega-button', text: `🎵 Favorite ${index + 1}` });
-                b.onclick = () => { input.value = url; loadSpotify(url); };
-                const x = el('button', { class: 'mega-button danger', text: '✕' });
-                x.onclick = () => { musicFavorites.splice(index,1); saveJSON(MUSIC_FAVORITES_KEY,musicFavorites); renderFavorites(); };
-                r.append(b,x); favList.appendChild(r);
-            });
-        }
-        renderFavorites();
-        if (prefs.lastSpotify) loadSpotify(prefs.lastSpotify, true);
-        document.body.appendChild(panel);
-    }
-
-    // ------------------------------------------------------------------------
-    // NOTES
-    // ------------------------------------------------------------------------
-    function openNotesPanel() {
-        closeNode('megaNotesPanel');
-        const panel = el('div', { id: 'megaNotesPanel' });
-        const top = el('div', { class: 'mega-row' });
-        top.style.justifyContent = 'space-between';
-        top.append(el('h2', { text: '📝 MATCH NOTES' }), (() => { const b = el('button', { class: 'mega-button', text: '✕' }); b.onclick = () => panel.remove(); return b; })());
-        panel.appendChild(top);
-        const text = el('textarea', { class: 'mega-textarea', placeholder: 'Write strategy, rematch notes, player observations…' });
-        text.value = notesState.match || '';
-        text.oninput = () => { notesState.match = text.value; saveJSON(NOTES_KEY, notesState); };
-        panel.appendChild(text);
-        const clear = el('button', { class: 'mega-button danger', text: 'CLEAR NOTES' });
-        clear.onclick = () => { text.value = ''; notesState.match = ''; saveJSON(NOTES_KEY, notesState); };
-        panel.appendChild(clear);
-        document.body.appendChild(panel);
-    }
-
-    // ------------------------------------------------------------------------
-    // SHORTCUTS
-    // ------------------------------------------------------------------------
-    function openShortcutsPanel() {
-        closeNode('megaShortcutsPanel');
-        const panel = el('div', { id: 'megaShortcutsPanel' });
-        const top = el('div', { class: 'mega-row' });
-        top.style.justifyContent = 'space-between';
-        top.append(el('h2', { text: '⌨️ KEYBOARD SHORTCUTS' }), (() => { const b = el('button', { class: 'mega-button', text: '✕' }); b.onclick = () => panel.remove(); return b; })());
-        panel.appendChild(top);
-        const shortcuts = [
-            ['Ctrl + K', 'Command palette'], ['M', 'Spotify music'], ['L', 'Current lobby'], ['C', 'Lobby chat'],
-            ['P', 'Paste Smash Karts code'], ['R', 'Ready / unready'], ['F', 'Fullscreen'], ['N', 'Notes'],
-            ['1', '1v1 page'], ['2', '2v2 page'], ['3', 'FFA page'], ['Esc', 'Close Arena Plus panels']
-        ];
-        shortcuts.forEach(([key, action]) => panel.appendChild(el('div', { class: 'mega-section', html: `<strong style="color:var(--mega-accent)">${key}</strong> · ${action}` })));
-        document.body.appendChild(panel);
-    }
-
-    // ------------------------------------------------------------------------
-    // COMMAND PALETTE
-    // ------------------------------------------------------------------------
-    function commands() {
-        return [
-            ['Open 1v1', () => switchMatchMode('1v1')],
-            ['Open 2v2', () => switchMatchMode('2v2')],
-            ['Open FFA', showFFATab],
-            ['Open public lobbies', () => openFindGameModal()],
-            ['Open lobby', openCurrentLobby],
-            ['Paste room code', promptPasteCode],
-            ['Toggle ready', toggleReady],
-            ['Spotify music', openMusicDrawer],
-            ['Profile', openProfilePanel],
-            ['Match notes', openNotesPanel],
-            ['History', () => isAccountMode() ? openHistoryPanel() : openLoginModal()],
-            ['Settings', () => openSettingsModal()],
-            ['Online players', () => openOnlineModal()],
-            ['Copy invite', copyCurrentInvite],
-            ['Rejoin last lobby', rejoinLastRoom],
-            ['Fullscreen', toggleFullscreen],
-            ['Arena Plus', openMegaDrawer],
-            ['Keyboard shortcuts', openShortcutsPanel]
-        ];
-    }
-
-    function openCommandPalette() {
-        closeNode('megaCommandPalette');
-        const panel = el('div', { id: 'megaCommandPalette' });
-        const input = el('input', { class: 'mega-input', placeholder: 'Type a command…' });
-        const results = el('div', { id: 'megaCommandResults' });
-        panel.append(input, results);
-        function render() {
-            const q = input.value.trim().toLowerCase();
-            results.replaceChildren();
-            commands().filter(([label]) => !q || label.toLowerCase().includes(q)).forEach(([label, fn], i) => {
-                const b = el('button', { class: 'mega-command' + (i === 0 ? ' active' : ''), text: label });
-                b.onclick = () => { panel.remove(); fn(); };
-                results.appendChild(b);
-            });
-        }
-        input.oninput = render;
-        input.onkeydown = e => {
-            if (e.key === 'Escape') panel.remove();
-            if (e.key === 'Enter') results.querySelector('button')?.click();
-        };
-        render();
-        document.body.appendChild(panel);
-        setTimeout(() => input.focus(), 0);
-    }
-
-    // ------------------------------------------------------------------------
-    // FFA REAL TAB
-    // ------------------------------------------------------------------------
-    function installFFATab() {
-        if (document.getElementById('btnNavFFA')) return;
-        const one = document.getElementById('btnNav1v1');
-        const setup = document.getElementById('setupTab');
-        if (!one || !setup || !setup.parentElement) return;
-
-        const nav = el('button', {
-            id: 'btnNavFFA',
-            class: 'sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg',
-            title: 'FFA Matchmaking',
-            text: '🔥'
         });
-        one.parentElement.insertBefore(nav, one);
+        const label = document.getElementById('toggleChatBtnLabel');
+        if (label) label.textContent = 'Show Chat';
+    };
 
-        const tab = el('div', { id: 'ffaTab', class: 'tab-content hidden space-y-6' });
-        tab.innerHTML = `
-            <div class="flex justify-between items-center border-b border-white/10 pb-4 gap-4">
-                <div><h2 class="font-bungee text-2xl text-white">🔥 FFA MATCHMAKING</h2><p class="text-xs text-blue-200">Guest-friendly free-for-all lobbies</p></div>
-                <button id="ffaBrowseBtn" class="mega-button good">🔍 PUBLIC LOBBIES</button>
-            </div>
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <button id="ffaPlayBtn" class="btn-smash py-5 rounded-2xl font-bungee text-xl text-white">🔥 PLAY FFA</button>
-                <button id="ffaCreateBtn" class="bg-emerald-500 hover:bg-emerald-400 py-5 rounded-2xl font-bungee text-xl text-white">➕ CREATE LOBBY</button>
-            </div>
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div><label class="block text-xs font-bold text-blue-200 mb-2">MAX PLAYERS</label><select id="ffaMaxPlayers" class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold"><option>6</option><option selected>12</option><option>16</option><option>20</option></select></div>
-                <div><label class="block text-xs font-bold text-blue-200 mb-2">VISIBILITY</label><select id="ffaVisibility" class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold"><option value="public">Public</option><option value="private">Private</option></select></div>
-            </div>
-            <div class="mega-section">Guest players can play immediately. Login is only needed for persistent stats, history, friends, DMs, XP and achievements.</div>
-        `;
-        setup.parentElement.insertBefore(tab, setup);
+    // Keep the user's requested 5-second chat close behavior, but only the
+    // one dock closes; nothing else piles up.
+    triggerChatActivityTimer = function () {
+        clearTimeout(chatInactivityTimer);
+        openGameDock('chat');
+        chatInactivityTimer = setTimeout(() => {
+            if (activeDockTab === 'chat') closeGameDock();
+        }, 5000);
+    };
 
-        nav.onclick = showFFATab;
-        tab.querySelector('#ffaBrowseBtn').onclick = () => openFindGameModal();
-        tab.querySelector('#ffaPlayBtn').onclick = () => socket.emit('play_ffa');
-        tab.querySelector('#ffaCreateBtn').onclick = () => socket.emit('create_ffa_lobby', {
-            maxPlayers: Number(tab.querySelector('#ffaMaxPlayers').value),
-            isPublic: tab.querySelector('#ffaVisibility').value === 'public'
-        });
-    }
+    toggleOverlayChat = function () {
+        const screen = document.getElementById('gameScreen');
+        if (screen?.classList.contains('game-dock-open') && activeDockTab === 'chat') {
+            closeGameDock();
+        } else {
+            triggerChatActivityTimer();
+        }
+    };
 
-    function showFFATab() {
-        document.querySelectorAll('.tab-content').forEach(node => node.classList.add('hidden'));
-        document.querySelectorAll('.sidebar-btn').forEach(node => node.classList.remove('active'));
-        document.getElementById('ffaTab')?.classList.remove('hidden');
-        document.getElementById('btnNavFFA')?.classList.add('active');
-    }
-
-    socket.on('ffa_no_lobby', data => showToast(data?.message || 'No FFA lobby is open yet.', 'ℹ️'));
-
-    // ------------------------------------------------------------------------
-    // GAME TOOLBAR: players + paste + lobby + music + ready + plus
-    // ------------------------------------------------------------------------
-    function extractRoomCode(url) {
+    // ---------------------------------------------------------------------
+    // ROOM / LOBBY UI
+    // ---------------------------------------------------------------------
+    function roomCodeFromUrl(url) {
         const match = String(url || '').match(/[?&]room=([A-Za-z0-9]+)/i);
         return match ? match[1] : '';
     }
 
-    function clientValidRoomCode(raw) {
+    function localMember(room) {
+        return room?.players?.find(player => player.id === socket.id) || null;
+    }
+
+    function playerLine(player, room, hostView) {
+        const wrap = document.createElement('div');
+        wrap.className = 'bg-blue-900/60 p-2 rounded-xl border border-white/10 flex items-center justify-between gap-2';
+
+        const left = document.createElement('div');
+        left.className = 'min-w-0';
+        const name = document.createElement('div');
+        name.className = 'font-bold text-xs text-white truncate';
+        name.textContent = `${player.id === room.hostSocketId ? '👑 ' : '👤 '}${player.name}${player.isGuest ? ' · Guest' : ''}`;
+        const meta = document.createElement('div');
+        meta.className = 'text-[9px] text-blue-200';
+        meta.textContent = `${player.ready ? '✅ Ready' : '⏳ Not ready'}${player.team ? ` · ${player.team === 'blue' ? '🔵 Blue' : '🔴 Red'}` : ''}`;
+        left.append(name, meta);
+        wrap.appendChild(left);
+
+        if (hostView && player.id !== socket.id) {
+            const kick = document.createElement('button');
+            kick.className = 'text-[9px] bg-red-600 hover:bg-red-500 text-white font-bold px-2 py-1 rounded-lg';
+            kick.textContent = 'KICK';
+            kick.onclick = () => socket.emit('kick_lobby_player', {
+                roomId: room.roomId,
+                targetSocketId: player.id
+            });
+            wrap.appendChild(kick);
+        }
+        return wrap;
+    }
+
+    updatePreGameLobbyUI = function (room) {
+        if (!room) return;
+        const list = document.getElementById('preGamePlayerList');
+        if (!list) return;
+        list.replaceChildren();
+        const hostView = room.hostSocketId === socket.id;
+        (room.players || []).forEach(player => list.appendChild(playerLine(player, room, hostView)));
+
+        const heading = document.querySelector('#preGameLobbyModal h4');
+        if (heading) heading.textContent = `👥 PLAYERS (${room.players?.length || 0}/${room.maxPlayers || '?'})`;
+
+        const meta = document.getElementById('preGameLobbyMeta');
+        if (meta) {
+            const ready = (room.players || []).filter(p => p.ready).length;
+            meta.textContent = `${String(room.mode || '').toUpperCase()} · ${ready}/${room.players?.length || 0} ready · ${room.isPublic === false ? 'Private' : 'Public'} · Host: ${room.hostName}`;
+        }
+
+        const me = localMember(room);
+        const readyButton = document.getElementById('preGameReadyButton');
+        if (readyButton) readyButton.textContent = me?.ready ? '↩ NOT READY' : '✓ READY';
+    };
+
+    function renderDockPlayers(room) {
+        const list = document.getElementById('gameDockPlayerList');
+        if (!list) return;
+        list.replaceChildren();
+        const hostView = room.hostSocketId === socket.id;
+        (room.players || []).forEach(player => list.appendChild(playerLine(player, room, hostView)));
+
+        let hostControls = document.getElementById('dockHostControls');
+        if (!hostControls) {
+            hostControls = document.createElement('div');
+            hostControls.id = 'dockHostControls';
+            hostControls.className = 'dock-card mt-2';
+            document.getElementById('dockLobbyPanel')?.appendChild(hostControls);
+        }
+
+        if (hostView) {
+            hostControls.classList.remove('hidden');
+            hostControls.innerHTML = `
+                <span class="dock-label">Host controls</span>
+                <button id="dockPrivacyButton" class="dock-action">${room.isPublic === false ? '🔒 MAKE PUBLIC' : '🌐 MAKE PRIVATE'}</button>
+            `;
+            document.getElementById('dockPrivacyButton').onclick = () => socket.emit('toggle_room_privacy', {
+                roomId: room.roomId,
+                isPublic: room.isPublic === false
+            });
+        } else {
+            hostControls.classList.add('hidden');
+        }
+    }
+
+    function refreshRoomUI(room) {
+        if (!room) return;
+        activeRoomData = room;
+
+        const players = Array.isArray(room.players) ? room.players : [];
+        const readyCount = players.filter(player => player.ready).length;
+        const code = roomCodeFromUrl(room.smashUrl);
+        const me = localMember(room);
+
+        const count = document.getElementById('gameLobbyPlayerCount');
+        if (count) count.textContent = `👥 ${players.length}/${room.maxPlayers || '?'} IN LOBBY`;
+
+        const names = document.getElementById('gameLobbyPlayerNames');
+        if (names) {
+            const text = players.length ? players.map(p => p.name).join(', ') : 'No active players';
+            names.textContent = text;
+            names.title = text;
+        }
+
+        const badge = document.getElementById('gameModeBadge');
+        if (badge) badge.textContent = String(room.mode || '').toUpperCase();
+
+        currentRoomCode = code;
+        const display = document.getElementById('gameRoomCodeDisplay');
+        if (display) display.textContent = code || (room.mode === 'ffa' ? 'NOT SET' : '------');
+
+        const summary = document.getElementById('dockLobbySummary');
+        if (summary) summary.textContent = `${String(room.mode || '').toUpperCase()} · ${players.length}/${room.maxPlayers || '?'} players · ${room.isPublic === false ? 'Private' : 'Public'}`;
+
+        const readySummary = document.getElementById('dockReadySummary');
+        if (readySummary) readySummary.textContent = `${readyCount}/${players.length} ready · Host: ${room.hostName}`;
+
+        const readyButton = document.getElementById('dockReadyButton');
+        if (readyButton) readyButton.textContent = me?.ready ? '↩ NOT READY' : '✓ READY';
+
+        const teamControls = document.getElementById('dockTeamControls');
+        if (teamControls) teamControls.classList.toggle('hidden', room.mode !== '2v2');
+
+        renderDockPlayers(room);
+        if (!document.getElementById('preGameLobbyModal')?.classList.contains('hidden')) {
+            updatePreGameLobbyUI(room);
+        }
+    }
+
+    window.toggleMyReadyStatus = function () {
+        if (!activeRoomData) return showToast('You are not in a lobby.', 'ℹ️');
+        const me = localMember(activeRoomData);
+        socket.emit('set_ready_status', {
+            roomId: activeRoomData.roomId,
+            ready: !me?.ready
+        });
+    };
+
+    window.chooseLobbyTeam = function (team) {
+        if (!activeRoomData) return;
+        socket.emit('set_lobby_team', { roomId: activeRoomData.roomId, team });
+    };
+
+    window.sendLobbyReaction = function (reaction) {
+        if (!activeRoomData) return;
+        socket.emit('lobby_reaction', { roomId: activeRoomData.roomId, reaction });
+    };
+
+    function validRoomCode(raw) {
         if (!raw) return null;
-        const text = String(raw).trim().replace(/["']+/g, '');
+        const text = String(raw).trim().replace(/["']/g, '');
         const valid = code => /^[A-Za-z0-9]{6,12}$/.test(code || '') && /[A-Za-z]/.test(code) && /\d/.test(code);
         if (valid(text)) return text;
-        const labeled = text.match(/^Room:\s*([A-Za-z0-9]+)$/i);
-        if (labeled && valid(labeled[1])) return labeled[1];
+        const label = text.match(/^Room:\s*([A-Za-z0-9]+)$/i);
+        if (label && valid(label[1])) return label[1];
         try {
             const url = new URL(text);
-            const host = url.hostname.toLowerCase();
+            if (!['open.spotify.com'].includes(url.hostname.toLowerCase()) && ['smashkarts.io', 'www.smashkarts.io'].includes(url.hostname.toLowerCase())) {
+                const code = url.searchParams.get('room');
+                if (valid(code)) return code;
+            }
             const code = url.searchParams.get('room');
-            return (host === 'smashkarts.io' || host === 'www.smashkarts.io') && valid(code) ? code : null;
-        } catch { return null; }
+            if (['smashkarts.io', 'www.smashkarts.io'].includes(url.hostname.toLowerCase()) && valid(code)) return code;
+        } catch {}
+        return null;
     }
 
-    function promptPasteCode() {
+    window.pasteCodeIntoCurrentLobby = function () {
         if (!activeRoomData) return showToast('You are not currently in a lobby.', '⚠️');
-        const raw = prompt('Paste a Smash Karts room code or official room link:');
+        const raw = window.prompt('Paste a Smash Karts room code or official room link:');
         if (raw == null) return;
-        const code = clientValidRoomCode(raw);
-        if (!code) return showToast('That is not a valid-looking Smash Karts room code. Nothing changed.', '❌');
-        roomCodeHistory = [code, ...roomCodeHistory.filter(x => x !== code)].slice(0, 15);
-        saveJSON(ROOM_HISTORY_KEY, roomCodeHistory);
+        const code = validRoomCode(raw);
+        if (!code) return showToast('That does not look like a valid Smash Karts room code. Nothing changed.', '❌');
         socket.emit('update_lobby_game_code', { roomId: activeRoomData.roomId, code });
+    };
+
+    // Better copy behavior for FFA before a real code has been pasted.
+    copyActiveRoomCode = function (code) {
+        const value = code || currentRoomCode || roomCodeFromUrl(activeRoomData?.smashUrl);
+        if (!value) return showToast('No Smash Karts room code has been set yet.', 'ℹ️');
+        navigator.clipboard?.writeText(value)
+            .then(() => showToast(`Room code (${value}) copied!`, '📋'))
+            .catch(() => showToast('Could not copy the room code.', '❌'));
+    };
+
+    // Make every pre-game lobby exclusive and refresh all player data.
+    const originalOpenPreGameLobby = openPreGameLobby;
+    openPreGameLobby = function (room) {
+        closeExclusiveModals('preGameLobbyModal');
+        originalOpenPreGameLobby(room);
+        refreshRoomUI(room);
+        const title = document.querySelector('#preGameLobbyModal h3');
+        if (title) title.textContent = room.mode === 'ffa' ? '🔥 FFA LOBBY' : '👥 MATCH LOBBY';
+    };
+
+    // Game enter/exit: open a clean screen with NO stacked panels.
+    const originalEnterGame = enterGameFromLobby;
+    enterGameFromLobby = function (...args) {
+        const result = originalEnterGame.apply(this, args);
+        closeExclusiveModals();
+        closeGameDock();
+        setArenaToolbarOpen?.(true);
+        if (activeRoomData) refreshRoomUI(activeRoomData);
+        return result;
+    };
+
+    const originalLeaveGame = leaveEmbeddedGame;
+    leaveEmbeddedGame = function (...args) {
+        closeGameDock();
+        setArenaToolbarOpen?.(false);
+        return originalLeaveGame.apply(this, args);
+    };
+
+    // ---------------------------------------------------------------------
+    // SPOTIFY
+    // ---------------------------------------------------------------------
+    window.openSpotifyWebsite = function () {
+        window.open('https://open.spotify.com/', '_blank', 'noopener,noreferrer');
+    };
+
+    window.reloadSpotifyPlayer = function () {
+        ['spotifyEmbedFrame', 'hubSpotifyEmbedFrame'].forEach(id => {
+            const frame = document.getElementById(id);
+            if (!frame) return;
+            const src = frame.src;
+            frame.src = 'about:blank';
+            setTimeout(() => { frame.src = src; }, 40);
+        });
+    };
+
+    // ---------------------------------------------------------------------
+    // HUB: HISTORY / NOTES / SETTINGS / UTILITIES
+    // ---------------------------------------------------------------------
+    window.requestSavedHistory = function () {
+        const list = document.getElementById('hubHistoryList');
+        if (!isRealAccount()) {
+            if (list) list.textContent = 'Log in to save and view permanent match history.';
+            return;
+        }
+        if (list) list.textContent = 'Loading saved matches…';
+        socket.emit('get_saved_match_history');
+    };
+
+    socket.off('saved_match_history');
+    socket.on('saved_match_history', rooms => {
+        const list = document.getElementById('hubHistoryList');
+        if (!list) return;
+        list.replaceChildren();
+        if (!rooms.length) {
+            list.textContent = 'No saved matches yet.';
+            return;
+        }
+        rooms.slice(0, 50).forEach(room => {
+            const card = document.createElement('details');
+            card.className = 'bg-blue-950/70 border border-white/10 rounded-xl p-3';
+            const summary = document.createElement('summary');
+            summary.className = 'cursor-pointer font-bold text-white';
+            summary.textContent = `${new Date(room.createdAt || Date.now()).toLocaleString()} · ${String(room.mode || '').toUpperCase()} · ${(room.participants || []).join(', ')}`;
+            card.appendChild(summary);
+            (room.messages || []).slice(-30).forEach(message => {
+                const p = document.createElement('p');
+                p.className = 'text-[11px] text-blue-100 mt-1';
+                p.textContent = `${message.senderName}: ${message.message}`;
+                card.appendChild(p);
+            });
+            list.appendChild(card);
+        });
+    });
+
+    function loadArenaNotes() {
+        const input = document.getElementById('hubNotesInput');
+        if (input) input.value = localStorage.getItem(NOTES_KEY) || '';
     }
 
-    function openCurrentLobby() {
-        if (!activeRoomData) return showToast('You are not currently in a lobby.', '⚠️');
-        openPreGameLobby(activeRoomData);
-        enrichLobbyUI(activeRoomData);
+    window.saveArenaNotes = function () {
+        localStorage.setItem(NOTES_KEY, document.getElementById('hubNotesInput')?.value || '');
+        showToast('Notes saved on this browser.', '📝');
+    };
+
+    window.clearArenaNotes = function () {
+        localStorage.removeItem(NOTES_KEY);
+        const input = document.getElementById('hubNotesInput');
+        if (input) input.value = '';
+        showToast('Notes cleared.', '🗑️');
+    };
+
+    function syncHubSettings() {
+        const pref = readJSON(PREF_KEY, {});
+        const select = document.getElementById('hubGameplayMode');
+        if (select) select.value = pref.gameplay || currentGameplayMode || 'popup';
     }
 
-    function toggleReady() {
-        if (!activeRoomData) return showToast('Join a lobby first.', '⚠️');
-        readyState = !readyState;
-        socket.emit('set_ready_status', { roomId: activeRoomData.roomId, ready: readyState });
-    }
+    window.applyHubGameplayMode = function () {
+        const mode = document.getElementById('hubGameplayMode')?.value === 'embed' ? 'embed' : 'popup';
+        currentGameplayMode = mode;
+        updateGameplayMode(mode);
+        const pref = readJSON(PREF_KEY, {});
+        pref.gameplay = mode;
+        writeJSON(PREF_KEY, pref);
+        const originalSelect = document.getElementById('gameplayModeSelect');
+        if (originalSelect) originalSelect.value = mode;
+        showToast(`Gameplay mode: ${mode === 'embed' ? 'Type in Code' : 'Popup Window'}`, '⚙️');
+    };
 
-    function copyCurrentInvite() {
-        if (!activeRoomData) return showToast('Join a lobby first.', '⚠️');
-        const code = extractRoomCode(activeRoomData.smashUrl);
-        const text = code
-            ? `Join my ${String(activeRoomData.mode).toUpperCase()} lobby. Smash Karts code: ${code}`
-            : `Join my ${String(activeRoomData.mode).toUpperCase()} website lobby.`;
-        navigator.clipboard?.writeText(text).then(() => showToast('Lobby invite copied.', '📋')).catch(() => showToast(text, '📋'));
-    }
+    window.rollArenaDice = function () {
+        showToast(`You rolled a ${1 + Math.floor(Math.random() * 6)}.`, '🎲');
+    };
 
-    function rejoinLastRoom() {
-        if (!lastRoomId) return showToast('No recent lobby to rejoin.', '↩️');
-        socket.emit('rejoin_room', { roomId: lastRoomId });
-    }
+    window.flipArenaCoin = function () {
+        showToast(Math.random() < .5 ? 'Heads!' : 'Tails!', '🪙');
+    };
 
-    async function toggleFullscreen() {
+    window.toggleArenaFullscreen = async function () {
         try {
             if (document.fullscreenElement) await document.exitFullscreen();
             else await document.documentElement.requestFullscreen();
-        } catch { showToast('Fullscreen is unavailable.', 'ℹ️'); }
-    }
-
-    function ensureGameToolbar() {
-        const brand = document.querySelector('.arena-brand') || document.querySelector('.game-brand');
-        const actions = document.querySelector('.arena-actions') || document.querySelector('.game-actions');
-        const chatButton = document.getElementById('arenaChatButton') || document.getElementById('gameChatToggle');
-        if (!brand || !actions || !chatButton) return false;
-
-        let info = document.getElementById('gameLobbyMegaInfo');
-        if (!info) {
-            info = el('div', { id: 'gameLobbyMegaInfo' });
-            info.append(
-                el('span', { id: 'gameLobbyMegaCount', text: '👥 0 IN LOBBY' }),
-                el('span', { id: 'gameLobbyMegaNames', text: 'No players' }),
-                el('span', { id: 'megaReadyBadge', text: '0 READY' })
-            );
-            brand.appendChild(info);
+        } catch {
+            showToast('Fullscreen is unavailable in this browser.', 'ℹ️');
         }
-
-        function toolbarButton(id, text, fn) {
-            let b = document.getElementById(id);
-            if (!b) {
-                b = el('button', { id, class: chatButton.className || 'arena-button', text });
-                b.onclick = fn;
-            }
-            return b;
-        }
-
-        const paste = toolbarButton('megaPasteCodeBtn', '📋 PASTE CODE', promptPasteCode);
-        const lobby = toolbarButton('megaLobbyBtn', '👥 LOBBY', openCurrentLobby);
-        const ready = toolbarButton('megaReadyBtn', '✅ READY', toggleReady);
-        const music = toolbarButton('megaMusicBtn', '🎵 MUSIC', openMusicDrawer);
-        const plus = toolbarButton('megaPlusBtn', '⚡ PLUS', openMegaDrawer);
-
-        [paste, lobby, ready, music, plus].forEach(button => actions.insertBefore(button, chatButton));
-
-        const menuToggle = document.getElementById('arenaMenuToggle') || document.getElementById('gameToolbarToggle');
-        if (menuToggle) menuToggle.style.right = '32px';
-        return true;
-    }
-
-    function refreshGameLobby(room) {
-        if (!room) return;
-        ensureGameToolbar();
-        const players = Array.isArray(room.players) ? room.players : [];
-        document.getElementById('gameLobbyMegaCount')?.replaceChildren(document.createTextNode(`👥 ${players.length} IN LOBBY`));
-        const names = document.getElementById('gameLobbyMegaNames');
-        if (names) {
-            names.textContent = prefs.showPlayerNames ? (players.map(p => p.name).join(', ') || 'No players') : '';
-            names.title = players.map(p => p.name).join(', ');
-        }
-        document.getElementById('megaReadyBadge')?.replaceChildren(document.createTextNode(`${players.filter(p => p.ready).length} READY`));
-
-        const myMember = players.find(p => p.id === socket.id);
-        readyState = !!myMember?.ready;
-        const readyBtn = document.getElementById('megaReadyBtn');
-        if (readyBtn) readyBtn.textContent = readyState ? '🟢 READY' : '✅ READY';
-
-        const badge = document.getElementById('gameModeBadge');
-        if (badge && room.mode) badge.textContent = String(room.mode).toUpperCase();
-
-        const code = extractRoomCode(room.smashUrl);
-        if (code) currentRoomCode = code;
-        const display = document.getElementById('gameRoomCodeDisplay');
-        if (display) display.textContent = code || (room.mode === 'ffa' ? 'NOT SET' : '------');
-    }
-
-    // ------------------------------------------------------------------------
-    // RICH LOBBY PANEL
-    // ------------------------------------------------------------------------
-    const originalUpdatePreGameLobbyUI = window.updatePreGameLobbyUI;
-    window.updatePreGameLobbyUI = function (room) {
-        const list = document.getElementById('preGamePlayerList');
-        if (!list || !room) return originalUpdatePreGameLobbyUI?.(room);
-        list.replaceChildren();
-        const isHost = room.hostSocketId === socket.id;
-
-        (room.players || []).forEach((p, index) => {
-            const item = el('div', { class: 'mega-lobby-player' });
-            const left = el('div');
-            const crown = p.id === room.hostSocketId ? ' 👑' : '';
-            left.append(
-                el('div', { html: `<strong>👤 ${escapeHTML(p.name)}</strong>${crown} ${p.isGuest ? '<span style="color:#9db5e8">· Guest</span>' : '<span style="color:#72f6b7">· Saved account</span>'}` }),
-                el('div', { class: 'mega-player-sub', text: `${p.ready ? 'READY' : 'NOT READY'}${room.mode === '2v2' && p.team ? ` · Team ${p.team.toUpperCase()}` : ''} · Slot ${index + 1}` })
-            );
-            const right = el('div', { class: 'mega-row' });
-            if (p.id === socket.id && room.mode === '2v2') {
-                const blue = el('button', { class: 'mega-button', text: '🔵' });
-                blue.onclick = () => socket.emit('set_lobby_team', { roomId: room.roomId, team: 'blue' });
-                const red = el('button', { class: 'mega-button', text: '🔴' });
-                red.onclick = () => socket.emit('set_lobby_team', { roomId: room.roomId, team: 'red' });
-                right.append(blue, red);
-            }
-            if (isHost && p.id !== socket.id) {
-                const kick = el('button', { class: 'mega-button danger', text: 'KICK' });
-                kick.onclick = () => socket.emit('kick_lobby_player', { roomId: room.roomId, targetSocketId: p.id });
-                right.appendChild(kick);
-            }
-            item.append(left, right);
-            list.appendChild(item);
-        });
-
-        enrichLobbyUI(room);
     };
 
-    function enrichLobbyUI(room) {
-        const list = document.getElementById('preGamePlayerList');
-        if (!list || !room) return;
-        let tools = document.getElementById('megaLobbyTools');
-        if (!tools) {
-            tools = el('div', { id: 'megaLobbyTools' });
-            list.parentElement?.appendChild(tools);
-        }
-        tools.replaceChildren();
+    // ---------------------------------------------------------------------
+    // PUBLIC LOBBIES - organized search/filter list
+    // ---------------------------------------------------------------------
+    function renderPublicRooms(rooms) {
+        publicRoomsCache = Array.isArray(rooms) ? rooms : [];
+        const container = document.getElementById('publicRoomsList');
+        if (!container) return;
 
-        const ready = el('button', { class: 'mega-button good', text: readyState ? '🟢 READY' : '✅ READY UP' });
-        ready.onclick = toggleReady;
-        const copy = el('button', { class: 'mega-button', text: '📋 INVITE' });
-        copy.onclick = copyCurrentInvite;
-        const react = el('button', { class: 'mega-button', text: '🔥 REACT' });
-        react.onclick = () => socket.emit('lobby_reaction', { roomId: room.roomId, reaction: ['🔥','😂','🏁','💀','GG'][Math.floor(Math.random()*5)] });
-        const paste = el('button', { class: 'mega-button', text: '🔗 PASTE CODE' });
-        paste.onclick = promptPasteCode;
-        tools.append(ready, copy, react, paste);
-
-        if (room.hostSocketId === socket.id) {
-            const privacy = el('button', { class: 'mega-button', text: room.isPublic === false ? '🔒 PRIVATE' : '🌐 PUBLIC' });
-            privacy.onclick = () => socket.emit('toggle_room_privacy', { roomId: room.roomId, isPublic: room.isPublic === false });
-            const announce = el('button', { class: 'mega-button', text: '📣 ANNOUNCE' });
-            announce.onclick = () => {
-                const msg = prompt('Host announcement:');
-                if (msg?.trim()) socket.emit('lobby_announcement', { roomId: room.roomId, message: msg.trim() });
-            };
-            tools.append(privacy, announce);
-        }
-    }
-
-    // ------------------------------------------------------------------------
-    // ROOM CHAT ENHANCEMENTS: quick chat + system messages + reactions
-    // ------------------------------------------------------------------------
-    function addQuickChat() {
-        if (document.getElementById('megaQuickBar')) return;
-        const input = document.getElementById('preGameChatInput');
-        if (!input || !input.parentElement) return;
-        const bar = el('div', { id: 'megaQuickBar' });
-        ['GG','GLHF','REMATCH?','NICE!','😂','🔥'].forEach(text => {
-            const b = el('button', { class: 'mega-button', text });
-            b.onclick = () => {
-                if (!activeRoomData) return;
-                socket.emit('send_match_chat', { roomId: activeRoomData.roomId, message: text });
-            };
-            bar.appendChild(b);
+        const search = String(document.getElementById('publicRoomSearch')?.value || '').toLowerCase().trim();
+        const filtered = publicRoomsCache.filter(room => {
+            if (!search) return true;
+            return `${room.hostName} ${room.mode} ${room.winCondition}`.toLowerCase().includes(search);
         });
-        input.parentElement.parentElement?.appendChild(bar);
-    }
 
-    socket.on('lobby_system_message', data => {
-        if (!activeRoomData || data.roomId !== activeRoomData.roomId) return;
-        const boxes = [document.getElementById('preGameChatMessages'), document.getElementById('matchChatMessages')];
-        boxes.forEach(box => {
-            if (!box) return;
-            const row = el('div', { text: `⚡ ${data.message}` });
-            row.style.cssText = 'font-size:10px;color:#9db5e8;padding:4px 6px';
-            box.appendChild(row);
-            box.scrollTop = box.scrollHeight;
-        });
-    });
-
-    socket.on('lobby_reaction', data => {
-        if (!activeRoomData || data.roomId !== activeRoomData.roomId) return;
-        let tray = document.getElementById('megaReactionTray');
-        if (!tray) {
-            tray = el('div', { id: 'megaReactionTray' });
-            document.body.appendChild(tray);
+        container.replaceChildren();
+        if (!filtered.length) {
+            const empty = document.createElement('p');
+            empty.className = 'text-center text-xs text-blue-200 py-4';
+            empty.textContent = 'No matching public lobbies.';
+            container.appendChild(empty);
+            return;
         }
-        const bubble = el('div', { class: 'mega-reaction', text: `${data.reaction} ${data.from}` });
-        tray.appendChild(bubble);
-        setTimeout(() => bubble.remove(), 1800);
-    });
 
-    socket.on('kicked_from_lobby', data => {
-        if (activeRoomData?.roomId === data.roomId) {
-            showToast(`You were removed from the lobby by ${data.by}.`, '🚫');
-            activeRoomData = null;
-            closePreGameLobbyModal();
-            leaveEmbeddedGame?.();
-        }
-    });
-
-    // ------------------------------------------------------------------------
-    // PUBLIC LOBBY SEARCH/FILTER UI
-    // ------------------------------------------------------------------------
-    function enhancePublicLobbyModal() {
-        const list = document.getElementById('publicRoomsList');
-        if (!list || document.getElementById('megaLobbyFilterBar')) return;
-        const bar = el('div', { id: 'megaLobbyFilterBar', class: 'mega-section' });
-        const search = el('input', { class: 'mega-input', placeholder: 'Search host or mode…' });
-        search.value = prefs.lobbySearch;
-        const filter = el('select', { class: 'mega-select' });
-        [['all','All modes'],['1v1','1v1'],['2v2','2v2'],['ffa','FFA']].forEach(([v,l]) => filter.appendChild(el('option',{value:v,text:l})));
-        filter.value = prefs.lobbyFilter;
-        search.oninput = () => { prefs.lobbySearch = search.value; savePrefs(); renderEnhancedPublicRooms(); };
-        filter.onchange = () => { prefs.lobbyFilter = filter.value; savePrefs(); renderEnhancedPublicRooms(); };
-        bar.append(search, filter);
-        list.parentElement?.insertBefore(bar, list);
-    }
-
-    function renderEnhancedPublicRooms() {
-        const list = document.getElementById('publicRoomsList');
-        if (!list) return;
-        const query = (prefs.lobbySearch || '').toLowerCase();
-        const rooms = (publicRoomsCache || []).filter(room => {
-            const modeOK = prefs.lobbyFilter === 'all' || room.mode === prefs.lobbyFilter;
-            const textOK = !query || `${room.hostName} ${room.mode} ${room.winCondition}`.toLowerCase().includes(query);
-            return modeOK && textOK;
-        });
-        list.replaceChildren();
-        if (!rooms.length) return list.appendChild(el('p', { class:'text-center text-xs text-blue-200', text:'No matching lobbies.' }));
-        rooms.forEach(room => {
-            const row = el('div', { class:'bg-blue-950/80 p-3 rounded-2xl border border-white/10' });
-            row.innerHTML = `<div style="display:flex;justify-content:space-between;gap:10px;align-items:center"><div><div style="font-weight:900;font-size:12px">${escapeHTML(room.hostName)} · ${String(room.mode).toUpperCase()}</div><div style="font-size:10px;color:#9db5e8">${room.players.length}/${room.maxPlayers} players · ${room.readyCount || 0} ready · ${escapeHTML(room.winCondition || '')}</div></div><button class="mega-button good">JOIN</button></div>`;
-            row.querySelector('button').onclick = () => socket.emit('join_public_room', { roomId: room.roomId });
-            list.appendChild(row);
+        filtered.forEach(room => {
+            const row = document.createElement('div');
+            row.className = 'flex justify-between items-center gap-3 bg-blue-950/80 p-3 rounded-2xl border border-white/10';
+            const info = document.createElement('div');
+            const ready = (room.players || []).filter(p => p.ready).length;
+            info.innerHTML = `
+                <p class="text-xs text-white font-bold">${escapeHTML(room.hostName)} · ${escapeHTML(String(room.mode).toUpperCase())}</p>
+                <p class="text-[10px] text-blue-200">${room.players?.length || 0}/${room.maxPlayers || '?'} players · ${ready} ready · ${escapeHTML(room.winCondition || '')}</p>
+            `;
+            const join = document.createElement('button');
+            join.className = 'bg-emerald-500 hover:bg-emerald-400 text-white font-black px-3 py-2 rounded-xl text-xs';
+            join.textContent = 'JOIN';
+            join.onclick = () => socket.emit('join_public_room', { roomId: room.roomId });
+            row.append(info, join);
+            container.appendChild(row);
         });
     }
 
-    socket.on('public_rooms_update', rooms => {
-        publicRoomsCache = rooms;
-        enhancePublicLobbyModal();
-        renderEnhancedPublicRooms();
-    });
+    socket.off('public_rooms_update');
+    socket.on('public_rooms_update', renderPublicRooms);
+    document.getElementById('publicRoomSearch')?.addEventListener('input', () => renderPublicRooms(publicRoomsCache));
 
-    // ------------------------------------------------------------------------
-    // SESSION / CONNECTION UI
-    // ------------------------------------------------------------------------
-    const miniNotice = el('div', { id: 'megaMiniNotice' });
-    document.body.appendChild(miniNotice);
-
-    const connection = el('div', { id: 'megaConnectionBanner', text: '🟢 Connected' });
-    document.body.appendChild(connection);
-
-    const offline = el('div', { id: 'megaOfflineToast', html: '<div><div style="font-size:44px">📡</div><h2 style="font-size:24px;font-weight:900">Connection lost</h2><p>Your lobby is trying to reconnect. Do not refresh unless it stays offline.</p></div>' });
-    document.body.appendChild(offline);
-
-    socket.on('connect', () => {
-        connectionStartedAt = Date.now();
-        connection.textContent = '🟢 Connected';
-        connection.classList.remove('offline');
-        offline.classList.remove('show');
-        sendCurrentSession();
-    });
-    socket.on('disconnect', () => {
-        connection.textContent = '🔴 Reconnecting…';
-        connection.classList.add('offline');
-        offline.classList.add('show');
-    });
-    window.addEventListener('offline', () => offline.classList.add('show'));
-    window.addEventListener('online', () => offline.classList.remove('show'));
-
-    // ------------------------------------------------------------------------
-    // IN-GAME / LOBBY EVENTS
-    // ------------------------------------------------------------------------
-    function acceptRoom(room) {
-        if (!room) return;
+    // ---------------------------------------------------------------------
+    // SOCKET ROOM EVENTS
+    // ---------------------------------------------------------------------
+    function acceptRoom(room, openLobby = true) {
         activeRoomData = room;
-        lastRoomId = room.roomId;
-        localStorage.setItem('smash_last_room_id_v3', room.roomId);
-        refreshGameLobby(room);
-        if (typeof updatePreGameLobbyUI === 'function') updatePreGameLobbyUI(room);
-        addQuickChat();
-        matchStartedAt = Date.now();
+        refreshRoomUI(room);
+        if (openLobby) openPreGameLobby(room);
     }
 
-    socket.on('room_created', acceptRoom);
-    socket.on('ffa_lobby_ready', room => {
-        acceptRoom(room);
-        openPreGameLobby(room);
-    });
-    socket.on('challenge_game_start', acceptRoom);
+    socket.on('ffa_no_lobby', data => showToast(data?.message || 'No FFA lobby is open yet.', 'ℹ️'));
+    socket.on('ffa_lobby_ready', room => acceptRoom(room, true));
     socket.on('saved_room_update', room => {
         if (!activeRoomData || activeRoomData.roomId !== room.roomId) return;
-        activeRoomData = room;
-        refreshGameLobby(room);
-        if (!document.getElementById('preGameLobbyModal')?.classList.contains('hidden')) updatePreGameLobbyUI(room);
+        refreshRoomUI(room);
     });
     socket.on('lobby_game_code_updated', data => {
         if (!activeRoomData || activeRoomData.roomId !== data.roomId) return;
         activeRoomData.smashUrl = data.smashUrl;
-        refreshGameLobby(activeRoomData);
-        showToast(`Lobby code updated by ${data.updatedBy}.`, '📋');
+        refreshRoomUI(activeRoomData);
+        showToast(`Lobby room code updated by ${data.updatedBy}.`, '📋');
     });
     socket.on('ready_state_changed', data => {
         if (!activeRoomData || activeRoomData.roomId !== data.roomId) return;
-        document.getElementById('megaReadyBadge')?.replaceChildren(document.createTextNode(`${data.readyCount} READY`));
-        if (data.allReady) showToast('Everybody is ready!', '🏁');
+        const ready = document.getElementById('dockReadySummary');
+        if (ready) ready.textContent = `${data.readyCount}/${data.total} ready${data.allReady ? ' · EVERYONE READY!' : ''}`;
+    });
+    socket.on('lobby_reaction', data => {
+        if (!activeRoomData || activeRoomData.roomId !== data.roomId) return;
+        showToast(`${data.from}: ${data.reaction}`, '🎉');
+    });
+    socket.on('lobby_system_message', data => {
+        if (!activeRoomData || activeRoomData.roomId !== data.roomId) return;
+        const line = `<div class="bg-blue-800/50 border border-white/10 p-2 rounded-xl text-[10px] text-blue-100">${escapeHTML(data.message)}</div>`;
+        const pre = document.getElementById('preGameChatMessages');
+        const match = document.getElementById('matchChatMessages');
+        if (pre) pre.insertAdjacentHTML('beforeend', line);
+        if (match) match.insertAdjacentHTML('beforeend', line);
+    });
+    socket.on('kicked_from_lobby', data => {
+        if (!activeRoomData || activeRoomData.roomId !== data.roomId) return;
+        activeRoomData = null;
+        closeExclusiveModals();
+        closeGameDock();
+        showToast(`You were removed from the lobby by ${data.by}.`, '🚫');
     });
     socket.on('lobby_deleted', ({ roomId }) => {
-        if (activeRoomData?.roomId === roomId) activeRoomData = null;
+        if (activeRoomData?.roomId !== roomId) return;
+        activeRoomData = null;
+        closeGameDock();
+        closePreGameLobbyModal();
+        showToast('That lobby closed because nobody remained in it.', 'ℹ️');
     });
     socket.on('account_required', data => {
-        showToast(data?.message || 'Log in to use that saved feature.', '💾');
+        showToast(data?.message || 'Log in to use that saved-account feature.', '🔒');
+        openOptionalLogin();
     });
+    socket.on('session_mode', () => updateAccountUI());
 
-    // ------------------------------------------------------------------------
-    // WRAP GAME START WITHOUT BREAKING EXISTING GAME FLOW
-    // ------------------------------------------------------------------------
-    const originalEnterGame = window.enterGameFromLobby;
-    window.enterGameFromLobby = function (...args) {
-        const user = currentArenaUser();
-        if (!activeRoomData) return originalEnterGame?.apply(this, args);
-
-        // Existing script records a match unconditionally. Suppress only for guests
-        // by temporarily replacing socket.emit for that one event.
-        const realEmit = socket.emit.bind(socket);
-        if (!isAccountMode()) {
-            socket.emit = function (event, ...rest) {
-                if (event === 'record_match_played') return socket;
-                return realEmit(event, ...rest);
-            };
+    // ---------------------------------------------------------------------
+    // CONNECTION STATUS IN HEADER - never covers Settings.
+    // ---------------------------------------------------------------------
+    function setConnectionState(state) {
+        const dot = document.getElementById('connectionDot');
+        const text = document.getElementById('connectionText');
+        if (!dot || !text) return;
+        if (state === 'connected') {
+            dot.style.background = '#22c55e';
+            text.textContent = 'Connected';
+        } else if (state === 'connecting') {
+            dot.style.background = '#facc15';
+            text.textContent = 'Reconnecting…';
+        } else {
+            dot.style.background = '#ef4444';
+            text.textContent = 'Offline';
         }
-
-        let result;
-        try {
-            result = originalEnterGame?.apply(this, args);
-        } finally {
-            socket.emit = realEmit;
-        }
-
-        progress.sessionMatches = (progress.sessionMatches || 0) + 1;
-        if (isAccountMode()) {
-            updateDailyStreak();
-            addXP(75, 'Played a match');
-            progress.accountMatches = (progress.accountMatches || 0) + 1;
-            saveProgress();
-            if (progress.accountMatches === 1) unlockAchievement('first_match', 'First saved match');
-            if (progress.accountMatches >= 10) unlockAchievement('ten_matches', '10 saved matches');
-        }
-        matchStartedAt = Date.now();
-        ensureGameToolbar();
-        refreshGameLobby(activeRoomData);
-        return result;
-    };
-
-    // ------------------------------------------------------------------------
-    // TOOLBAR / PAGE TIMER
-    // ------------------------------------------------------------------------
-    function ensureSessionWidget() {
-        const headerLeft = document.querySelector('#mainDashboard header > div');
-        if (!headerLeft || document.getElementById('megaSessionWidget')) return;
-        const widget = el('div', { id: 'megaSessionWidget', class: 'mega-chip' });
-        widget.innerHTML = '⏱️ <span id="megaSessionTime">00:00</span> · <span id="megaModeLabel">Guest</span>';
-        headerLeft.appendChild(widget);
     }
 
-    function formatDuration(ms) {
-        const sec = Math.max(0, Math.floor(ms / 1000));
-        const h = Math.floor(sec / 3600);
-        const m = Math.floor((sec % 3600) / 60);
-        const s = sec % 60;
-        return h ? `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}` : `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
-    }
+    socket.on('connect', () => {
+        setConnectionState('connected');
+        updateUserUI();
+    });
+    socket.on('disconnect', () => setConnectionState('connecting'));
+    socket.io?.on?.('reconnect_attempt', () => setConnectionState('connecting'));
+    socket.io?.on?.('reconnect_failed', () => setConnectionState('offline'));
 
+    window.addEventListener('online', () => setConnectionState(socket.connected ? 'connected' : 'connecting'));
+    window.addEventListener('offline', () => setConnectionState('offline'));
+
+    // ---------------------------------------------------------------------
+    // SESSION TIMER + KEYBOARD SHORTCUTS
+    // ---------------------------------------------------------------------
     setInterval(() => {
-        document.getElementById('megaSessionTime')?.replaceChildren(document.createTextNode(formatDuration(Date.now() - pageStartedAt)));
-        document.getElementById('megaModeLabel')?.replaceChildren(document.createTextNode(isAccountMode() ? `Lv.${levelFromXP(progress.xp)} Saved` : 'Guest'));
-        const game = document.getElementById('gameScreen');
-        if (game && !game.classList.contains('hidden')) ensureGameToolbar();
-    }, 1000);
+        const minutes = Math.floor((Date.now() - SESSION_STARTED) / 60000);
+        const el = document.getElementById('hubSessionTime');
+        if (el) el.textContent = `Session: ${minutes}m`;
+    }, 15000);
 
-    // ------------------------------------------------------------------------
-    // ADD PLUS + MUSIC TO DASHBOARD SIDEBAR
-    // ------------------------------------------------------------------------
-    function installSidebarExtras() {
-        const aside = document.querySelector('#mainDashboard aside');
-        if (!aside || document.getElementById('btnNavMegaPlus')) return;
-        const music = el('button', { id:'btnNavMusic', class:'sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg', title:'Spotify Music', text:'🎵' });
-        music.onclick = openMusicDrawer;
-        const plus = el('button', { id:'btnNavMegaPlus', class:'sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg', title:'Arena Plus', text:'⚡' });
-        plus.onclick = openMegaDrawer;
-        aside.append(music, plus);
-    }
+    document.addEventListener('keydown', event => {
+        const target = event.target;
+        if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return;
 
-    // ------------------------------------------------------------------------
-    // KEYBOARD SHORTCUTS
-    // ------------------------------------------------------------------------
-    document.addEventListener('keydown', e => {
-        const target = e.target;
-        const typing = target && ['INPUT','TEXTAREA','SELECT'].includes(target.tagName);
-        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
-            e.preventDefault();
-            return openCommandPalette();
+        if (event.key === 'Escape') {
+            const visibleModal = Array.from(document.querySelectorAll('.exclusive-modal')).find(el => !el.classList.contains('hidden'));
+            if (visibleModal) {
+                visibleModal.classList.add('hidden');
+                return;
+            }
+            closeGameDock();
+            return;
         }
-        if (typing) return;
-        const key = e.key.toLowerCase();
-        if (key === 'm') openMusicDrawer();
-        if (key === 'l') openCurrentLobby();
-        if (key === 'c') toggleOverlayChat?.();
-        if (key === 'p') promptPasteCode();
-        if (key === 'r') toggleReady();
-        if (key === 'f') toggleFullscreen();
-        if (key === 'n') openNotesPanel();
-        if (key === '1') switchMatchMode('1v1');
-        if (key === '2') switchMatchMode('2v2');
-        if (key === '3') showFFATab();
-        if (key === 'escape') ['megaDrawer','megaCommandPalette','megaProfilePanel','megaNotesPanel','megaShortcutsPanel','megaMusicPanel','megaHistoryPanel'].forEach(closeNode);
+
+        if (event.key.toLowerCase() === 'l') openGameDock('lobby');
+        if (event.key.toLowerCase() === 'c') openGameDock('chat');
+        if (event.key.toLowerCase() === 'm') openGameDock('music');
+        if (event.key.toLowerCase() === 'r' && activeRoomData) toggleMyReadyStatus();
+        if (event.key === '1') switchMatchMode('1v1');
+        if (event.key === '2') switchMatchMode('2v2');
+        if (event.key === '3') openFfaPage();
     });
 
-    // ------------------------------------------------------------------------
-    // INIT
-    // ------------------------------------------------------------------------
-    applyPrefs();
-    installFFATab();
-    installSidebarExtras();
-    ensureGameToolbar();
-    ensureSessionWidget();
-    refreshAccountChrome();
-    enhancePublicLobbyModal();
-    addQuickChat();
-
-    // Original DOMContentLoaded handler will now see AuthSession.isLoggedIn() === true,
-    // which prevents the forced login wall and lets guest mode open the site normally.
-    document.addEventListener('DOMContentLoaded', () => {
-        document.getElementById('authModal')?.classList.add('hidden');
-        installFFATab();
-        installSidebarExtras();
-        ensureGameToolbar();
-        ensureSessionWidget();
-        refreshAccountChrome();
-        sendCurrentSession();
-    });
-
-    // If DOM is already ready, send guest/account session immediately.
-    if (document.readyState !== 'loading') {
-        document.getElementById('authModal')?.classList.add('hidden');
-        sendCurrentSession();
+    // ---------------------------------------------------------------------
+    // STARTUP
+    // ---------------------------------------------------------------------
+    const pref = readJSON(PREF_KEY, {});
+    if (pref.gameplay === 'embed' || pref.gameplay === 'popup') {
+        currentGameplayMode = pref.gameplay;
     }
+
+    document.getElementById('authModal')?.classList.add('hidden');
+    document.getElementById('settingsModal')?.classList.add('hidden');
+    updateAccountUI();
+    loadArenaNotes();
+    syncHubSettings();
+    setConnectionState(socket.connected ? 'connected' : 'connecting');
+
+    // Ensure the guest/account session reaches the server even if the old
+    // DOMContentLoaded handler already ran unusually early.
+    updateUserUI();
 }
