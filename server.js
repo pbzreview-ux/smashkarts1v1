@@ -4,6 +4,7 @@ const { Server } = require('socket.io');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
+const zlib = require('zlib');
 
 const app = express();
 const server = http.createServer(app);
@@ -65,29 +66,55 @@ app.use(express.static(__dirname));
 // =========================================================
 // PERSISTED DATA
 // =========================================================
+// V16: Free persistent cloud storage through Upstash Redis REST.
+// No extra npm package is required; Node's built-in fetch talks directly to
+// Upstash. Put UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN in Render.
+//
+// The existing platform still works with its in-memory objects, while the
+// complete state is compressed and saved remotely. This keeps accounts, login
+// sessions, PFPs, settings, roles, friends, DMs, groups, tournaments, ratings,
+// reports, bans and audit history through Render restarts/redeploys.
 const connectedPlayers = {};
 const activeRoomsMap = new Map();
 const automaticDataDirectory = fs.existsSync('/var/data') ? '/var/data' : path.join(__dirname, 'data');
 const dataDirectory = path.resolve(process.env.SMASH_DATA_DIR || automaticDataDirectory);
 fs.mkdirSync(dataDirectory, { recursive: true });
-console.log(`[DATA] Using ${dataDirectory}${dataDirectory === path.resolve(path.join(__dirname, 'data')) ? ' (attach persistent storage before relying on deploy-to-deploy retention)' : ' (persistent path)'}`);
 const dataFile = path.join(dataDirectory, 'history.json');
 
-const saved = fs.existsSync(dataFile)
-    ? JSON.parse(fs.readFileSync(dataFile, 'utf8'))
-    : { profiles: {}, stats: {}, directMessages: {}, matches: {}, accounts: {}, sessions: {}, groups: {}, tournaments: {}, reports: [], auditLog: [] };
+const UPSTASH_REDIS_REST_URL = String(process.env.UPSTASH_REDIS_REST_URL || '').trim().replace(/\/$/, '');
+const UPSTASH_REDIS_REST_TOKEN = String(process.env.UPSTASH_REDIS_REST_TOKEN || '').trim();
+const UPSTASH_STATE_KEY = String(process.env.UPSTASH_STATE_KEY || 'smashkarts1v1s:platform-state:v1').trim();
 
-saved.profiles ||= {};
-saved.stats ||= {};
-saved.directMessages ||= {};
-saved.matches ||= {};
-saved.accounts ||= {};
-saved.sessions ||= {};
-saved.groups ||= {};
-saved.tournaments ||= {};
-if (!Array.isArray(saved.reports)) saved.reports = [];
-if (!Array.isArray(saved.auditLog)) saved.auditLog = [];
+function emptySavedState() {
+    return { profiles: {}, stats: {}, directMessages: {}, matches: {}, accounts: {}, sessions: {}, groups: {}, tournaments: {}, reports: [], auditLog: [] };
+}
 
+function normalizeSavedState(value) {
+    const state = value && typeof value === 'object' ? value : emptySavedState();
+    state.profiles ||= {};
+    state.stats ||= {};
+    state.directMessages ||= {};
+    state.matches ||= {};
+    state.accounts ||= {};
+    state.sessions ||= {};
+    state.groups ||= {};
+    state.tournaments ||= {};
+    if (!Array.isArray(state.reports)) state.reports = [];
+    if (!Array.isArray(state.auditLog)) state.auditLog = [];
+    return state;
+}
+
+function loadLocalState() {
+    try {
+        if (!fs.existsSync(dataFile)) return emptySavedState();
+        return normalizeSavedState(JSON.parse(fs.readFileSync(dataFile, 'utf8')));
+    } catch (error) {
+        console.error('[DATA] Could not read local history.json:', error.message);
+        return emptySavedState();
+    }
+}
+
+const saved = loadLocalState();
 const profiles = Object.assign(Object.create(null), saved.profiles);
 const playerStats = Object.assign(Object.create(null), saved.stats);
 const directMessageStore = Object.assign(Object.create(null), saved.directMessages);
@@ -99,9 +126,16 @@ const tournamentStore = Object.assign(Object.create(null), saved.tournaments);
 const reportStore = saved.reports;
 const auditLog = saved.auditLog;
 
-function saveHistory() {
-    const temp = dataFile + '.tmp';
-    fs.writeFileSync(temp, JSON.stringify({
+let cloudStorageReady = false;
+let cloudSaveTimer = null;
+let cloudSaveInFlight = false;
+let cloudSaveAgain = false;
+let latestCloudSnapshot = null;
+let lastCloudSaveAt = 0;
+let lastCloudError = '';
+
+function stateSnapshot() {
+    return {
         profiles,
         stats: playerStats,
         directMessages: directMessageStore,
@@ -112,8 +146,149 @@ function saveHistory() {
         tournaments: tournamentStore,
         reports: reportStore,
         auditLog
-    }), { mode: 0o600 });
-    fs.renameSync(temp, dataFile);
+    };
+}
+
+function replaceObjectContents(target, source) {
+    for (const key of Object.keys(target)) delete target[key];
+    Object.assign(target, source || {});
+}
+
+function applySavedState(value) {
+    const next = normalizeSavedState(value);
+    replaceObjectContents(profiles, next.profiles);
+    replaceObjectContents(playerStats, next.stats);
+    replaceObjectContents(directMessageStore, next.directMessages);
+    replaceObjectContents(matchHistory, next.matches);
+    replaceObjectContents(accounts, next.accounts);
+    replaceObjectContents(authSessionStore, next.sessions);
+    replaceObjectContents(groupStore, next.groups);
+    replaceObjectContents(tournamentStore, next.tournaments);
+    reportStore.splice(0, reportStore.length, ...next.reports);
+    auditLog.splice(0, auditLog.length, ...next.auditLog);
+}
+
+function saveLocalBackup(snapshot) {
+    try {
+        const temp = dataFile + '.tmp';
+        fs.writeFileSync(temp, JSON.stringify(snapshot), { mode: 0o600 });
+        fs.renameSync(temp, dataFile);
+    } catch (error) {
+        console.error('[DATA] Local backup failed:', error.message);
+    }
+}
+
+function encodeCloudState(snapshot) {
+    const json = JSON.stringify(snapshot);
+    return 'gz:' + zlib.gzipSync(Buffer.from(json, 'utf8'), { level: 6 }).toString('base64');
+}
+
+function decodeCloudState(value) {
+    if (typeof value !== 'string' || !value) return null;
+    if (value.startsWith('gz:')) {
+        const json = zlib.gunzipSync(Buffer.from(value.slice(3), 'base64')).toString('utf8');
+        return JSON.parse(json);
+    }
+    return JSON.parse(value);
+}
+
+async function upstashCommand(command) {
+    if (!UPSTASH_REDIS_REST_URL || !UPSTASH_REDIS_REST_TOKEN) throw new Error('Upstash credentials are missing');
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+    try {
+        const response = await fetch(UPSTASH_REDIS_REST_URL, {
+            method: 'POST',
+            headers: {
+                Authorization: `Bearer ${UPSTASH_REDIS_REST_TOKEN}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(command),
+            signal: controller.signal
+        });
+        if (!response.ok) throw new Error(`Upstash HTTP ${response.status}`);
+        const payload = await response.json();
+        if (payload && payload.error) throw new Error(payload.error);
+        return payload ? payload.result : null;
+    } finally {
+        clearTimeout(timeout);
+    }
+}
+
+async function flushCloudSave() {
+    if (!cloudStorageReady || cloudSaveInFlight || !latestCloudSnapshot) return;
+    cloudSaveInFlight = true;
+    const snapshot = latestCloudSnapshot;
+    latestCloudSnapshot = null;
+    cloudSaveAgain = false;
+    try {
+        const encoded = encodeCloudState(snapshot);
+        await upstashCommand(['SET', UPSTASH_STATE_KEY, encoded]);
+        lastCloudSaveAt = Date.now();
+        lastCloudError = '';
+    } catch (error) {
+        lastCloudError = String(error?.message || error);
+        console.error('[DATA] Upstash save failed:', lastCloudError);
+        latestCloudSnapshot = stateSnapshot();
+        cloudSaveAgain = true;
+    } finally {
+        cloudSaveInFlight = false;
+        if (cloudSaveAgain || latestCloudSnapshot) {
+            clearTimeout(cloudSaveTimer);
+            cloudSaveTimer = setTimeout(() => flushCloudSave(), 1000);
+        }
+    }
+}
+
+function saveHistory() {
+    const snapshot = stateSnapshot();
+    // Local copy helps development and gives us a temporary fallback if the
+    // cloud API has a short outage. The cloud copy is the permanent source.
+    saveLocalBackup(snapshot);
+    if (!cloudStorageReady) return;
+    latestCloudSnapshot = snapshot;
+    cloudSaveAgain = true;
+    clearTimeout(cloudSaveTimer);
+    cloudSaveTimer = setTimeout(() => flushCloudSave(), 350);
+}
+
+async function initializeCloudStorage() {
+    if (!UPSTASH_REDIS_REST_URL || !UPSTASH_REDIS_REST_TOKEN) {
+        console.warn('[DATA] Upstash is not configured. Using local history.json only.');
+        console.warn('[DATA] Add UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN in Render for permanent storage.');
+        return;
+    }
+
+    try {
+        const remoteValue = await upstashCommand(['GET', UPSTASH_STATE_KEY]);
+        if (remoteValue) {
+            applySavedState(decodeCloudState(remoteValue));
+            console.log('[DATA] Loaded permanent platform state from Upstash.');
+        } else {
+            await upstashCommand(['SET', UPSTASH_STATE_KEY, encodeCloudState(stateSnapshot())]);
+            console.log('[DATA] Upstash was empty; imported the current local platform state.');
+        }
+        cloudStorageReady = true;
+        lastCloudSaveAt = Date.now();
+        console.log('[DATA] Upstash persistent storage is ACTIVE.');
+    } catch (error) {
+        cloudStorageReady = false;
+        lastCloudError = String(error?.message || error);
+        console.error('[DATA] Could not connect to Upstash:', lastCloudError);
+        console.error('[DATA] Site will continue using local history.json until Upstash is fixed.');
+    }
+}
+
+async function flushPersistenceBeforeExit() {
+    clearTimeout(cloudSaveTimer);
+    if (!cloudStorageReady) return;
+    latestCloudSnapshot = stateSnapshot();
+    cloudSaveAgain = true;
+    const started = Date.now();
+    while (cloudSaveInFlight && Date.now() - started < 2500) {
+        await new Promise(resolve => setTimeout(resolve, 25));
+    }
+    await flushCloudSave();
 }
 
 function defaultSavedSettings() {
@@ -2221,7 +2396,9 @@ io.on('connection', socket => {
                 groups: Object.keys(groupStore).length,
                 tournaments: Object.keys(tournamentStore).length,
                 openReports: reportStore.filter(r => r.status === 'open').length,
-                storage: dataDirectory === path.resolve('/var/data') ? 'PERSISTENT' : 'NEEDS /var/data DISK'
+                storage: cloudStorageReady ? 'UPSTASH PERSISTENT' : (dataDirectory === path.resolve('/var/data') ? 'DISK PERSISTENT' : 'LOCAL ONLY'),
+                lastCloudSave: lastCloudSaveAt ? new Date(lastCloudSaveAt).toISOString() : 'never',
+                cloudError: lastCloudError || 'none'
             }
         });
     });
@@ -2398,9 +2575,27 @@ function broadcastLeaderboard() {
 }
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-    console.log(`Smashkarts1v1s Mega Arena running on port ${PORT}`);
+
+async function startArenaServer() {
+    await initializeCloudStorage();
+    server.listen(PORT, () => {
+        console.log(`Smashkarts1v1s Mega Arena running on port ${PORT}`);
+        console.log(`[DATA] Storage mode: ${cloudStorageReady ? 'UPSTASH PERSISTENT' : (dataDirectory === path.resolve('/var/data') ? 'DISK PERSISTENT' : 'LOCAL ONLY')}`);
+    });
+}
+
+startArenaServer().catch(error => {
+    console.error('Fatal startup error:', error);
+    process.exit(1);
 });
+
+for (const signal of ['SIGTERM', 'SIGINT']) {
+    process.once(signal, async () => {
+        console.log(`[SYSTEM] ${signal} received. Flushing saved data...`);
+        try { await flushPersistenceBeforeExit(); } catch (error) { console.error('[DATA] Final flush failed:', error.message); }
+        process.exit(0);
+    });
+}
 
 // ============================================================================
 // BROWSER-SIDE MEGA UPGRADE
