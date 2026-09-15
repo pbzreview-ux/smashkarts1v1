@@ -67,8 +67,10 @@ app.use(express.static(__dirname));
 // =========================================================
 const connectedPlayers = {};
 const activeRoomsMap = new Map();
-const dataDirectory = path.resolve(process.env.SMASH_DATA_DIR || path.join(__dirname, 'data'));
+const automaticDataDirectory = fs.existsSync('/var/data') ? '/var/data' : path.join(__dirname, 'data');
+const dataDirectory = path.resolve(process.env.SMASH_DATA_DIR || automaticDataDirectory);
 fs.mkdirSync(dataDirectory, { recursive: true });
+console.log(`[DATA] Using ${dataDirectory}${dataDirectory === path.resolve(path.join(__dirname, 'data')) ? ' (attach persistent storage before relying on deploy-to-deploy retention)' : ' (persistent path)'}`);
 const dataFile = path.join(dataDirectory, 'history.json');
 
 const saved = fs.existsSync(dataFile)
@@ -114,6 +116,25 @@ function saveHistory() {
     fs.renameSync(temp, dataFile);
 }
 
+function defaultSavedSettings() {
+    return {
+        gameplayMode: 'popup',
+        queueType: 'casual',
+        streamerHideCode: false,
+        streamerSafeNotifications: false
+    };
+}
+
+function normalizeSavedSettings(settings) {
+    const value = settings && typeof settings === 'object' ? settings : {};
+    return {
+        gameplayMode: value.gameplayMode === 'embed' ? 'embed' : 'popup',
+        queueType: value.queueType === 'ranked' ? 'ranked' : 'casual',
+        streamerHideCode: !!value.streamerHideCode,
+        streamerSafeNotifications: !!value.streamerSafeNotifications
+    };
+}
+
 function profileFor(username) {
     if (!profiles[username]) {
         profiles[username] = {
@@ -121,12 +142,14 @@ function profileFor(username) {
             requests: [],
             isOnline: true,
             avatar: '',
+            settings: defaultSavedSettings(),
             createdAt: Date.now()
         };
     }
     profiles[username].friends ||= [];
     profiles[username].requests ||= [];
     if (typeof profiles[username].avatar !== 'string') profiles[username].avatar = '';
+    profiles[username].settings = normalizeSavedSettings(profiles[username].settings);
     return profiles[username];
 }
 
@@ -463,7 +486,7 @@ function joinRoom(socket, room, player, eventName = 'room_created') {
 const OWNER_EMAIL = String(process.env.OWNER_EMAIL || '').trim().toLowerCase();
 const OWNER_SETUP_KEY = String(process.env.OWNER_SETUP_KEY || '').trim();
 const RESERVED_OWNER_USERNAME = 'PRIME';
-const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const SESSION_TTL_MS = 180 * 24 * 60 * 60 * 1000; // 180 days, refreshed whenever the account resumes
 
 function normalizeEmail(email) {
     return String(email || '').trim().toLowerCase();
@@ -608,6 +631,10 @@ function accountFromToken(token) {
         saveHistory();
         return null;
     }
+    // Sliding expiration: normal site updates/redeploys should not log a player
+    // out as long as the persisted session store is still present.
+    record.expiresAt = Date.now() + SESSION_TTL_MS;
+    saveHistory();
     return { account, hash };
 }
 
@@ -708,6 +735,7 @@ function attachAuthenticatedPlayer(socket, account, token = null, resumed = fals
     socket.emit('saved_friends', { friends: profile.friends || [], requests: profile.requests || [] });
     socket.emit('friend_requests_update', Array.from(player.friendRequests));
     socket.emit('saved_profile', { avatar: player.avatar || '' });
+    socket.emit('saved_settings', { ...profile.settings });
     socket.emit('auth_success', {
         token,
         resumed,
@@ -1023,6 +1051,31 @@ io.on('connection', socket => {
         socket.emit('account_renamed', { username: next, user: publicAccountState(account) });
         broadcastOnlineUsers();
         broadcastPublicRooms();
+    });
+
+    socket.on('update_saved_settings', patch => {
+        const player = connectedPlayers[socket.id];
+        if (!player || player.isGuest) return;
+        const profile = profileFor(player.username);
+        const current = normalizeSavedSettings(profile.settings);
+        const next = { ...current };
+
+        if (patch && Object.prototype.hasOwnProperty.call(patch, 'gameplayMode')) {
+            next.gameplayMode = patch.gameplayMode === 'embed' ? 'embed' : 'popup';
+        }
+        if (patch && Object.prototype.hasOwnProperty.call(patch, 'queueType')) {
+            next.queueType = patch.queueType === 'ranked' ? 'ranked' : 'casual';
+        }
+        if (patch && Object.prototype.hasOwnProperty.call(patch, 'streamerHideCode')) {
+            next.streamerHideCode = !!patch.streamerHideCode;
+        }
+        if (patch && Object.prototype.hasOwnProperty.call(patch, 'streamerSafeNotifications')) {
+            next.streamerSafeNotifications = !!patch.streamerSafeNotifications;
+        }
+
+        profile.settings = normalizeSavedSettings(next);
+        saveHistory();
+        socket.emit('saved_settings', { ...profile.settings });
     });
 
     socket.on('toggle_online_status', isOnline => {
@@ -4411,11 +4464,12 @@ function installMegaArena() {
 }
 
 // ============================================================================
-// V12 PLATFORM LAYER
+// V14 PLATFORM LAYER
 // Secure accounts + OWNER/DEV + PRIME reservation + groups + tournaments +
 // profiles + permanent Discord-style messages + guide + streamer tools.
 // ============================================================================
 function installV12Platform() {
+    // V14 keeps the existing function name so older deployment wiring stays compatible.
     const SECURE_KEY = 'smash_secure_account_v12';
     const QUEUE_KEY = 'smash_queue_type_v12';
     const STREAMER_PREF_KEY = 'smash_streamer_prefs_v12';
@@ -4508,7 +4562,13 @@ function installV12Platform() {
             .v12-pill{display:inline-flex;padding:3px 7px;border-radius:999px;background:#ffffff12;border:1px solid #ffffff1e;font-size:9px;font-weight:800}
             .v12-section{background:#0f245b;border:1px solid #ffffff1c;border-radius:14px;padding:12px;margin-top:10px}.v12-section-title{color:#ffe238;font:900 10px Inter,sans-serif;text-transform:uppercase;letter-spacing:.07em;margin-bottom:8px}
             .v12-small-btn{border:1px solid #ffffff25;border-radius:9px;background:#244a9d;color:white;font:900 9px Inter,sans-serif;padding:7px 8px;cursor:pointer}.v12-small-btn.red{background:#b91c1c}.v12-small-btn.green{background:#059669}.v12-small-btn.yellow{background:#ffd318;color:#142f75}.v12-small-btn.purple{background:#6d28d9}
-            .v12-actions{display:flex;gap:5px;flex-wrap:wrap;margin-top:5px;opacity:.25;transition:.15s}.discord-message:hover .v12-actions{opacity:1}
+            .discord-message{grid-template-columns:40px minmax(0,1fr) 30px!important;align-items:start;position:relative}
+            .v12-message-menu{position:relative;display:flex;justify-content:flex-end;align-items:flex-start;padding-top:1px}
+            .v12-message-menu-button{width:28px;height:28px;border:0;border-radius:8px;background:transparent;color:#9fb2e3;font:1000 16px Inter,sans-serif;line-height:1;cursor:pointer;opacity:.2;transition:.15s}
+            .discord-message:hover .v12-message-menu-button,.v12-message-menu-button:focus,.v12-message-menu.open .v12-message-menu-button{opacity:1;background:#ffffff0d;color:white}
+            .v12-message-menu-popover{position:absolute;right:32px;top:0;z-index:25;min-width:128px;padding:5px;border:1px solid #ffffff20;border-radius:11px;background:#0c1b45;box-shadow:0 12px 30px #0008;display:none}
+            .v12-message-menu.open .v12-message-menu-popover{display:flex;flex-direction:column;gap:3px}
+            .v12-message-menu-item{width:100%;border:0;border-radius:7px;padding:7px 9px;background:transparent;color:#e8eeff;text-align:left;font:800 10px Inter,sans-serif;cursor:pointer}.v12-message-menu-item:hover{background:#ffffff10}.v12-message-menu-item.danger{color:#fca5a5}.v12-message-menu-item.mod{color:#fcd34d}
             .discord-composer{position:sticky;bottom:0;z-index:3;background:#182b62;flex:0 0 auto}.discord-chat{min-height:0}.discord-messages{min-height:0;overflow-y:auto!important}
             .v12-group-row{border-left:3px solid #8b5cf6}.v12-mention{background:#facc1530;border-radius:3px;padding:0 2px;color:#fde68a;font-weight:900}
             .v12-profile-hero{display:grid;grid-template-columns:120px minmax(0,1fr);gap:18px;align-items:center}.v12-profile-avatar{width:120px;height:120px;border-radius:50%;overflow:hidden;background:#1e3a8a;display:grid;place-items:center;font-size:32px;font-weight:900;border:4px solid #ffffff35}.v12-profile-avatar img{width:100%;height:100%;object-fit:cover}
@@ -4708,6 +4768,45 @@ function installV12Platform() {
         injectHeaderBadges();
         updateConditionalNavigation();
     });
+
+    // Account settings are mirrored locally for instant load, but the server
+    // is the durable source for saved accounts so site updates do not reset them.
+    socket.on('saved_settings', settings => {
+        if (!settings || !secureSession()?.token) return;
+        const gameplayMode = settings.gameplayMode === 'embed' ? 'embed' : 'popup';
+        const savedQueue = settings.queueType === 'ranked' ? 'ranked' : 'casual';
+        currentGameplayMode = gameplayMode;
+        updateGameplayMode(gameplayMode);
+        const gameplay = document.getElementById('settingsGameplayMode');
+        if (gameplay) gameplay.value = gameplayMode;
+        const originalSelect = document.getElementById('gameplayModeSelect');
+        if (originalSelect) originalSelect.value = gameplayMode;
+        try {
+            const pref = JSON.parse(localStorage.getItem('smash_arena_preferences_v4') || '{}');
+            pref.gameplay = gameplayMode;
+            localStorage.setItem('smash_arena_preferences_v4', JSON.stringify(pref));
+            localStorage.setItem(QUEUE_KEY, savedQueue);
+            localStorage.setItem(STREAMER_PREF_KEY, JSON.stringify({
+                hideCode: !!settings.streamerHideCode,
+                safeNotifications: !!settings.streamerSafeNotifications
+            }));
+        } catch {}
+        queueType = savedQueue;
+        refreshQueueButtons();
+        const hideCode = document.getElementById('streamerHideCode');
+        const safeNotifications = document.getElementById('streamerSafeNotifications');
+        if (hideCode) hideCode.checked = !!settings.streamerHideCode;
+        if (safeNotifications) safeNotifications.checked = !!settings.streamerSafeNotifications;
+        const code = document.getElementById('copyRoomCodeBtn');
+        if (code) code.style.visibility = settings.streamerHideCode ? 'hidden' : '';
+    });
+
+    const baseSaveMainSettingsV14 = window.saveMainSettings;
+    window.saveMainSettings = function () {
+        baseSaveMainSettingsV14?.();
+        const gameplayMode = document.getElementById('settingsGameplayMode')?.value === 'embed' ? 'embed' : 'popup';
+        if (secureSession()?.token) socket.emit('update_saved_settings', { gameplayMode });
+    };
 
     // ------------------------------------------------------------------
     // GUIDE IN SETTINGS
@@ -4985,6 +5084,75 @@ function installV12Platform() {
         element.classList.add('bg-yellow-400/10', 'rounded-md', 'px-1');
     }
 
+    function closeAllMessageMenus(except = null) {
+        document.querySelectorAll('.v12-message-menu.open').forEach(menu => {
+            if (menu !== except) menu.classList.remove('open');
+        });
+    }
+
+    function quickBanFromMessage(username) {
+        if (!(accountState?.roles?.owner || accountState?.roles?.moderator)) return;
+        const choice = String(prompt(`Ban ${username} for how long? Type 1h, 24h, 7d, or permanent:`, '24h') || '').trim().toLowerCase();
+        if (!choice) return;
+        const durations = { '1h': 3600000, '24h': 86400000, '7d': 604800000, 'permanent': 'permanent', 'perm': 'permanent' };
+        const duration = durations[choice];
+        if (!duration) return showToast('Use 1h, 24h, 7d, or permanent.', '⚠️');
+        const reason = String(prompt(`Reason for banning ${username}:`, '') || '').trim();
+        if (!confirm(`Ban ${username} (${choice})${reason ? ` — ${reason}` : ''}?`)) return;
+        socket.emit('admin_moderation_action', { username, action: 'ban', duration, reason });
+    }
+
+    function buildMessageMenu({ own, username, onEdit, onDelete, onReport }) {
+        const wrap = document.createElement('div');
+        wrap.className = 'v12-message-menu';
+        const trigger = document.createElement('button');
+        trigger.type = 'button';
+        trigger.className = 'v12-message-menu-button';
+        trigger.textContent = '⋯';
+        trigger.title = 'Message options';
+        trigger.setAttribute('aria-label', 'Message options');
+        const popover = document.createElement('div');
+        popover.className = 'v12-message-menu-popover';
+
+        const add = (label, handler, cls = '') => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = `v12-message-menu-item ${cls}`.trim();
+            button.textContent = label;
+            button.onclick = event => {
+                event.stopPropagation();
+                wrap.classList.remove('open');
+                handler?.();
+            };
+            popover.appendChild(button);
+        };
+
+        if (own) {
+            add('Edit message', onEdit);
+            add('Delete message', onDelete, 'danger');
+        } else {
+            add('Report message', onReport, 'danger');
+            if (accountState?.roles?.owner || accountState?.roles?.moderator) {
+                add('Ban player…', () => quickBanFromMessage(username), 'mod');
+            }
+        }
+
+        trigger.onclick = event => {
+            event.stopPropagation();
+            const opening = !wrap.classList.contains('open');
+            closeAllMessageMenus(wrap);
+            wrap.classList.toggle('open', opening);
+        };
+        wrap.append(trigger, popover);
+        return wrap;
+    }
+
+    if (!window.__v14MessageMenuOutsideClose) {
+        window.__v14MessageMenuOutsideClose = true;
+        document.addEventListener('click', () => closeAllMessageMenus());
+        document.addEventListener('keydown', event => { if (event.key === 'Escape') closeAllMessageMenus(); });
+    }
+
     renderDMMessages = function (history) {
         const container = document.getElementById('tabDMMessages');
         if (!container) return;
@@ -5022,26 +5190,25 @@ function installV12Platform() {
             text.className = 'discord-message-text';
             renderMessageText(text, message.message, me);
             body.append(head, text);
+            let menu = document.createElement('div');
             if (message.id) {
-                const actions = document.createElement('div');
-                actions.className = 'v12-actions';
-                if (own) {
-                    const edit = document.createElement('button');
-                    edit.className = 'v12-small-btn'; edit.textContent = 'EDIT';
-                    edit.onclick = () => { const next = prompt('Edit message:', message.message); if (next && next.trim()) socket.emit('edit_direct_message', { targetUsername: activeDMTargetUser, messageId: message.id, message: next.trim() }); };
-                    const del = document.createElement('button');
-                    del.className = 'v12-small-btn red'; del.textContent = 'DELETE';
-                    del.onclick = () => { if (confirm('Delete this message?')) socket.emit('delete_direct_message', { targetUsername: activeDMTargetUser, messageId: message.id }); };
-                    actions.append(edit, del);
-                } else {
-                    const report = document.createElement('button');
-                    report.className = 'v12-small-btn red'; report.textContent = 'REPORT';
-                    report.onclick = () => { const reason = prompt('Why are you reporting this message?') || 'No reason given'; socket.emit('report_message', { type:'dm', targetUsername: activeDMTargetUser, messageId: message.id, reason }); };
-                    actions.appendChild(report);
-                }
-                body.appendChild(actions);
+                menu = buildMessageMenu({
+                    own,
+                    username: message.senderUsername,
+                    onEdit: () => {
+                        const next = prompt('Edit message:', message.message);
+                        if (next && next.trim()) socket.emit('edit_direct_message', { targetUsername: activeDMTargetUser, messageId: message.id, message: next.trim() });
+                    },
+                    onDelete: () => {
+                        if (confirm('Delete this message?')) socket.emit('delete_direct_message', { targetUsername: activeDMTargetUser, messageId: message.id });
+                    },
+                    onReport: () => {
+                        const reason = prompt('Why are you reporting this message?') || 'No reason given';
+                        socket.emit('report_message', { type:'dm', targetUsername: activeDMTargetUser, messageId: message.id, reason });
+                    }
+                });
             }
-            row.append(avatar, body);
+            row.append(avatar, body, menu);
             container.appendChild(row);
         });
         container.scrollTop = container.scrollHeight;
@@ -5237,15 +5404,22 @@ function installV12Platform() {
             } else {
                 body.append(head, text);
             }
-            const actions = document.createElement('div'); actions.className = 'v12-actions';
-            if (own) {
-                const edit = document.createElement('button'); edit.className='v12-small-btn'; edit.textContent='EDIT'; edit.onclick=()=>{const next=prompt('Edit message:',message.message);if(next&&next.trim())socket.emit('edit_group_message',{groupId:group.id,messageId:message.id,message:next.trim()});};
-                const del = document.createElement('button'); del.className='v12-small-btn red'; del.textContent='DELETE'; del.onclick=()=>{if(confirm('Delete this message?'))socket.emit('delete_group_message',{groupId:group.id,messageId:message.id});};
-                actions.append(edit,del);
-            } else {
-                const report = document.createElement('button'); report.className='v12-small-btn red'; report.textContent='REPORT'; report.onclick=()=>{const reason=prompt('Why are you reporting this message?')||'No reason given';socket.emit('report_message',{type:'group',groupId:group.id,messageId:message.id,reason});}; actions.appendChild(report);
-            }
-            body.appendChild(actions); row.append(av,body); container.appendChild(row);
+            const menu = buildMessageMenu({
+                own,
+                username: message.senderUsername,
+                onEdit: () => {
+                    const next = prompt('Edit message:', message.message);
+                    if (next && next.trim()) socket.emit('edit_group_message', { groupId:group.id, messageId:message.id, message:next.trim() });
+                },
+                onDelete: () => {
+                    if (confirm('Delete this message?')) socket.emit('delete_group_message', { groupId:group.id, messageId:message.id });
+                },
+                onReport: () => {
+                    const reason = prompt('Why are you reporting this message?') || 'No reason given';
+                    socket.emit('report_message', { type:'group', groupId:group.id, messageId:message.id, reason });
+                }
+            });
+            row.append(av, body, menu); container.appendChild(row);
         });
         container.scrollTop = container.scrollHeight;
     }
@@ -5352,7 +5526,7 @@ function installV12Platform() {
         if(setup?.parentElement&&!document.getElementById('streamerTab')){const tab=document.createElement('div');tab.id='streamerTab';tab.className='tab-content hidden space-y-4';tab.innerHTML=`<h2 class="font-bungee text-xl text-pink-300">STREAMER TOOLS</h2><div class="hub-card"><div class="grid md:grid-cols-2 gap-3"><label class="v12-section"><div class="v12-section-title">Live badge</div><input id="streamerLiveToggle" type="checkbox"> <span class="text-xs">Show LIVE on your public profile</span></label><label class="v12-section"><div class="v12-section-title">Hide room code</div><input id="streamerHideCode" type="checkbox"> <span class="text-xs">Hide your room code on your own game bar while streaming</span></label><label class="v12-section"><div class="v12-section-title">Streamer-safe notifications</div><input id="streamerSafeNotifications" type="checkbox"> <span class="text-xs">Reduce private info in popups</span></label></div></div>`;setup.parentElement.insertBefore(tab,setup);tab.querySelector('#streamerLiveToggle').onchange=e=>socket.emit('set_streamer_live',{live:e.target.checked});['streamerHideCode','streamerSafeNotifications'].forEach(id=>tab.querySelector('#'+id).onchange=saveStreamerPrefs);}
     }
     function streamerPrefs(){return readLocal(STREAMER_PREF_KEY,{hideCode:false,safeNotifications:false});}
-    function saveStreamerPrefs(){const prefs={hideCode:!!document.getElementById('streamerHideCode')?.checked,safeNotifications:!!document.getElementById('streamerSafeNotifications')?.checked};writeLocal(STREAMER_PREF_KEY,prefs);const code=document.getElementById('copyRoomCodeBtn');if(code)code.style.visibility=prefs.hideCode?'hidden':'';}
+    function saveStreamerPrefs(){const prefs={hideCode:!!document.getElementById('streamerHideCode')?.checked,safeNotifications:!!document.getElementById('streamerSafeNotifications')?.checked};writeLocal(STREAMER_PREF_KEY,prefs);if(secureSession()?.token)socket.emit('update_saved_settings',{streamerHideCode:prefs.hideCode,streamerSafeNotifications:prefs.safeNotifications});const code=document.getElementById('copyRoomCodeBtn');if(code)code.style.visibility=prefs.hideCode?'hidden':'';}
     window.openStreamerPage=function(){document.querySelectorAll('.tab-content').forEach(el=>el.classList.add('hidden'));document.querySelectorAll('.sidebar-btn').forEach(btn=>btn.classList.remove('active'));document.getElementById('streamerTab')?.classList.remove('hidden');document.getElementById('btnNavStreamer')?.classList.add('active');const prefs=streamerPrefs();if(document.getElementById('streamerLiveToggle'))document.getElementById('streamerLiveToggle').checked=!!accountState?.streamerLive;if(document.getElementById('streamerHideCode'))document.getElementById('streamerHideCode').checked=!!prefs.hideCode;if(document.getElementById('streamerSafeNotifications'))document.getElementById('streamerSafeNotifications').checked=!!prefs.safeNotifications;};
     socket.on('streamer_state',data=>{if(accountState)accountState.streamerLive=!!data?.live;injectHeaderBadges();});
 
@@ -5364,9 +5538,9 @@ function installV12Platform() {
         if (document.getElementById('v12QueueSelector')) return;
         const setup=document.getElementById('setupTab');
         const createButton=setup?.querySelector('button[onclick="createLobby()"]');
-        if(setup&&createButton){const wrap=document.createElement('div');wrap.id='v12QueueSelector';wrap.innerHTML='<button class="v12-queue-btn" data-q="casual">CASUAL</button><button class="v12-queue-btn" data-q="ranked">RANKED</button>';setup.insertBefore(wrap,createButton);wrap.querySelectorAll('button').forEach(btn=>btn.onclick=()=>{queueType=btn.dataset.q;localStorage.setItem(QUEUE_KEY,queueType);refreshQueueButtons();});}
+        if(setup&&createButton){const wrap=document.createElement('div');wrap.id='v12QueueSelector';wrap.innerHTML='<button class="v12-queue-btn" data-q="casual">CASUAL</button><button class="v12-queue-btn" data-q="ranked">RANKED</button>';setup.insertBefore(wrap,createButton);wrap.querySelectorAll('button').forEach(btn=>btn.onclick=()=>{queueType=btn.dataset.q;localStorage.setItem(QUEUE_KEY,queueType);if(secureSession()?.token)socket.emit('update_saved_settings',{queueType});refreshQueueButtons();});}
         const ffa=document.getElementById('ffaTab');
-        if(ffa&&!document.getElementById('v12FfaQueue')){const wrap=document.createElement('div');wrap.id='v12FfaQueue';wrap.className='hub-card';wrap.innerHTML='<span class="dock-label">Match type</span><div id="v12FfaQueueInner" class="flex gap-2"><button class="v12-queue-btn flex-1" data-q="casual">CASUAL</button><button class="v12-queue-btn flex-1" data-q="ranked">RANKED</button></div>';ffa.insertBefore(wrap,ffa.children[1]||null);wrap.querySelectorAll('button').forEach(btn=>btn.onclick=()=>{queueType=btn.dataset.q;localStorage.setItem(QUEUE_KEY,queueType);refreshQueueButtons();});}
+        if(ffa&&!document.getElementById('v12FfaQueue')){const wrap=document.createElement('div');wrap.id='v12FfaQueue';wrap.className='hub-card';wrap.innerHTML='<span class="dock-label">Match type</span><div id="v12FfaQueueInner" class="flex gap-2"><button class="v12-queue-btn flex-1" data-q="casual">CASUAL</button><button class="v12-queue-btn flex-1" data-q="ranked">RANKED</button></div>';ffa.insertBefore(wrap,ffa.children[1]||null);wrap.querySelectorAll('button').forEach(btn=>btn.onclick=()=>{queueType=btn.dataset.q;localStorage.setItem(QUEUE_KEY,queueType);if(secureSession()?.token)socket.emit('update_saved_settings',{queueType});refreshQueueButtons();});}
         refreshQueueButtons();
     }
     function refreshQueueButtons(){document.querySelectorAll('[data-q]').forEach(btn=>btn.classList.toggle('active',btn.dataset.q===queueType));}
