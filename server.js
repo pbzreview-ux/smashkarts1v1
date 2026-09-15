@@ -140,6 +140,7 @@ function profileFor(username) {
         profiles[username] = {
             friends: [],
             requests: [],
+            archivedDMs: [],
             isOnline: true,
             avatar: '',
             settings: defaultSavedSettings(),
@@ -148,6 +149,7 @@ function profileFor(username) {
     }
     profiles[username].friends ||= [];
     profiles[username].requests ||= [];
+    profiles[username].archivedDMs ||= [];
     if (typeof profiles[username].avatar !== 'string') profiles[username].avatar = '';
     profiles[username].settings = normalizeSavedSettings(profiles[username].settings);
     return profiles[username];
@@ -169,7 +171,8 @@ function syncFriends(username) {
         player.friendRequests = new Set(profile.requests || []);
         io.to(player.id).emit('saved_friends', {
             friends: profile.friends || [],
-            requests: profile.requests || []
+            requests: profile.requests || [],
+            archivedDMs: profile.archivedDMs || []
         });
     }
 }
@@ -275,8 +278,17 @@ function moderateText(text) {
     return String(text).slice(0, 400);
 }
 
+function legacyDMKey(a, b) {
+    return JSON.stringify([String(a || ''), String(b || '')].sort());
+}
+
+function dmIdentityKey(username) {
+    const account = accountByUsername(username);
+    return account?.id ? `acct:${account.id}` : `name:${normalizeUsernameKey(username)}`;
+}
+
 function getDMKey(a, b) {
-    return JSON.stringify([a, b].sort());
+    return JSON.stringify([dmIdentityKey(a), dmIdentityKey(b)].sort());
 }
 
 function findSocketByUsername(username) {
@@ -486,7 +498,7 @@ function joinRoom(socket, room, player, eventName = 'room_created') {
 const OWNER_EMAIL = String(process.env.OWNER_EMAIL || '').trim().toLowerCase();
 const OWNER_SETUP_KEY = String(process.env.OWNER_SETUP_KEY || '').trim();
 const RESERVED_OWNER_USERNAME = 'PRIME';
-const SESSION_TTL_MS = 180 * 24 * 60 * 60 * 1000; // 180 days, refreshed whenever the account resumes
+const SESSION_TTL_MS = 5 * 365 * 24 * 60 * 60 * 1000; // 5-year sliding session: normal updates should not log people out
 
 function normalizeEmail(email) {
     return String(email || '').trim().toLowerCase();
@@ -519,6 +531,8 @@ function normalizeRoles(roles) {
 
 function ensureAccountShape(account) {
     if (!account) return null;
+    account.id ||= crypto.randomUUID();
+    account.usernameHistory = Array.isArray(account.usernameHistory) ? account.usernameHistory : [];
     account.roles = normalizeRoles(account.roles);
     account.xp = Number.isFinite(account.xp) ? account.xp : 0;
     account.level = Math.max(1, Math.min(200, Number.isFinite(account.level) ? account.level : 1));
@@ -534,7 +548,12 @@ function ensureAccountShape(account) {
     return account;
 }
 
-for (const account of Object.values(accounts)) ensureAccountShape(account);
+let accountShapeMigrationChanged = false;
+for (const account of Object.values(accounts)) {
+    const beforeId = account?.id;
+    ensureAccountShape(account);
+    if (!beforeId && account?.id) accountShapeMigrationChanged = true;
+}
 
 function accountByEmail(email) {
     return ensureAccountShape(accounts[normalizeEmail(email)] || null);
@@ -545,6 +564,37 @@ function accountByUsername(username) {
     return Object.values(accounts).map(ensureAccountShape).find(account => normalizeUsernameKey(account.username) === key) || null;
 }
 
+function migrateDirectMessagesToStableAccountIds() {
+    const rebuilt = Object.create(null);
+    let changed = false;
+
+    for (const [key, messages] of Object.entries(directMessageStore)) {
+        let parts = null;
+        try { parts = JSON.parse(key); } catch {}
+        let targetKey = key;
+
+        if (Array.isArray(parts) && parts.length === 2 && !parts.every(part => String(part).startsWith('acct:') || String(part).startsWith('name:'))) {
+            const left = accountByUsername(parts[0]);
+            const right = accountByUsername(parts[1]);
+            if (left && right) {
+                targetKey = JSON.stringify([`acct:${left.id}`, `acct:${right.id}`].sort());
+                if (targetKey !== key) changed = true;
+            }
+        }
+
+        rebuilt[targetKey] ||= [];
+        rebuilt[targetKey].push(...(Array.isArray(messages) ? messages : []));
+    }
+
+    if (changed) {
+        for (const key of Object.keys(directMessageStore)) delete directMessageStore[key];
+        Object.assign(directMessageStore, rebuilt);
+    }
+
+    if (changed || accountShapeMigrationChanged) saveHistory();
+}
+migrateDirectMessagesToStableAccountIds();
+
 function publicRoles(roles) {
     return normalizeRoles(roles);
 }
@@ -553,6 +603,7 @@ function publicAccountState(account) {
     account = ensureAccountShape(account);
     if (!account) return null;
     return {
+        id: account.id,
         username: account.username,
         email: account.email,
         roles: publicRoles(account.roles),
@@ -732,7 +783,7 @@ function attachAuthenticatedPlayer(socket, account, token = null, resumed = fals
         io.to(room.roomId).emit('saved_room_update', room);
     }
 
-    socket.emit('saved_friends', { friends: profile.friends || [], requests: profile.requests || [] });
+    socket.emit('saved_friends', { friends: profile.friends || [], requests: profile.requests || [], archivedDMs: profile.archivedDMs || [] });
     socket.emit('friend_requests_update', Array.from(player.friendRequests));
     socket.emit('saved_profile', { avatar: player.avatar || '' });
     socket.emit('saved_settings', { ...profile.settings });
@@ -799,25 +850,19 @@ function renameUserEverywhere(oldName, newName) {
     for (const profile of Object.values(profiles)) {
         profile.friends = (profile.friends || []).map(name => normalizeUsernameKey(name) === normalizeUsernameKey(oldName) ? newName : name);
         profile.requests = (profile.requests || []).map(name => normalizeUsernameKey(name) === normalizeUsernameKey(oldName) ? newName : name);
+        profile.archivedDMs = (profile.archivedDMs || []).map(name => normalizeUsernameKey(name) === normalizeUsernameKey(oldName) ? newName : name);
     }
 
-    const rebuiltDMs = {};
-    for (const [key, messages] of Object.entries(directMessageStore)) {
-        let names;
-        try { names = JSON.parse(key); } catch { names = []; }
-        if (Array.isArray(names) && names.length === 2) {
-            names = names.map(name => normalizeUsernameKey(name) === normalizeUsernameKey(oldName) ? newName : name);
-            const newKey = getDMKey(names[0], names[1]);
-            rebuiltDMs[newKey] = (rebuiltDMs[newKey] || []).concat(messages.map(message => ({
-                ...message,
-                senderUsername: normalizeUsernameKey(message.senderUsername) === normalizeUsernameKey(oldName) ? newName : message.senderUsername
-            })));
-        } else {
-            rebuiltDMs[key] = messages;
+    // Direct-message conversations are keyed by immutable account IDs. A username
+    // change only updates the display name inside messages; the conversation itself
+    // keeps the same key, so forced renames never create a second chat.
+    for (const messages of Object.values(directMessageStore)) {
+        for (const message of Array.isArray(messages) ? messages : []) {
+            if (normalizeUsernameKey(message.senderUsername) === normalizeUsernameKey(oldName)) {
+                message.senderUsername = newName;
+            }
         }
     }
-    for (const key of Object.keys(directMessageStore)) delete directMessageStore[key];
-    Object.assign(directMessageStore, rebuiltDMs);
 
     for (const group of Object.values(groupStore)) {
         if (group.owner === oldName) group.owner = newName;
@@ -832,6 +877,10 @@ function renameUserEverywhere(oldName, newName) {
         if (tournament.hostUsername === oldName) tournament.hostUsername = newName;
         tournament.participants = (tournament.participants || []).map(name => name === oldName ? newName : name);
         tournament.invited = (tournament.invited || []).map(name => name === oldName ? newName : name);
+        tournament.registrations = (tournament.registrations || []).map(item => ({
+            ...item,
+            username: item?.username === oldName ? newName : item?.username
+        }));
     }
 
     for (const room of activeRoomsMap.values()) {
@@ -848,6 +897,57 @@ function safeDurationMs(raw, fallbackMs = 60 * 60 * 1000) {
     return Number.isFinite(numeric) && numeric > 0 ? numeric : fallbackMs;
 }
 
+function normalizeTournamentShape(tournament) {
+    if (!tournament || typeof tournament !== 'object') return tournament;
+    tournament.mode = tournament.mode === 'ffa' ? 'ffa' : '1v1';
+    tournament.capacity = Math.max(2, Math.min(256, Number(tournament.capacity) || 16));
+    tournament.heatSize = [12, 24].includes(Number(tournament.heatSize)) ? Number(tournament.heatSize) : 12;
+    tournament.advancePerHeat = Math.max(1, Math.min(tournament.heatSize, Number(tournament.advancePerHeat) || Math.max(1, Math.floor(tournament.heatSize / 2))));
+    tournament.regions = Array.isArray(tournament.regions) ? tournament.regions.filter(Boolean).slice(0, 12) : [];
+    tournament.capacityPerRegion = Math.max(0, Math.min(256, Number(tournament.capacityPerRegion) || 0));
+    tournament.schedule = Array.isArray(tournament.schedule) ? tournament.schedule.slice(0, 40) : [];
+    tournament.registrations = Array.isArray(tournament.registrations) ? tournament.registrations : (tournament.participants || []).map(username => ({ username, region: '', registeredAt: tournament.createdAt || Date.now() }));
+    tournament.participants = Array.isArray(tournament.participants) ? tournament.participants : tournament.registrations.map(item => item.username).filter(Boolean);
+    tournament.invited = Array.isArray(tournament.invited) ? tournament.invited : [];
+    tournament.organizer = String(tournament.organizer || '').slice(0, 80);
+    tournament.mapPool = String(tournament.mapPool || '').slice(0, 2000);
+    tournament.roundFormat = String(tournament.roundFormat || '').slice(0, 500);
+    tournament.roundTimerMinutes = Math.max(0, Math.min(120, Number(tournament.roundTimerMinutes) || 0));
+    tournament.weapons = String(tournament.weapons || '').slice(0, 1200);
+    tournament.modifiers = String(tournament.modifiers || '').slice(0, 1200);
+    tournament.teamComposition = String(tournament.teamComposition || '1 player, no substitutes').slice(0, 500);
+    tournament.registrationOpenAt = Number(tournament.registrationOpenAt) || 0;
+    tournament.registrationCloseAt = Number(tournament.registrationCloseAt) || 0;
+    tournament.checkInMinutes = Math.max(0, Math.min(180, Number(tournament.checkInMinutes) || 10));
+    tournament.expectedDurationMinutes = Math.max(0, Math.min(1440, Number(tournament.expectedDurationMinutes) || 120));
+    tournament.eligibility = String(tournament.eligibility || '').slice(0, 3000);
+    tournament.seedingMethod = String(tournament.seedingMethod || '').slice(0, 500);
+    tournament.guideUrl = safeExternalUrl(tournament.guideUrl);
+    tournament.bracketUrl = safeExternalUrl(tournament.bracketUrl);
+    tournament.refereeApplicationUrl = safeExternalUrl(tournament.refereeApplicationUrl);
+    tournament.streamerApplicationUrl = safeExternalUrl(tournament.streamerApplicationUrl);
+    tournament.rewards = tournament.rewards && typeof tournament.rewards === 'object' ? {
+        first: String(tournament.rewards.first || '').slice(0, 800),
+        second: String(tournament.rewards.second || '').slice(0, 800),
+        third: String(tournament.rewards.third || '').slice(0, 800)
+    } : { first: '', second: '', third: '' };
+    tournament.rules = String(tournament.rules || '').slice(0, 5000);
+    return tournament;
+}
+
+function safeExternalUrl(value) {
+    const text = String(value || '').trim().slice(0, 1200);
+    if (!text) return '';
+    try {
+        const url = new URL(text);
+        return ['http:', 'https:'].includes(url.protocol) ? url.toString() : '';
+    } catch {
+        return '';
+    }
+}
+
+for (const tournament of Object.values(tournamentStore)) normalizeTournamentShape(tournament);
+
 function tournamentVisibleTo(tournament, player) {
     if (!tournament || !player) return false;
     if (tournament.isPublic) return true;
@@ -858,8 +958,9 @@ function tournamentVisibleTo(tournament, player) {
 
 function tournamentListFor(player) {
     return Object.values(tournamentStore)
+        .map(normalizeTournamentShape)
         .filter(t => tournamentVisibleTo(t, player))
-        .sort((a, b) => (a.startAt || 0) - (b.startAt || 0));
+        .sort((a, b) => (a.startAt || a.schedule?.[0]?.time || 0) - (b.startAt || b.schedule?.[0]?.time || 0));
 }
 
 function groupVisibleTo(group, player) {
@@ -982,6 +1083,7 @@ io.on('connection', socket => {
             bannedUntil: null,
             banReason: '',
             streamerLive: false,
+            usernameHistory: [],
             createdAt: Date.now(),
             lastLoginAt: Date.now()
         });
@@ -1043,12 +1145,15 @@ io.on('connection', socket => {
         }
         const old = account.username;
         if (old === next) return;
+        account.usernameHistory.push({ username: old, changedAt: Date.now(), changedBy: old });
         renameUserEverywhere(old, next);
         account.username = next;
         player.username = next;
         logAudit(player, 'USERNAME_CHANGED', next, `${old} -> ${next}`);
         saveHistory();
         socket.emit('account_renamed', { username: next, user: publicAccountState(account) });
+        io.emit('username_migrated', { accountId: account.id, oldUsername: old, newUsername: next });
+        for (const profileName of Object.keys(profiles)) syncFriends(profileName);
         broadcastOnlineUsers();
         broadcastPublicRooms();
     });
@@ -1208,7 +1313,14 @@ io.on('connection', socket => {
             editedAt: null
         };
         directMessageStore[key].push(msg);
+
+        // A new incoming message brings an archived conversation back to the
+        // active DM list, while keeping the full history intact.
+        const targetProfile = profileFor(targetName);
+        const archiveBefore = targetProfile.archivedDMs.length;
+        targetProfile.archivedDMs = targetProfile.archivedDMs.filter(name => normalizeUsernameKey(name) !== normalizeUsernameKey(sender.username));
         saveHistory();
+        if (targetProfile.archivedDMs.length !== archiveBefore) syncFriends(targetName);
 
         const target = findSocketByUsername(targetName);
         if (target) {
@@ -1637,6 +1749,52 @@ io.on('connection', socket => {
         if (target) io.to(target.id).emit('dm_history_updated', { targetUsername: sender.username, history });
     });
 
+    socket.on('set_dm_archived', ({ targetUsername, archived }) => {
+        const player = connectedPlayers[socket.id];
+        if (!player || player.isGuest) return;
+        const targetAccount = accountByUsername(targetUsername);
+        if (!targetAccount) return socket.emit('dm_error', { message: 'That account no longer exists.' });
+        const targetName = targetAccount.username;
+        if (!usersAreFriends(player.username, targetName)) return socket.emit('dm_error', { message: 'You can only archive chats with current friends.' });
+
+        const profile = profileFor(player.username);
+        profile.archivedDMs ||= [];
+        profile.archivedDMs = profile.archivedDMs.filter(name => normalizeUsernameKey(name) !== normalizeUsernameKey(targetName));
+        if (archived) profile.archivedDMs.push(targetName);
+        saveHistory();
+        syncFriends(player.username);
+        socket.emit('dm_archive_state', { targetUsername: targetName, archived: !!archived });
+    });
+
+    socket.on('unfriend_user', ({ targetUsername }) => {
+        const player = connectedPlayers[socket.id];
+        if (!player || player.isGuest) return;
+        const targetAccount = accountByUsername(targetUsername);
+        if (!targetAccount || targetAccount.username === player.username) return;
+        const targetName = targetAccount.username;
+
+        const mine = profileFor(player.username);
+        const theirs = profileFor(targetName);
+        const removeName = (list, name) => (list || []).filter(item => normalizeUsernameKey(item) !== normalizeUsernameKey(name));
+        mine.friends = removeName(mine.friends, targetName);
+        theirs.friends = removeName(theirs.friends, player.username);
+        mine.requests = removeName(mine.requests, targetName);
+        theirs.requests = removeName(theirs.requests, player.username);
+        mine.archivedDMs = removeName(mine.archivedDMs, targetName);
+        theirs.archivedDMs = removeName(theirs.archivedDMs, player.username);
+
+        const liveMine = findSocketByUsername(player.username);
+        const liveTheirs = findSocketByUsername(targetName);
+        liveMine?.friends?.delete(targetName);
+        liveTheirs?.friends?.delete(player.username);
+        saveHistory();
+        syncFriends(player.username);
+        syncFriends(targetName);
+        socket.emit('friendship_removed', { username: targetName });
+        if (liveTheirs) io.to(liveTheirs.id).emit('friendship_removed', { username: player.username });
+        broadcastOnlineUsers();
+    });
+
     socket.on('report_message', ({ type, targetUsername, groupId, messageId, reason }) => {
         const reporter = connectedPlayers[socket.id];
         if (!reporter || reporter.isGuest || !messageId) return;
@@ -1887,30 +2045,68 @@ io.on('connection', socket => {
     socket.on('create_tournament', payload => {
         const player = connectedPlayers[socket.id];
         if (!canHostTournament(player)) return socket.emit('tournament_error', { message: 'You need TOURNEY HOST permission.' });
-        const name = String(payload?.name || '').trim().slice(0, 60);
+
+        const name = String(payload?.name || '').trim().slice(0, 80);
         const mode = payload?.mode === 'ffa' ? 'ffa' : '1v1';
-        const capacity = mode === 'ffa' ? (Number(payload?.capacity) === 24 ? 24 : 12) : Math.max(4, Math.min(64, Number(payload?.capacity) || 16));
+        const capacity = Math.max(2, Math.min(256, Number(payload?.capacity) || (mode === 'ffa' ? 120 : 16)));
         if (name.length < 3) return socket.emit('tournament_error', { message: 'Tournament name is too short.' });
-        const invited = String(payload?.invited || '').split(',').map(s => sanitizeUsername(s.trim())).filter(Boolean);
-        const tournament = {
+
+        const invited = String(payload?.invited || '').split(',').map(item => item.trim()).filter(Boolean).map(item => sanitizeUsername(item));
+        const regions = String(payload?.regions || '').split(',').map(item => String(item).trim().slice(0, 60)).filter(Boolean).slice(0, 12);
+        const schedule = (Array.isArray(payload?.schedule) ? payload.schedule : []).slice(0, 40).map(slot => ({
+            label: String(slot?.label || '').trim().slice(0, 80),
+            region: String(slot?.region || '').trim().slice(0, 80),
+            time: Number(slot?.time) || 0
+        })).filter(slot => slot.time > 0);
+
+        const tournament = normalizeTournamentShape({
             id: crypto.randomUUID(),
             name,
+            organizer: String(payload?.organizer || '').trim().slice(0, 80),
             hostUsername: player.username,
             mode,
             capacity,
+            heatSize: Number(payload?.heatSize) === 24 ? 24 : 12,
+            advancePerHeat: Number(payload?.advancePerHeat) || 6,
             isPublic: payload?.isPublic !== false,
-            rules: String(payload?.rules || '').slice(0, 1200),
-            startAt: Number(payload?.startAt) || Date.now(),
+            regions,
+            capacityPerRegion: Number(payload?.capacityPerRegion) || 0,
+            mapPool: String(payload?.mapPool || '').trim(),
+            roundFormat: String(payload?.roundFormat || '').trim(),
+            roundTimerMinutes: Number(payload?.roundTimerMinutes) || 0,
+            weapons: String(payload?.weapons || '').trim(),
+            modifiers: String(payload?.modifiers || '').trim(),
+            teamComposition: String(payload?.teamComposition || '').trim() || '1 player, no substitutes',
+            schedule,
+            startAt: Number(payload?.startAt) || schedule[0]?.time || Date.now(),
+            registrationOpenAt: Number(payload?.registrationOpenAt) || 0,
+            registrationCloseAt: Number(payload?.registrationCloseAt) || 0,
+            checkInMinutes: Number(payload?.checkInMinutes) || 10,
+            expectedDurationMinutes: Number(payload?.expectedDurationMinutes) || 120,
+            eligibility: String(payload?.eligibility || '').trim(),
+            seedingMethod: String(payload?.seedingMethod || '').trim(),
+            guideUrl: payload?.guideUrl,
+            bracketUrl: payload?.bracketUrl,
+            refereeApplicationUrl: payload?.refereeApplicationUrl,
+            streamerApplicationUrl: payload?.streamerApplicationUrl,
+            rewards: {
+                first: String(payload?.rewardFirst || '').trim(),
+                second: String(payload?.rewardSecond || '').trim(),
+                third: String(payload?.rewardThird || '').trim()
+            },
+            rules: String(payload?.rules || '').trim(),
             registrationOpen: true,
             status: 'registration',
             invited: [...new Set(invited)],
             participants: [],
+            registrations: [],
             bracket: null,
             createdAt: Date.now()
-        };
+        });
+
         tournamentStore[tournament.id] = tournament;
         saveHistory();
-        logAudit(player, 'TOURNAMENT_CREATED', tournament.name, tournament.isPublic ? 'public' : 'private');
+        logAudit(player, 'TOURNAMENT_CREATED', tournament.name, `${tournament.isPublic ? 'public' : 'private'} · ${tournament.mode} · ${tournament.capacity} players`);
         socket.emit('tournament_created', tournament);
         for (const invitedName of tournament.invited) {
             const target = findSocketByUsername(invitedName);
@@ -1919,14 +2115,32 @@ io.on('connection', socket => {
         broadcastTournamentLists();
     });
 
-    socket.on('register_tournament', ({ tournamentId }) => {
+    socket.on('register_tournament', ({ tournamentId, region }) => {
         const player = connectedPlayers[socket.id];
-        const tournament = tournamentStore[tournamentId];
+        const tournament = normalizeTournamentShape(tournamentStore[tournamentId]);
         if (!player || player.isGuest || !tournament || !tournamentVisibleTo(tournament, player)) return;
+        const now = Date.now();
         if (!tournament.registrationOpen || tournament.status !== 'registration') return socket.emit('tournament_error', { message: 'Registration is closed.' });
+        if (tournament.registrationOpenAt && now < tournament.registrationOpenAt) return socket.emit('tournament_error', { message: 'Registration has not opened yet.' });
+        if (tournament.registrationCloseAt && now > tournament.registrationCloseAt) return socket.emit('tournament_error', { message: 'Registration is closed.' });
         if (tournament.participants.includes(player.username)) return;
         if (tournament.participants.length >= tournament.capacity) return socket.emit('tournament_error', { message: 'Tournament is full.' });
+
+        let selectedRegion = String(region || '').trim().slice(0, 80);
+        if (tournament.regions.length) {
+            const match = tournament.regions.find(item => normalizeUsernameKey(item) === normalizeUsernameKey(selectedRegion));
+            if (!match) return socket.emit('tournament_error', { message: 'Choose a valid tournament region.' });
+            selectedRegion = match;
+            if (tournament.capacityPerRegion > 0) {
+                const count = tournament.registrations.filter(item => item.region === selectedRegion).length;
+                if (count >= tournament.capacityPerRegion) return socket.emit('tournament_error', { message: `${selectedRegion} is full.` });
+            }
+        } else {
+            selectedRegion = '';
+        }
+
         tournament.participants.push(player.username);
+        tournament.registrations.push({ username: player.username, region: selectedRegion, registeredAt: now });
         saveHistory();
         broadcastTournamentLists();
     });
@@ -1945,9 +2159,16 @@ io.on('connection', socket => {
             for (let i = 0; i < entrants.length; i += 2) pairs.push({ a: entrants[i] || null, b: entrants[i + 1] || null, winner: null });
             tournament.bracket = { type: '1v1', rounds: [{ name: 'Round 1', matches: pairs }] };
         } else {
-            tournament.bracket = tournament.capacity === 24
-                ? { type: 'ffa', heats: [entrants.slice(0, 12), entrants.slice(12, 24)], final: [] }
-                : { type: 'ffa', heats: [entrants.slice(0, 12)], final: entrants.slice(0, 12) };
+            const heatSize = tournament.heatSize || 12;
+            const heats = [];
+            for (let i = 0; i < entrants.length; i += heatSize) heats.push(entrants.slice(i, i + heatSize));
+            tournament.bracket = {
+                type: 'ffa',
+                heats,
+                heatSize,
+                advancePerHeat: tournament.advancePerHeat || Math.max(1, Math.floor(heatSize / 2)),
+                final: []
+            };
         }
         saveHistory();
         logAudit(player, 'TOURNAMENT_STARTED', tournament.name, `${entrants.length} entrants`);
@@ -1999,7 +2220,8 @@ io.on('connection', socket => {
                 online: Object.values(connectedPlayers).filter(p => !p.isGuest).length,
                 groups: Object.keys(groupStore).length,
                 tournaments: Object.keys(tournamentStore).length,
-                openReports: reportStore.filter(r => r.status === 'open').length
+                openReports: reportStore.filter(r => r.status === 'open').length,
+                storage: dataDirectory === path.resolve('/var/data') ? 'PERSISTENT' : 'NEEDS /var/data DISK'
             }
         });
     });
@@ -2102,15 +2324,18 @@ io.on('connection', socket => {
         const next = String(newUsername || '').trim();
         if (!validUsername(next) || isReservedOwnerName(next) || accountByUsername(next)) return socket.emit('admin_error', { message: 'That username cannot be used.' });
         const old = account.username;
+        const target = findSocketByUsername(old);
+        account.usernameHistory.push({ username: old, changedAt: Date.now(), changedBy: actor.username });
         renameUserEverywhere(old, next);
         account.username = next;
         logAudit(actor, 'FORCE_RENAME', next, `${old} -> ${next}`);
         saveHistory();
-        const target = findSocketByUsername(old);
         if (target) {
             target.username = next;
-            io.to(target.id).emit('forced_username_changed', { username: next });
+            io.to(target.id).emit('forced_username_changed', { username: next, oldUsername: old, accountId: account.id });
         }
+        io.emit('username_migrated', { accountId: account.id, oldUsername: old, newUsername: next });
+        for (const profileName of Object.keys(profiles)) syncFriends(profileName);
         broadcastOnlineUsers();
         socket.emit('admin_refresh');
     });
@@ -2678,6 +2903,8 @@ function installMegaArena() {
         const oldLocal = getLocalFriends(user.username).slice();
         const serverFriends = Array.isArray(data?.friends) ? data.friends : [];
         const serverRequests = Array.isArray(data?.requests) ? data.requests : [];
+        const archivedDMs = Array.isArray(data?.archivedDMs) ? data.archivedDMs : [];
+        window.__smashArchivedDMs = new Set(archivedDMs.map(name => String(name).toLowerCase()));
 
         saveLocalFriends(user.username, serverFriends);
         pendingFriendRequests = serverRequests;
@@ -2685,13 +2912,10 @@ function installMegaArena() {
         const self = onlineUsersCache.find(person => person.username === user.username);
         if (self) self.friends = serverFriends.slice();
 
-        const missingOnServer = oldLocal.filter(name =>
-            !serverFriends.some(serverName => String(serverName).toLowerCase() === String(name).toLowerCase())
-        );
-        if (missingOnServer.length) {
-            socket.emit('restore_legacy_friends', { friends: missingOnServer });
-        }
-
+        // The server is now authoritative for friendships. Older builds tried
+        // to re-add any browser-only friend that was missing on the server,
+        // which also made an intentional UNFRIEND immediately come back.
+        // Keep the local cache synced down from the server instead.
         updateFriendsTabList();
         renderOnlineUsersList(onlineUsersCache);
     });
@@ -2856,26 +3080,24 @@ function installMegaArena() {
         label.textContent = 'Direct messages';
         container.appendChild(label);
 
-        const friends = getMergedFriendNames().filter(name =>
+        const allFriends = getMergedFriendNames().filter(name =>
             !query || name.toLowerCase().includes(query)
         );
+        const archivedSet = window.__smashArchivedDMs instanceof Set ? window.__smashArchivedDMs : new Set();
+        const friends = allFriends.filter(name => !archivedSet.has(String(name).toLowerCase()));
+        const archivedFriends = allFriends.filter(name => archivedSet.has(String(name).toLowerCase()));
 
-        if (!friends.length) {
-            const empty = document.createElement('div');
-            empty.className = 'text-[10px] text-blue-200 p-2';
-            empty.textContent = query
-                ? 'No friends match that search.'
-                : 'No friends yet. Click + FIND FRIENDS.';
-            container.appendChild(empty);
-            return;
-        }
-
-        friends.forEach(name => {
+        function renderFriendRow(name, isArchived = false) {
             const online = dmIsOnline(name);
             const row = document.createElement('button');
             row.type = 'button';
-            row.className = `discord-friend${activeDMTargetUser === name ? ' active' : ''}`;
+            row.className = `discord-friend${activeDMTargetUser === name ? ' active' : ''}${isArchived ? ' opacity-70' : ''}`;
             row.onclick = () => openTabDMWith(name);
+            row.oncontextmenu = event => {
+                event.preventDefault();
+                const action = confirm(`${isArchived ? 'Unarchive' : 'Archive'} chat with ${name}?\n\nPress Cancel if you do not want to change it.`);
+                if (action) socket.emit('set_dm_archived', { targetUsername: name, archived: !isArchived });
+            };
 
             const avatar = document.createElement('div');
             avatar.className = 'discord-avatar';
@@ -2886,15 +3108,12 @@ function installMegaArena() {
 
             const copy = document.createElement('div');
             copy.className = 'min-w-0 flex-1';
-
             const title = document.createElement('div');
             title.className = 'text-xs font-black truncate';
             title.textContent = name;
-
             const sub = document.createElement('div');
             sub.className = 'text-[9px] text-blue-200 truncate';
-            sub.textContent = online ? 'Online' : 'Offline';
-
+            sub.textContent = isArchived ? `Archived · ${online ? 'Online' : 'Offline'}` : (online ? 'Online' : 'Offline');
             copy.append(title, sub);
             row.append(avatar, copy);
 
@@ -2905,9 +3124,27 @@ function installMegaArena() {
                 badge.textContent = unread > 99 ? '99+' : String(unread);
                 row.appendChild(badge);
             }
-
             container.appendChild(row);
-        });
+        }
+
+        if (!friends.length) {
+            const empty = document.createElement('div');
+            empty.className = 'text-[10px] text-blue-200 p-2';
+            empty.textContent = query
+                ? 'No active chats match that search.'
+                : 'No active chats. Archived chats stay saved below.';
+            container.appendChild(empty);
+        } else {
+            friends.forEach(name => renderFriendRow(name, false));
+        }
+
+        if (archivedFriends.length) {
+            const archivedLabel = document.createElement('div');
+            archivedLabel.className = 'discord-section-label';
+            archivedLabel.textContent = `Archived — ${archivedFriends.length}`;
+            container.appendChild(archivedLabel);
+            archivedFriends.forEach(name => renderFriendRow(name, true));
+        }
     };
 
     openTabDMWith = function (username) {
@@ -4464,12 +4701,12 @@ function installMegaArena() {
 }
 
 // ============================================================================
-// V14 PLATFORM LAYER
-// Secure accounts + OWNER/DEV + PRIME reservation + groups + tournaments +
-// profiles + permanent Discord-style messages + guide + streamer tools.
+// V15 PLATFORM LAYER
+// Persistent accounts/sessions + OWNER/DEV + PRIME reservation + stable-ID DMs +
+// archives/unfriend + groups + advanced tournaments + profiles + streamer tools.
 // ============================================================================
 function installV12Platform() {
-    // V14 keeps the existing function name so older deployment wiring stays compatible.
+    // V15 keeps the existing function name so older deployment wiring stays compatible.
     const SECURE_KEY = 'smash_secure_account_v12';
     const QUEUE_KEY = 'smash_queue_type_v12';
     const STREAMER_PREF_KEY = 'smash_streamer_prefs_v12';
@@ -4568,8 +4805,10 @@ function installV12Platform() {
             .discord-message:hover .v12-message-menu-button,.v12-message-menu-button:focus,.v12-message-menu.open .v12-message-menu-button{opacity:1;background:#ffffff0d;color:white}
             .v12-message-menu-popover{position:absolute;right:32px;top:0;z-index:25;min-width:128px;padding:5px;border:1px solid #ffffff20;border-radius:11px;background:#0c1b45;box-shadow:0 12px 30px #0008;display:none}
             .v12-message-menu.open .v12-message-menu-popover{display:flex;flex-direction:column;gap:3px}
-            .v12-message-menu-item{width:100%;border:0;border-radius:7px;padding:7px 9px;background:transparent;color:#e8eeff;text-align:left;font:800 10px Inter,sans-serif;cursor:pointer}.v12-message-menu-item:hover{background:#ffffff10}.v12-message-menu-item.danger{color:#fca5a5}.v12-message-menu-item.mod{color:#fcd34d}
+            .v12-message-menu-item{width:100%;border:0;border-radius:7px;padding:7px 9px;background:transparent;color:#e8eeff;text-align:left;font:800 10px Inter,sans-serif;cursor:pointer}.v12-message-menu-item:hover{background:#ffffff10}.v12-message-menu-item.danger{color:#fca5a5}.v12-message-menu-item.mod{color:#fcd34d}.v12-message-menu-divider{height:1px;background:#ffffff18;margin:4px 2px}
             .discord-composer{position:sticky;bottom:0;z-index:3;background:#182b62;flex:0 0 auto}.discord-chat{min-height:0}.discord-messages{min-height:0;overflow-y:auto!important}
+            #adminModal .v12-modal-card{display:flex;flex-direction:column;min-height:0;overflow:hidden!important}#adminModal .v12-grid{flex:1;min-height:0;height:calc(94vh - 125px)}#adminModal .v12-list,#adminModal .v12-detail{min-height:0;max-height:100%;overflow-y:auto!important;overscroll-behavior:contain}
+            .v15-tourney-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.v15-tourney-wide{grid-column:1/-1}.v15-schedule-row{display:grid;grid-template-columns:1fr 1fr 1.25fr auto;gap:6px;align-items:center;margin-top:6px}.v15-tourney-detail{margin-top:10px;border-top:1px solid #ffffff16;padding-top:10px}.v15-tourney-detail summary{cursor:pointer;color:#ffe238;font-size:10px;font-weight:900}.v15-kv{display:grid;grid-template-columns:150px minmax(0,1fr);gap:8px;padding:5px 0;border-bottom:1px solid #ffffff0f;font-size:10px}.v15-kv b{color:#9db8f5}.v15-link{color:#86efac;text-decoration:underline;text-underline-offset:2px}
             .v12-group-row{border-left:3px solid #8b5cf6}.v12-mention{background:#facc1530;border-radius:3px;padding:0 2px;color:#fde68a;font-weight:900}
             .v12-profile-hero{display:grid;grid-template-columns:120px minmax(0,1fr);gap:18px;align-items:center}.v12-profile-avatar{width:120px;height:120px;border-radius:50%;overflow:hidden;background:#1e3a8a;display:grid;place-items:center;font-size:32px;font-weight:900;border:4px solid #ffffff35}.v12-profile-avatar img{width:100%;height:100%;object-fit:cover}
             .v12-stat-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:12px}.v12-stat{background:#102653;border:1px solid #ffffff1a;border-radius:12px;padding:10px;text-align:center}.v12-stat b{display:block;color:#ffe238;font-size:18px}.v12-stat span{font-size:9px;color:#b9c9ef;text-transform:uppercase;font-weight:900}
@@ -4578,7 +4817,7 @@ function installV12Platform() {
             .v12-tournament-card{background:#173477;border:1px solid #ffffff1d;border-radius:14px;padding:12px;margin-bottom:9px}.v12-bracket{display:flex;gap:18px;overflow-x:auto;padding:10px 0}.v12-round{min-width:220px}.v12-match{background:#102653;border:1px solid #ffffff20;border-radius:10px;padding:8px;margin:8px 0}
             #guideModal .v12-guide-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.v12-guide-card{background:#102653;border:1px solid #ffffff1f;border-radius:14px;padding:12px}.v12-guide-card h4{color:#ffe238;font-weight:900;font-size:11px;margin-bottom:5px}.v12-guide-card p{font-size:10px;color:#c8d6f7;line-height:1.45}
             #v12QueueSelector{display:flex;gap:6px;padding:5px;background:#102653;border:1px solid #ffffff1d;border-radius:14px}.v12-queue-btn{flex:1;border:0;border-radius:10px;padding:8px;color:#dbe7ff;background:transparent;font:900 10px Inter,sans-serif;cursor:pointer}.v12-queue-btn.active{background:#ffd318;color:#142f75}
-            @media(max-width:760px){.v12-grid{grid-template-columns:1fr}.v12-list{max-height:200px}.v12-stat-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.v12-profile-hero{grid-template-columns:1fr;text-align:center}.v12-profile-avatar{margin:auto}#guideModal .v12-guide-grid{grid-template-columns:1fr}}
+            @media(max-width:760px){.v12-grid{grid-template-columns:1fr}.v12-list{max-height:200px}.v12-stat-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.v12-profile-hero{grid-template-columns:1fr;text-align:center}.v12-profile-avatar{margin:auto}#guideModal .v12-guide-grid{grid-template-columns:1fr}.v15-tourney-grid{grid-template-columns:1fr}.v15-schedule-row{grid-template-columns:1fr}.v15-tourney-wide{grid-column:auto}#adminModal .v12-grid{height:calc(94vh - 125px);overflow-y:auto}#adminModal .v12-list{max-height:220px}}
         `;
         document.head.appendChild(style);
     }
@@ -4625,6 +4864,7 @@ function installV12Platform() {
 
     function accountSessionPayload(user) {
         return {
+            id: user.id,
             username: user.username,
             email: user.email,
             roles: user.roles,
@@ -4640,6 +4880,32 @@ function installV12Platform() {
     // ------------------------------------------------------------------
     // SECURE AUTHENTICATION
     // ------------------------------------------------------------------
+    // Keep Login and Create Account as genuinely separate tabs. Older builds
+    // could leave both buttons pointing at the login view after an update.
+    toggleAuthTab = function (type) {
+        const registering = type === 'register';
+        const loginForm = document.getElementById('loginForm');
+        const registerForm = document.getElementById('registerForm');
+        const loginButton = document.getElementById('tabLoginBtn');
+        const registerButton = document.getElementById('tabRegisterBtn');
+        loginForm?.classList.toggle('hidden', registering);
+        registerForm?.classList.toggle('hidden', !registering);
+        if (loginButton) {
+            loginButton.textContent = 'LOG IN';
+            loginButton.className = registering ? 'font-bungee text-lg text-white/50 pb-1 hover:text-white' : 'font-bungee text-lg text-yellow-300 border-b-2 border-yellow-300 pb-1';
+        }
+        if (registerButton) {
+            registerButton.textContent = 'CREATE ACCOUNT';
+            registerButton.className = registering ? 'font-bungee text-lg text-yellow-300 border-b-2 border-yellow-300 pb-1' : 'font-bungee text-lg text-white/50 pb-1 hover:text-white';
+        }
+    };
+
+    const openOptionalLoginBaseV15 = window.openOptionalLogin || openOptionalLogin;
+    window.openOptionalLogin = openOptionalLogin = function (tab = 'login') {
+        openOptionalLoginBaseV15?.();
+        toggleAuthTab(tab === 'register' ? 'register' : 'login');
+    };
+
     handleAuthSubmit = function (event, type) {
         event.preventDefault();
         if (type === 'register') {
@@ -4758,6 +5024,47 @@ function installV12Platform() {
         showToast(`Your username was changed to ${data.username} by the OWNER.`, '🛡️');
         setTimeout(() => window.location.reload(), 500);
     });
+    socket.on('username_migrated', data => {
+        const oldName = String(data?.oldUsername || '');
+        const newName = String(data?.newUsername || '');
+        if (!oldName || !newName || oldName === newName) return;
+
+        const session = secureSession();
+        const isSelf = !!session && !!data?.accountId && session.id === data.accountId;
+        if (isSelf) {
+            const oldFriends = getLocalFriends(oldName);
+            const existingNew = getLocalFriends(newName);
+            const merged = [...new Set([...existingNew, ...oldFriends])];
+            saveLocalFriends(newName, merged);
+            try { localStorage.removeItem(`friends_${oldName}`); } catch {}
+            session.username = newName;
+            writeLocal(SECURE_KEY, session);
+            localStorage.setItem('user_session', JSON.stringify(session));
+            if (accountState) accountState.username = newName;
+        } else {
+            const me = AuthSession.getUser()?.username || session?.username || '';
+            if (me) {
+                const friends = getLocalFriends(me).map(name => String(name).toLowerCase() === oldName.toLowerCase() ? newName : name);
+                saveLocalFriends(me, [...new Set(friends)]);
+            }
+        }
+
+        const archived = window.__smashArchivedDMs instanceof Set ? window.__smashArchivedDMs : new Set();
+        if (archived.delete(oldName.toLowerCase())) archived.add(newName.toLowerCase());
+        window.__smashArchivedDMs = archived;
+
+        if (String(activeDMTargetUser || '').toLowerCase() === oldName.toLowerCase()) {
+            activeDMTargetUser = newName;
+            const header = document.getElementById('activeDMChatHeader');
+            if (header) header.textContent = newName;
+            socket.emit('get_dm_history', { targetUsername: newName });
+        }
+
+        updateFriendsTabList();
+        socket.emit('get_groups');
+        socket.emit('get_tournaments');
+    });
+
     socket.on('moderation_notice', data => showToast(data?.message || 'Moderator action applied.', '🛡️'));
 
     socket.on('account_state_changed', user => {
@@ -5102,7 +5409,12 @@ function installV12Platform() {
         socket.emit('admin_moderation_action', { username, action: 'ban', duration, reason });
     }
 
-    function buildMessageMenu({ own, username, onEdit, onDelete, onReport }) {
+    function isArchivedDM(username) {
+        const set = window.__smashArchivedDMs instanceof Set ? window.__smashArchivedDMs : new Set();
+        return set.has(String(username || '').toLowerCase());
+    }
+
+    function buildMessageMenu({ own, username, onEdit, onDelete, onReport, onArchive, onUnfriend }) {
         const wrap = document.createElement('div');
         wrap.className = 'v12-message-menu';
         const trigger = document.createElement('button');
@@ -5126,6 +5438,11 @@ function installV12Platform() {
             };
             popover.appendChild(button);
         };
+        const divider = () => {
+            const line = document.createElement('div');
+            line.className = 'v12-message-menu-divider';
+            popover.appendChild(line);
+        };
 
         if (own) {
             add('Edit message', onEdit);
@@ -5137,6 +5454,12 @@ function installV12Platform() {
             }
         }
 
+        if (onArchive || onUnfriend) {
+            divider();
+            if (onArchive) add(isArchivedDM(username) ? 'Unarchive chat' : 'Archive chat', onArchive);
+            if (onUnfriend) add('Unfriend', onUnfriend, 'danger');
+        }
+
         trigger.onclick = event => {
             event.stopPropagation();
             const opening = !wrap.classList.contains('open');
@@ -5145,6 +5468,14 @@ function installV12Platform() {
         };
         wrap.append(trigger, popover);
         return wrap;
+    }
+
+    function openMessageMenuFromRightClick(event, menu) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!menu) return;
+        closeAllMessageMenus(menu);
+        menu.classList.add('open');
     }
 
     if (!window.__v14MessageMenuOutsideClose) {
@@ -5194,7 +5525,7 @@ function installV12Platform() {
             if (message.id) {
                 menu = buildMessageMenu({
                     own,
-                    username: message.senderUsername,
+                    username: activeDMTargetUser,
                     onEdit: () => {
                         const next = prompt('Edit message:', message.message);
                         if (next && next.trim()) socket.emit('edit_direct_message', { targetUsername: activeDMTargetUser, messageId: message.id, message: next.trim() });
@@ -5205,10 +5536,17 @@ function installV12Platform() {
                     onReport: () => {
                         const reason = prompt('Why are you reporting this message?') || 'No reason given';
                         socket.emit('report_message', { type:'dm', targetUsername: activeDMTargetUser, messageId: message.id, reason });
+                    },
+                    onArchive: () => socket.emit('set_dm_archived', { targetUsername: activeDMTargetUser, archived: !isArchivedDM(activeDMTargetUser) }),
+                    onUnfriend: () => {
+                        if (confirm(`Unfriend ${activeDMTargetUser}? The old messages stay saved, but you will need to become friends again to message.`)) {
+                            socket.emit('unfriend_user', { targetUsername: activeDMTargetUser });
+                        }
                     }
                 });
             }
             row.append(avatar, body, menu);
+            row.oncontextmenu = event => openMessageMenuFromRightClick(event, menu);
             container.appendChild(row);
         });
         container.scrollTop = container.scrollHeight;
@@ -5218,6 +5556,36 @@ function installV12Platform() {
         if (data.targetUsername === activeDMTargetUser && !activeGroupId) renderDMMessages(data.history || []);
     });
     socket.on('report_submitted', () => showToast('Report sent to moderators.', '🛡️'));
+    socket.on('dm_archive_state', data => {
+        const set = window.__smashArchivedDMs instanceof Set ? window.__smashArchivedDMs : new Set();
+        const key = String(data?.targetUsername || '').toLowerCase();
+        if (data?.archived) set.add(key); else set.delete(key);
+        window.__smashArchivedDMs = set;
+        if (data?.archived && String(activeDMTargetUser || '').toLowerCase() === key) {
+            activeDMTargetUser = null;
+            document.getElementById('activeDMChatHeader').textContent = 'Select a friend';
+            document.getElementById('dmChatStatus').textContent = 'Choose somebody from the left.';
+            document.getElementById('tabDMMessages').innerHTML = '<div class="h-full grid place-items-center text-center text-blue-200 text-xs">Chat archived. Open it under Archived whenever you want.</div>';
+        }
+        updateFriendsTabList();
+        showToast(data?.archived ? 'Chat archived.' : 'Chat restored.', '📁');
+    });
+    socket.on('friendship_removed', data => {
+        const username = String(data?.username || '');
+        const me = AuthSession.getUser()?.username || '';
+        if (me) {
+            const friends = getLocalFriends(me).filter(name => String(name).toLowerCase() !== username.toLowerCase());
+            saveLocalFriends(me, friends);
+        }
+        if (String(activeDMTargetUser || '').toLowerCase() === username.toLowerCase()) {
+            activeDMTargetUser = null;
+            document.getElementById('activeDMChatHeader').textContent = 'Select a friend';
+            document.getElementById('dmChatStatus').textContent = 'You are no longer friends.';
+            document.getElementById('tabDMMessages').innerHTML = '<div class="h-full grid place-items-center text-center text-blue-200 text-xs">You unfriended this player. The old conversation stays saved on the server.</div>';
+        }
+        updateFriendsTabList();
+        showToast(`${username} removed from friends.`, '👤');
+    });
 
     // ------------------------------------------------------------------
     // GROUP CHATS
@@ -5419,7 +5787,9 @@ function installV12Platform() {
                     socket.emit('report_message', { type:'group', groupId:group.id, messageId:message.id, reason });
                 }
             });
-            row.append(av, body, menu); container.appendChild(row);
+            row.append(av, body, menu);
+            row.oncontextmenu = event => openMessageMenuFromRightClick(event, menu);
+            container.appendChild(row);
         });
         container.scrollTop = container.scrollHeight;
     }
@@ -5469,43 +5839,229 @@ function installV12Platform() {
         socket.emit('get_tournaments');
     };
 
+    function tournamentDate(value) {
+        const time = Number(value) || 0;
+        return time ? new Date(time).toLocaleString() : 'Not set';
+    }
+
+    function tournamentLink(label, url) {
+        if (!url) return '';
+        return `<a class="v15-link" href="${escapeHTML(url)}" target="_blank" rel="noopener noreferrer">${escapeHTML(label)}</a>`;
+    }
+
+    function addTournamentScheduleRow(container, slot = {}) {
+        if (!container) return;
+        const row = document.createElement('div');
+        row.className = 'v15-schedule-row';
+        const dateValue = slot.time ? new Date(Number(slot.time) - new Date(Number(slot.time)).getTimezoneOffset() * 60000).toISOString().slice(0,16) : '';
+        row.innerHTML = `<input data-schedule-label class="smash-input px-3 py-2 rounded-xl text-xs" placeholder="Week / round (Week 1)" value="${escapeHTML(slot.label || '')}"><input data-schedule-region class="smash-input px-3 py-2 rounded-xl text-xs" placeholder="Region (Region 1)" value="${escapeHTML(slot.region || '')}"><input data-schedule-time type="datetime-local" class="smash-input px-3 py-2 rounded-xl text-xs" value="${escapeHTML(dateValue)}"><button type="button" class="v12-small-btn red" data-remove-schedule>REMOVE</button>`;
+        row.querySelector('[data-remove-schedule]').onclick = () => row.remove();
+        container.appendChild(row);
+    }
+
+    function collectTournamentSchedule(panel) {
+        return Array.from(panel.querySelectorAll('.v15-schedule-row')).map(row => {
+            const rawTime = row.querySelector('[data-schedule-time]')?.value || '';
+            return {
+                label: row.querySelector('[data-schedule-label]')?.value || '',
+                region: row.querySelector('[data-schedule-region]')?.value || '',
+                time: rawTime ? new Date(rawTime).getTime() : 0
+            };
+        }).filter(slot => slot.time > 0);
+    }
+
     function renderTournamentPage() {
         const available = document.getElementById('tournamentAvailable');
         const create = document.getElementById('tournamentCreateArea');
         if (!available || !create) return;
         create.replaceChildren();
+
         if (canCreateTournament) {
-            const panel = document.createElement('div'); panel.className='hub-card mb-4';
-            panel.innerHTML = `<div class="v12-section-title">Create tournament</div><div class="grid grid-cols-1 md:grid-cols-2 gap-2"><input id="tName" class="smash-input px-3 py-2 rounded-xl text-xs" placeholder="Tournament name"><select id="tMode" class="smash-input px-3 py-2 rounded-xl text-xs"><option value="1v1">1v1</option><option value="ffa">FFA</option></select><input id="tCapacity" type="number" min="4" max="64" value="16" class="smash-input px-3 py-2 rounded-xl text-xs" placeholder="Players"><input id="tStart" type="datetime-local" class="smash-input px-3 py-2 rounded-xl text-xs"><select id="tPrivacy" class="smash-input px-3 py-2 rounded-xl text-xs"><option value="public">Public</option><option value="private">Private invite-only</option></select><input id="tInvites" class="smash-input px-3 py-2 rounded-xl text-xs" placeholder="Private invites: name1, name2"></div><textarea id="tRules" class="smash-input w-full px-3 py-2 rounded-xl text-xs mt-2" rows="3" placeholder="Rules"></textarea><button id="tCreateBtn" class="dock-action yellow mt-2">CREATE TOURNAMENT</button>`;
+            const panel = document.createElement('div');
+            panel.className = 'hub-card mb-4';
+            panel.innerHTML = `
+                <div class="flex justify-between items-center gap-3 mb-2"><div><div class="v12-section-title">Create tournament</div><div class="text-[10px] text-blue-200">Built for small events or large community events with regions, weekly times, guides, prizes, referees and streamers.</div></div><span class="v12-pill">TOURNEY HOST</span></div>
+
+                <div class="v12-section"><div class="v12-section-title">Basics</div><div class="v15-tourney-grid">
+                    <input id="tName" class="smash-input px-3 py-2 rounded-xl text-xs" placeholder="Tournament name">
+                    <input id="tOrganizer" class="smash-input px-3 py-2 rounded-xl text-xs" placeholder="Organizer / community (e.g. Tall Team)">
+                    <select id="tMode" class="smash-input px-3 py-2 rounded-xl text-xs"><option value="ffa">Free For All</option><option value="1v1">1v1</option></select>
+                    <input id="tCapacity" type="number" min="2" max="256" value="120" class="smash-input px-3 py-2 rounded-xl text-xs" placeholder="Total players">
+                    <select id="tHeatSize" class="smash-input px-3 py-2 rounded-xl text-xs"><option value="12">FFA heats: 12 players</option><option value="24">FFA heats: 24 players</option></select>
+                    <input id="tAdvance" type="number" min="1" max="24" value="6" class="smash-input px-3 py-2 rounded-xl text-xs" placeholder="Advance per heat">
+                    <select id="tPrivacy" class="smash-input px-3 py-2 rounded-xl text-xs"><option value="public">Public tournament</option><option value="private">Private invite-only</option></select>
+                    <input id="tInvites" class="smash-input px-3 py-2 rounded-xl text-xs" placeholder="Private invites: name1, name2">
+                </div></div>
+
+                <div class="v12-section"><div class="v12-section-title">Highlights / game setup</div><div class="v15-tourney-grid">
+                    <textarea id="tMapPool" class="smash-input px-3 py-2 rounded-xl text-xs" rows="2" placeholder="Map pool or map-pool link"></textarea>
+                    <textarea id="tRoundFormat" class="smash-input px-3 py-2 rounded-xl text-xs" rows="2" placeholder="Round format (FFA, timer 10 minutes, weekly format, etc.)"></textarea>
+                    <input id="tTimer" type="number" min="0" max="120" value="10" class="smash-input px-3 py-2 rounded-xl text-xs" placeholder="Round timer minutes">
+                    <input id="tTeamComposition" class="smash-input px-3 py-2 rounded-xl text-xs" value="1 player, no substitutes" placeholder="Team composition">
+                    <textarea id="tWeapons" class="smash-input px-3 py-2 rounded-xl text-xs" rows="2" placeholder="Weapons / weapon rules"></textarea>
+                    <textarea id="tModifiers" class="smash-input px-3 py-2 rounded-xl text-xs" rows="2" placeholder="Modifiers (None, etc.)"></textarea>
+                </div></div>
+
+                <div class="v12-section"><div class="v12-section-title">Regions + player limits</div><div class="v15-tourney-grid">
+                    <input id="tRegions" class="smash-input px-3 py-2 rounded-xl text-xs" placeholder="Regions, comma separated: Asia and India, US/Europe">
+                    <input id="tCapacityPerRegion" type="number" min="0" max="256" value="60" class="smash-input px-3 py-2 rounded-xl text-xs" placeholder="Players per region (0 = no regional cap)">
+                </div></div>
+
+                <div class="v12-section"><div class="v12-section-title">Times / schedule</div><div class="v15-tourney-grid">
+                    <label class="text-[10px] text-blue-200">Main start<input id="tStart" type="datetime-local" class="smash-input w-full px-3 py-2 rounded-xl text-xs mt-1"></label>
+                    <label class="text-[10px] text-blue-200">Check in this many minutes early<input id="tCheckIn" type="number" min="0" max="180" value="10" class="smash-input w-full px-3 py-2 rounded-xl text-xs mt-1"></label>
+                    <label class="text-[10px] text-blue-200">Expected availability (minutes)<input id="tDuration" type="number" min="0" max="1440" value="120" class="smash-input w-full px-3 py-2 rounded-xl text-xs mt-1"></label>
+                    <div></div>
+                </div><div class="mt-2"><div class="text-[10px] text-blue-200">Weekly / regional schedule. Times are saved as timestamps and shown to every player in their own local timezone.</div><div id="tScheduleRows"></div><button id="tAddSchedule" type="button" class="v12-small-btn mt-2">+ ADD TIME SLOT</button></div></div>
+
+                <div class="v12-section"><div class="v12-section-title">Registration + eligibility</div><div class="v15-tourney-grid">
+                    <label class="text-[10px] text-blue-200">Registration opens<input id="tRegOpen" type="datetime-local" class="smash-input w-full px-3 py-2 rounded-xl text-xs mt-1"></label>
+                    <label class="text-[10px] text-blue-200">Registration closes<input id="tRegClose" type="datetime-local" class="smash-input w-full px-3 py-2 rounded-xl text-xs mt-1"></label>
+                    <textarea id="tEligibility" class="smash-input px-3 py-2 rounded-xl text-xs v15-tourney-wide" rows="3" placeholder="Eligibility requirements (server membership length, account requirements, etc.)"></textarea>
+                </div></div>
+
+                <div class="v12-section"><div class="v12-section-title">Seeding / bracket / guide</div><div class="v15-tourney-grid">
+                    <input id="tSeeding" class="smash-input px-3 py-2 rounded-xl text-xs" placeholder="Seeding method (after registration fills, random, manual, rating-based...) ">
+                    <input id="tGuideUrl" class="smash-input px-3 py-2 rounded-xl text-xs" placeholder="Tournament guide URL">
+                    <input id="tBracketUrl" class="smash-input px-3 py-2 rounded-xl text-xs" placeholder="External bracket / spreadsheet URL (optional)">
+                </div></div>
+
+                <div class="v12-section"><div class="v12-section-title">Rewards</div><div class="v15-tourney-grid">
+                    <input id="tReward1" class="smash-input px-3 py-2 rounded-xl text-xs" placeholder="1st place reward">
+                    <input id="tReward2" class="smash-input px-3 py-2 rounded-xl text-xs" placeholder="2nd place reward">
+                    <input id="tReward3" class="smash-input px-3 py-2 rounded-xl text-xs" placeholder="3rd place reward">
+                </div></div>
+
+                <div class="v12-section"><div class="v12-section-title">Staff applications</div><div class="v15-tourney-grid">
+                    <input id="tRefApp" class="smash-input px-3 py-2 rounded-xl text-xs" placeholder="Referee application URL">
+                    <input id="tStreamerApp" class="smash-input px-3 py-2 rounded-xl text-xs" placeholder="Streamer / camera application URL">
+                </div></div>
+
+                <div class="v12-section"><div class="v12-section-title">Full rules / extra details</div><textarea id="tRules" class="smash-input w-full px-3 py-2 rounded-xl text-xs" rows="5" placeholder="Rules, mandatory reading, special notes, links, etc."></textarea></div>
+                <button id="tCreateBtn" class="dock-action yellow mt-3">CREATE TOURNAMENT</button>`;
             create.appendChild(panel);
-            panel.querySelector('#tCreateBtn').onclick=()=>{
-                const mode=document.getElementById('tMode').value;
-                let capacity=Number(document.getElementById('tCapacity').value||16);
-                if(mode==='ffa') capacity=capacity>=24?24:12;
-                const startRaw=document.getElementById('tStart').value;
-                socket.emit('create_tournament',{name:document.getElementById('tName').value,mode,capacity,startAt:startRaw?new Date(startRaw).getTime():Date.now(),isPublic:document.getElementById('tPrivacy').value==='public',invited:document.getElementById('tInvites').value,rules:document.getElementById('tRules').value});
+
+            const scheduleRows = panel.querySelector('#tScheduleRows');
+            addTournamentScheduleRow(scheduleRows, { label:'Week 1', region:'Region 1' });
+            panel.querySelector('#tAddSchedule').onclick = () => addTournamentScheduleRow(scheduleRows, {});
+            panel.querySelector('#tMode').onchange = event => {
+                const ffa = event.target.value === 'ffa';
+                panel.querySelector('#tHeatSize').disabled = !ffa;
+                panel.querySelector('#tAdvance').disabled = !ffa;
+                if (!ffa && Number(panel.querySelector('#tCapacity').value) > 64) panel.querySelector('#tCapacity').value = 16;
+            };
+
+            panel.querySelector('#tCreateBtn').onclick = () => {
+                const get = id => panel.querySelector('#' + id);
+                const value = id => get(id)?.value || '';
+                const timeValue = id => value(id) ? new Date(value(id)).getTime() : 0;
+                socket.emit('create_tournament', {
+                    name: value('tName'), organizer: value('tOrganizer'), mode: value('tMode'), capacity: Number(value('tCapacity') || 16),
+                    heatSize: Number(value('tHeatSize') || 12), advancePerHeat: Number(value('tAdvance') || 6),
+                    isPublic: value('tPrivacy') === 'public', invited: value('tInvites'), regions: value('tRegions'), capacityPerRegion: Number(value('tCapacityPerRegion') || 0),
+                    mapPool: value('tMapPool'), roundFormat: value('tRoundFormat'), roundTimerMinutes: Number(value('tTimer') || 0), weapons: value('tWeapons'), modifiers: value('tModifiers'), teamComposition: value('tTeamComposition'),
+                    startAt: timeValue('tStart'), schedule: collectTournamentSchedule(panel), registrationOpenAt: timeValue('tRegOpen'), registrationCloseAt: timeValue('tRegClose'),
+                    checkInMinutes: Number(value('tCheckIn') || 10), expectedDurationMinutes: Number(value('tDuration') || 120), eligibility: value('tEligibility'), seedingMethod: value('tSeeding'),
+                    guideUrl: value('tGuideUrl'), bracketUrl: value('tBracketUrl'), rewardFirst: value('tReward1'), rewardSecond: value('tReward2'), rewardThird: value('tReward3'),
+                    refereeApplicationUrl: value('tRefApp'), streamerApplicationUrl: value('tStreamerApp'), rules: value('tRules')
+                });
             };
         }
+
         available.replaceChildren();
         if (!tournamentsCache.length) {
-            available.innerHTML='<div class="hub-card text-center text-xs text-blue-200">No tournaments are available to you right now.</div>';
+            available.innerHTML = '<div class="hub-card text-center text-xs text-blue-200">No tournaments are available to you right now.</div>';
             return;
         }
-        tournamentsCache.forEach(t=>{
-            const card=document.createElement('div'); card.className='v12-tournament-card';
-            const registered=(t.participants||[]).includes(AuthSession.getUser()?.username||'');
-            card.innerHTML=`<div class="flex justify-between gap-3"><div><div class="font-bungee text-sm text-white">${escapeHTML(t.name)}</div><div class="text-[10px] text-blue-200 mt-1">${String(t.mode).toUpperCase()} · ${(t.participants||[]).length}/${t.capacity} · ${t.isPublic?'Public':'Private'} · Host: ${escapeHTML(t.hostUsername)}</div><div class="text-[10px] text-blue-200">${new Date(t.startAt).toLocaleString()}</div></div><span class="v12-pill">${escapeHTML(t.status)}</span></div><div class="text-xs text-white/80 mt-2 whitespace-pre-wrap">${escapeHTML(t.rules||'No extra rules.')}</div><div class="flex gap-2 flex-wrap mt-3" data-actions></div><div data-bracket></div>`;
-            const actions=card.querySelector('[data-actions]');
-            if(t.status==='registration'&&!registered){const reg=document.createElement('button');reg.className='v12-small-btn green';reg.textContent='REGISTER';reg.onclick=()=>socket.emit('register_tournament',{tournamentId:t.id});actions.appendChild(reg);} else if(registered){actions.insertAdjacentHTML('beforeend','<span class="v12-pill">✓ REGISTERED</span>');}
-            const mine=t.hostUsername===AuthSession.getUser()?.username||accountState?.roles?.owner;
-            if(mine&&t.status==='registration'){const start=document.createElement('button');start.className='v12-small-btn yellow';start.textContent='START TOURNAMENT';start.onclick=()=>{if(confirm('Close registration and start?'))socket.emit('start_tournament',{tournamentId:t.id});};actions.appendChild(start);}
-            if(mine&&!t.isPublic){const invite=document.createElement('button');invite.className='v12-small-btn purple';invite.textContent='INVITE PLAYER';invite.onclick=()=>{const username=prompt('Username to invite:');if(username)socket.emit('invite_tournament_player',{tournamentId:t.id,username});};actions.appendChild(invite);}
-            const bracket=card.querySelector('[data-bracket]');
-            if(t.bracket?.type==='1v1'){
-                bracket.className='v12-bracket';
-                (t.bracket.rounds||[]).forEach(round=>{const col=document.createElement('div');col.className='v12-round';col.innerHTML=`<div class="v12-section-title">${escapeHTML(round.name)}</div>`;(round.matches||[]).forEach(m=>{const match=document.createElement('div');match.className='v12-match';match.innerHTML=`<div>${escapeHTML(m.a||'BYE')}</div><div class="text-blue-300 text-[9px]">vs</div><div>${escapeHTML(m.b||'BYE')}</div>`;col.appendChild(match);});bracket.appendChild(col);});
-            } else if(t.bracket?.type==='ffa'){
-                bracket.className='v12-section'; bracket.innerHTML=`<div class="v12-section-title">FFA heats</div>${(t.bracket.heats||[]).map((heat,i)=>`<div class="text-xs mt-2"><b>Heat ${i+1}:</b> ${heat.map(escapeHTML).join(', ')||'Waiting'}</div>`).join('')}`;
+
+        tournamentsCache.forEach(t => {
+            const card = document.createElement('div');
+            card.className = 'v12-tournament-card';
+            const me = AuthSession.getUser()?.username || '';
+            const registered = (t.participants || []).includes(me);
+            const now = Date.now();
+            const regNotOpen = t.registrationOpenAt && now < Number(t.registrationOpenAt);
+            const regClosedByTime = t.registrationCloseAt && now > Number(t.registrationCloseAt);
+            const nextTime = (t.schedule || []).map(slot => Number(slot.time) || 0).filter(time => time >= now).sort((a,b)=>a-b)[0] || Number(t.startAt) || 0;
+            const regionCounts = {};
+            (t.registrations || []).forEach(item => { if (item.region) regionCounts[item.region] = (regionCounts[item.region] || 0) + 1; });
+
+            card.innerHTML = `<div class="flex justify-between gap-3"><div><div class="font-bungee text-sm text-white">${escapeHTML(t.name)}</div><div class="text-[10px] text-blue-200 mt-1">${escapeHTML(t.organizer || 'Community tournament')} · ${String(t.mode).toUpperCase()} · ${(t.participants||[]).length}/${t.capacity} · ${t.isPublic?'Public':'Private invite'} · Host: ${escapeHTML(t.hostUsername)}</div><div class="text-[10px] text-yellow-200 mt-1">${nextTime ? `Next: ${escapeHTML(tournamentDate(nextTime))}` : 'Time not set'} · Check in ${Number(t.checkInMinutes || 0)} min early</div></div><span class="v12-pill">${escapeHTML(t.status)}</span></div><div class="flex gap-2 flex-wrap mt-3" data-actions></div><details class="v15-tourney-detail"><summary>VIEW FULL TOURNAMENT DETAILS</summary><div data-detail></div></details><div data-bracket></div>`;
+
+            const actions = card.querySelector('[data-actions]');
+            if (t.status === 'registration' && !registered) {
+                let regionSelect = null;
+                if ((t.regions || []).length) {
+                    regionSelect = document.createElement('select');
+                    regionSelect.className = 'smash-input px-2 py-1.5 rounded-lg text-[10px]';
+                    regionSelect.innerHTML = '<option value="">Choose region</option>' + t.regions.map(region => `<option value="${escapeHTML(region)}">${escapeHTML(region)}${t.capacityPerRegion ? ` (${regionCounts[region] || 0}/${t.capacityPerRegion})` : ''}</option>`).join('');
+                    actions.appendChild(regionSelect);
+                }
+                const reg = document.createElement('button');
+                reg.className = 'v12-small-btn green';
+                reg.textContent = regNotOpen ? `OPENS ${tournamentDate(t.registrationOpenAt)}` : (regClosedByTime ? 'REGISTRATION CLOSED' : 'REGISTER');
+                reg.disabled = !!regNotOpen || !!regClosedByTime;
+                reg.onclick = () => {
+                    const region = regionSelect?.value || '';
+                    if ((t.regions || []).length && !region) return showToast('Choose your region first.', '🌎');
+                    socket.emit('register_tournament', { tournamentId:t.id, region });
+                };
+                actions.appendChild(reg);
+            } else if (registered) {
+                const mine = (t.registrations || []).find(item => item.username === me);
+                actions.insertAdjacentHTML('beforeend', `<span class="v12-pill">✓ REGISTERED${mine?.region ? ` · ${escapeHTML(mine.region)}` : ''}</span>`);
+            }
+
+            const mine = t.hostUsername === me || accountState?.roles?.owner;
+            if (mine && t.status === 'registration') {
+                const start = document.createElement('button');
+                start.className = 'v12-small-btn yellow';
+                start.textContent = 'START TOURNAMENT';
+                start.onclick = () => { if (confirm('Close registration and start the tournament?')) socket.emit('start_tournament', { tournamentId:t.id }); };
+                actions.appendChild(start);
+            }
+            if (mine && !t.isPublic) {
+                const invite = document.createElement('button');
+                invite.className = 'v12-small-btn purple';
+                invite.textContent = 'INVITE PLAYER';
+                invite.onclick = () => { const username = prompt('Username to invite:'); if (username) socket.emit('invite_tournament_player', { tournamentId:t.id, username }); };
+                actions.appendChild(invite);
+            }
+
+            const detail = card.querySelector('[data-detail]');
+            const scheduleHTML = (t.schedule || []).length ? (t.schedule || []).map(slot => `<div class="v15-kv"><b>${escapeHTML(slot.label || 'Schedule')}</b><span>${escapeHTML(slot.region || 'All regions')} · ${escapeHTML(tournamentDate(slot.time))}</span></div>`).join('') : `<div class="v15-kv"><b>Main time</b><span>${escapeHTML(tournamentDate(t.startAt))}</span></div>`;
+            const regionHTML = (t.regions || []).length ? t.regions.map(region => `${escapeHTML(region)}${t.capacityPerRegion ? ` (${regionCounts[region] || 0}/${t.capacityPerRegion})` : ''}`).join(', ') : 'No region split';
+            const rewardHTML = [t.rewards?.first && `<div class="v15-kv"><b>🥇 First place</b><span>${escapeHTML(t.rewards.first)}</span></div>`,t.rewards?.second && `<div class="v15-kv"><b>🥈 Second place</b><span>${escapeHTML(t.rewards.second)}</span></div>`,t.rewards?.third && `<div class="v15-kv"><b>🥉 Third place</b><span>${escapeHTML(t.rewards.third)}</span></div>`].filter(Boolean).join('');
+            detail.innerHTML = `
+                <div class="v12-section"><div class="v12-section-title">Highlights</div>
+                    <div class="v15-kv"><b>Type</b><span>${escapeHTML(String(t.mode).toUpperCase())}</span></div>
+                    <div class="v15-kv"><b>Map pool</b><span class="whitespace-pre-wrap">${escapeHTML(t.mapPool || 'Not specified')}</span></div>
+                    <div class="v15-kv"><b>Total players</b><span>${t.capacity}${t.capacityPerRegion ? ` · ${t.capacityPerRegion} per region` : ''}</span></div>
+                    <div class="v15-kv"><b>Round format</b><span class="whitespace-pre-wrap">${escapeHTML(t.roundFormat || 'Not specified')}${t.roundTimerMinutes ? ` · ${t.roundTimerMinutes} minutes` : ''}</span></div>
+                    <div class="v15-kv"><b>Weapons</b><span class="whitespace-pre-wrap">${escapeHTML(t.weapons || 'Not specified')}</span></div>
+                    <div class="v15-kv"><b>Modifiers</b><span class="whitespace-pre-wrap">${escapeHTML(t.modifiers || 'None')}</span></div>
+                    <div class="v15-kv"><b>Team composition</b><span>${escapeHTML(t.teamComposition || '1 player, no substitutes')}</span></div>
+                    ${t.mode === 'ffa' ? `<div class="v15-kv"><b>FFA advancement</b><span>${t.heatSize || 12}-player heats · top ${t.advancePerHeat || 6} advance per heat</span></div>` : ''}
+                </div>
+                <div class="v12-section"><div class="v12-section-title">Time</div>${scheduleHTML}<div class="v15-kv"><b>Availability</b><span>Show up ${Number(t.checkInMinutes || 0)} minutes early · plan for ${Number(t.expectedDurationMinutes || 0)} minutes</span></div></div>
+                <div class="v12-section"><div class="v12-section-title">Registration</div><div class="v15-kv"><b>Regions</b><span>${regionHTML}</span></div><div class="v15-kv"><b>Opens</b><span>${escapeHTML(tournamentDate(t.registrationOpenAt))}</span></div><div class="v15-kv"><b>Closes</b><span>${escapeHTML(tournamentDate(t.registrationCloseAt))}</span></div></div>
+                <div class="v12-section"><div class="v12-section-title">Eligibility</div><div class="text-[10px] text-blue-100 whitespace-pre-wrap">${escapeHTML(t.eligibility || 'No extra eligibility requirements listed.')}</div></div>
+                <div class="v12-section"><div class="v12-section-title">Seeding + bracket</div><div class="text-[10px] text-blue-100 whitespace-pre-wrap">${escapeHTML(t.seedingMethod || 'Host will determine seeding.')}</div><div class="flex gap-3 flex-wrap mt-2">${tournamentLink('Tournament guide',t.guideUrl)} ${tournamentLink('External bracket / sheet',t.bracketUrl)}</div></div>
+                ${rewardHTML ? `<div class="v12-section"><div class="v12-section-title">Rewards</div>${rewardHTML}</div>` : ''}
+                ${(t.refereeApplicationUrl || t.streamerApplicationUrl) ? `<div class="v12-section"><div class="v12-section-title">Applications</div><div class="flex gap-3 flex-wrap">${tournamentLink('Referee application',t.refereeApplicationUrl)} ${tournamentLink('Streamer application',t.streamerApplicationUrl)}</div></div>` : ''}
+                <div class="v12-section"><div class="v12-section-title">Rules / details</div><div class="text-[10px] text-blue-100 whitespace-pre-wrap">${escapeHTML(t.rules || 'No additional rules.')}</div></div>`;
+
+            const bracket = card.querySelector('[data-bracket]');
+            if (t.bracket?.type === '1v1') {
+                bracket.className = 'v12-bracket';
+                (t.bracket.rounds || []).forEach(round => {
+                    const col = document.createElement('div'); col.className='v12-round'; col.innerHTML=`<div class="v12-section-title">${escapeHTML(round.name)}</div>`;
+                    (round.matches || []).forEach(m => { const match=document.createElement('div'); match.className='v12-match'; match.innerHTML=`<div>${escapeHTML(m.a || 'BYE')}</div><div class="text-blue-300 text-[9px]">vs</div><div>${escapeHTML(m.b || 'BYE')}</div>`; col.appendChild(match); });
+                    bracket.appendChild(col);
+                });
+            } else if (t.bracket?.type === 'ffa') {
+                bracket.className='v12-section';
+                bracket.innerHTML=`<div class="v12-section-title">FFA heats · ${t.bracket.heatSize || t.heatSize || 12} players each · top ${t.bracket.advancePerHeat || t.advancePerHeat || 6} advance</div>${(t.bracket.heats||[]).map((heat,i)=>`<div class="text-xs mt-2"><b>Heat ${i+1}:</b> ${heat.map(escapeHTML).join(', ') || 'Waiting'}</div>`).join('')}`;
             }
             available.appendChild(card);
         });
