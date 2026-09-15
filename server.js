@@ -49,7 +49,8 @@ app.get('/script.js', (req, res) => {
         fs.readFileSync(path.join(__dirname, filename), 'utf8') +
         '\nwindow.__SPOTIFY_CLIENT_ID__ = ' + JSON.stringify(String(process.env.SPOTIFY_CLIENT_ID || '').trim()) + ';' +
         '\n;(' + installMegaArena.toString() + ')();' +
-        '\n;(' + installV12Platform.toString() + ')();'
+        '\n;(' + installV12Platform.toString() + ')();' +
+        '\n;(' + installV17Matchmaker.toString() + ')();'
     );
 });
 
@@ -1172,6 +1173,467 @@ function broadcastTournamentLists() {
 }
 
 // =========================================================
+// V17 AUTOMATIC MATCHMAKER + ROOM-BOT BRIDGE
+// =========================================================
+// The matchmaker itself is fully server-side and works now. It creates fair
+// 1v1/FFA groups, performs ready checks, avoids repeat opponents, and then asks
+// the room-bot bridge for a real Smash Karts share URL.
+//
+// IMPORTANT: Smash Karts does not publish a supported room-creation API that
+// we can safely call directly from this server. If SMASH_ROOM_BOT_URL is not
+// configured, V17 automatically falls back to one matched player creating the
+// Smash Karts room and pasting the share link. Once we identify a reliable
+// creation endpoint/worker, the same queue needs no UI redesign: the bridge
+// will simply return the URL and everybody gets it automatically.
+const SMASH_ROOM_BOT_URL = String(process.env.SMASH_ROOM_BOT_URL || '').trim();
+const SMASH_ROOM_BOT_SECRET = String(process.env.SMASH_ROOM_BOT_SECRET || '').trim();
+const MATCH_READY_TIMEOUT_MS = 15_000;
+const MATCHMAKER_TICK_MS = 1_000;
+const MATCHMAKING_QUEUES = new Map();
+const MATCHMAKING_MATCHES = new Map();
+const RECENT_OPPONENTS = new Map();
+
+function matchmakingIdentity(player) {
+    if (!player) return '';
+    if (!player.isGuest) {
+        const account = accountByEmail(player.accountEmail);
+        if (account?.id) return `acct:${account.id}`;
+    }
+    return `sock:${player.id}`;
+}
+
+function matchmakingQueueKey(mode, queueType, maxPlayers = 2) {
+    const normalizedMode = mode === 'ffa' ? 'ffa' : '1v1';
+    const normalizedType = queueType === 'ranked' ? 'ranked' : 'casual';
+    const size = normalizedMode === 'ffa' ? (Number(maxPlayers) === 24 ? 24 : 12) : 2;
+    return `${normalizedMode}:${normalizedType}:${size}`;
+}
+
+function matchmakingQueueFor(key) {
+    if (!MATCHMAKING_QUEUES.has(key)) MATCHMAKING_QUEUES.set(key, []);
+    return MATCHMAKING_QUEUES.get(key);
+}
+
+function matchmakingPublicPlayer(entry) {
+    const player = connectedPlayers[entry.socketId];
+    return {
+        socketId: entry.socketId,
+        username: player?.username || entry.username,
+        avatar: player?.avatar || '',
+        roles: publicRoles(player?.roles),
+        badges: roleBadges(player?.roles),
+        level: Number(player?.level || entry.level || 1),
+        rating: Number(entry.rating || 1000),
+        isGuest: !!player?.isGuest
+    };
+}
+
+function matchmakingCounts() {
+    const queues = {};
+    for (const [key, entries] of MATCHMAKING_QUEUES.entries()) {
+        const live = entries.filter(entry => !!connectedPlayers[entry.socketId]);
+        MATCHMAKING_QUEUES.set(key, live);
+        queues[key] = live.length;
+    }
+    return {
+        queues,
+        activeReadyChecks: Array.from(MATCHMAKING_MATCHES.values()).filter(match => match.status === 'ready_check').length,
+        creatingRooms: Array.from(MATCHMAKING_MATCHES.values()).filter(match => ['creating_room','waiting_for_host'].includes(match.status)).length,
+        roomBotConfigured: !!SMASH_ROOM_BOT_URL
+    };
+}
+
+function broadcastMatchmakingCounts() {
+    io.emit('matchmaking_counts', matchmakingCounts());
+}
+
+function removeSocketFromMatchmakingQueues(socketId, { emitState = false } = {}) {
+    let removed = false;
+    for (const [key, entries] of MATCHMAKING_QUEUES.entries()) {
+        const filtered = entries.filter(entry => entry.socketId !== socketId);
+        if (filtered.length !== entries.length) removed = true;
+        MATCHMAKING_QUEUES.set(key, filtered);
+    }
+    if (removed && emitState) io.to(socketId).emit('matchmaking_state', { state: 'idle' });
+    if (removed) broadcastMatchmakingCounts();
+    return removed;
+}
+
+function findPendingMatchForSocket(socketId) {
+    return Array.from(MATCHMAKING_MATCHES.values()).find(match =>
+        match.entries.some(entry => entry.socketId === socketId) &&
+        !['finished','cancelled'].includes(match.status)
+    ) || null;
+}
+
+function enqueueMatchmakingSocket(socket, options, { preserveJoinedAt = null } = {}) {
+    const player = connectedPlayers[socket.id];
+    if (!player) return false;
+    const mode = options?.mode === 'ffa' ? 'ffa' : '1v1';
+    const queueType = options?.queueType === 'ranked' ? 'ranked' : 'casual';
+    const maxPlayers = mode === 'ffa' ? (Number(options?.maxPlayers) === 24 ? 24 : 12) : 2;
+
+    if (queueType === 'ranked' && player.isGuest) {
+        socket.emit('matchmaking_error', { message: 'Ranked matchmaking requires a saved account so your rating can be protected.' });
+        return false;
+    }
+    if (banIsActive(!player.isGuest ? accountByEmail(player.accountEmail) : null)) {
+        socket.emit('matchmaking_error', { message: 'This account cannot enter matchmaking while banned.' });
+        return false;
+    }
+    if (findPendingMatchForSocket(socket.id)) {
+        socket.emit('matchmaking_error', { message: 'You already have a match in progress.' });
+        return false;
+    }
+
+    removeSocketFromMatchmakingQueues(socket.id);
+    const key = matchmakingQueueKey(mode, queueType, maxPlayers);
+    const rating = mode === 'ffa' ? Number(player.ratingFFA || 1000) : Number(player.rating1v1 || 1000);
+    const entry = {
+        socketId: socket.id,
+        identity: matchmakingIdentity(player),
+        username: player.username,
+        mode,
+        queueType,
+        maxPlayers,
+        rating,
+        level: Number(player.level || 1),
+        joinedAt: Number(preserveJoinedAt) || Date.now(),
+        region: String(options?.region || 'auto').slice(0, 30),
+        readyRetries: Number(options?.readyRetries || 0)
+    };
+    matchmakingQueueFor(key).push(entry);
+    socket.emit('matchmaking_state', {
+        state: 'queued',
+        queueKey: key,
+        mode,
+        queueType,
+        maxPlayers,
+        joinedAt: entry.joinedAt
+    });
+    broadcastMatchmakingCounts();
+    return true;
+}
+
+function rankedSearchRange(entry) {
+    const seconds = Math.max(0, (Date.now() - Number(entry.joinedAt || Date.now())) / 1000);
+    return Math.min(650, 90 + Math.floor(seconds / 8) * 55);
+}
+
+function recentOpponentPenalty(aIdentity, bIdentity) {
+    const now = Date.now();
+    const recent = RECENT_OPPONENTS.get(aIdentity) || [];
+    const hit = recent.find(item => item.identity === bIdentity && now - item.at < 30 * 60 * 1000);
+    return hit ? 10_000 : 0;
+}
+
+function rememberOpponentPair(a, b) {
+    const now = Date.now();
+    for (const [left, right] of [[a.identity, b.identity], [b.identity, a.identity]]) {
+        const list = (RECENT_OPPONENTS.get(left) || []).filter(item => now - item.at < 60 * 60 * 1000);
+        list.unshift({ identity: right, at: now });
+        RECENT_OPPONENTS.set(left, list.slice(0, 10));
+    }
+}
+
+function requeueReadyEntries(match, excludedSocketId = null) {
+    for (const entry of match.entries) {
+        if (entry.socketId === excludedSocketId) continue;
+        if (!match.ready.has(entry.socketId)) continue;
+        const socket = io.sockets.sockets.get(entry.socketId);
+        if (!socket || !connectedPlayers[entry.socketId]) continue;
+        enqueueMatchmakingSocket(socket, entry, {
+            preserveJoinedAt: Math.min(entry.joinedAt || Date.now(), Date.now() - 12_000)
+        });
+    }
+}
+
+function publicReadyMatch(match) {
+    return {
+        matchId: match.id,
+        mode: match.mode,
+        queueType: match.queueType,
+        maxPlayers: match.maxPlayers,
+        players: match.entries.map(matchmakingPublicPlayer),
+        readySocketIds: Array.from(match.ready),
+        readyCount: match.ready.size,
+        totalPlayers: match.entries.length,
+        deadline: match.readyDeadline,
+        roomBotConfigured: !!SMASH_ROOM_BOT_URL
+    };
+}
+
+function createReadyCheck(entries, { mode, queueType, maxPlayers }) {
+    const match = {
+        id: crypto.randomUUID(),
+        mode,
+        queueType,
+        maxPlayers,
+        entries: entries.map(entry => ({ ...entry })),
+        ready: new Set(),
+        status: 'ready_check',
+        createdAt: Date.now(),
+        readyDeadline: Date.now() + MATCH_READY_TIMEOUT_MS,
+        hostSocketId: null,
+        roomId: null,
+        smashUrl: '',
+        timer: null
+    };
+    MATCHMAKING_MATCHES.set(match.id, match);
+    const payload = publicReadyMatch(match);
+    for (const entry of match.entries) {
+        io.to(entry.socketId).emit('match_found', payload);
+        io.to(entry.socketId).emit('matchmaking_state', { state: 'ready_check', matchId: match.id });
+    }
+    match.timer = setTimeout(() => failReadyCheck(match.id, 'Somebody did not ready up in time.'), MATCH_READY_TIMEOUT_MS + 250);
+    broadcastMatchmakingCounts();
+    return match;
+}
+
+function failReadyCheck(matchId, message, cancelledSocketId = null) {
+    const match = MATCHMAKING_MATCHES.get(matchId);
+    if (!match || match.status !== 'ready_check') return;
+    clearTimeout(match.timer);
+    match.status = 'cancelled';
+    for (const entry of match.entries) {
+        io.to(entry.socketId).emit('matchmaking_match_failed', {
+            matchId,
+            message,
+            youCancelled: entry.socketId === cancelledSocketId
+        });
+    }
+    requeueReadyEntries(match, cancelledSocketId);
+    setTimeout(() => MATCHMAKING_MATCHES.delete(matchId), 30_000);
+    broadcastMatchmakingCounts();
+}
+
+async function callExternalRoomBot(match) {
+    if (!SMASH_ROOM_BOT_URL) return null;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 120_000);
+    try {
+        const response = await fetch(SMASH_ROOM_BOT_URL, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                ...(SMASH_ROOM_BOT_SECRET ? { Authorization: `Bearer ${SMASH_ROOM_BOT_SECRET}` } : {})
+            },
+            body: JSON.stringify({
+                requestId: crypto.randomUUID(),
+                matchId: match.id,
+                mode: match.mode,
+                queueType: match.queueType,
+                maxPlayers: match.mode === '1v1' ? 4 : match.maxPlayers,
+                competitorCount: match.mode === '1v1' ? 2 : match.maxPlayers,
+                settings: {
+                    winCondition: match.mode === '1v1' ? 'Score Target 6' : 'Free for all',
+                    scoreTarget: match.mode === '1v1' ? 6 : null,
+                    roomMaxPlayers: match.mode === '1v1' ? 4 : match.maxPlayers,
+                    spectate: match.mode === '1v1',
+                    bots: false,
+                    privacy: 'private'
+                },
+                players: match.entries.map(entry => ({
+                    username: connectedPlayers[entry.socketId]?.username || entry.username,
+                    accountId: entry.identity.startsWith('acct:') ? entry.identity.slice(5) : null
+                }))
+            }),
+            signal: controller.signal
+        });
+        if (!response.ok) throw new Error(`Room bot HTTP ${response.status}`);
+        const payload = await response.json();
+        const clean = extractVerifiedLookingRoomUrl(payload?.smashUrl || payload?.url || payload?.shareText || '');
+        if (!clean) throw new Error('Room bot did not return a valid Smash Karts share URL.');
+        return clean;
+    } finally {
+        clearTimeout(timeout);
+    }
+}
+
+function fallbackToMatchedHost(match, reason = '') {
+    if (!match || !MATCHMAKING_MATCHES.has(match.id)) return;
+    match.status = 'waiting_for_host';
+    const liveEntries = match.entries.filter(entry => !!connectedPlayers[entry.socketId]);
+    if (!liveEntries.length) {
+        match.status = 'cancelled';
+        return;
+    }
+    const host = liveEntries[0];
+    match.hostSocketId = host.socketId;
+    for (const entry of liveEntries) {
+        io.to(entry.socketId).emit('match_room_bot_status', {
+            matchId: match.id,
+            status: 'manual_fallback',
+            message: reason || 'Automatic room creation is not connected yet. The assigned player can create the room while the queue system stays automatic.',
+            hostUsername: connectedPlayers[host.socketId]?.username || host.username
+        });
+    }
+    io.to(host.socketId).emit('match_room_host_required', {
+        matchId: match.id,
+        mode: match.mode,
+        maxPlayers: match.maxPlayers,
+        message: 'Create the private Smash Karts room, copy the full Share text/link, and paste it here. Everyone else will receive it automatically.'
+    });
+    for (const entry of liveEntries) {
+        if (entry.socketId === host.socketId) continue;
+        io.to(entry.socketId).emit('match_room_waiting', {
+            matchId: match.id,
+            hostUsername: connectedPlayers[host.socketId]?.username || host.username
+        });
+    }
+    broadcastMatchmakingCounts();
+}
+
+async function prepareMatchRoom(match) {
+    if (!match || match.status !== 'ready_check') return;
+    clearTimeout(match.timer);
+    match.status = 'creating_room';
+    for (const entry of match.entries) {
+        io.to(entry.socketId).emit('match_room_bot_status', {
+            matchId: match.id,
+            status: 'creating',
+            message: SMASH_ROOM_BOT_URL ? 'Room Bot is creating the private Smash Karts room…' : 'Match is ready. Room Bot connector is not configured yet.'
+        });
+    }
+    broadcastMatchmakingCounts();
+
+    // The referee/room bot is deliberately 1v1-only for now. FFA keeps the
+    // existing manual-host flow until we explicitly decide to automate it.
+    if (match.mode !== '1v1') {
+        fallbackToMatchedHost(match, 'Automatic room creation is currently enabled for 1v1 only.');
+        return;
+    }
+
+    if (!SMASH_ROOM_BOT_URL) {
+        fallbackToMatchedHost(match, 'The automatic Smash Karts room-creator connector is not configured yet.');
+        return;
+    }
+
+    try {
+        const smashUrl = await callExternalRoomBot(match);
+        if (!MATCHMAKING_MATCHES.has(match.id) || match.status !== 'creating_room') return;
+        finalizeMatchmakingRoom(match, smashUrl, 'room_bot');
+    } catch (error) {
+        console.error('[ROOM BOT]', error.message);
+        fallbackToMatchedHost(match, `Room Bot failed: ${String(error.message || error).slice(0, 140)}`);
+    }
+}
+
+function finalizeMatchmakingRoom(match, rawSmashUrl, source = 'matched_host') {
+    if (!match || !['creating_room','waiting_for_host'].includes(match.status)) return false;
+    const smashUrl = extractVerifiedLookingRoomUrl(rawSmashUrl);
+    if (!smashUrl) return false;
+    const liveEntries = match.entries.filter(entry => !!connectedPlayers[entry.socketId] && !!io.sockets.sockets.get(entry.socketId));
+    if (liveEntries.length < (match.mode === '1v1' ? 2 : 1)) {
+        match.status = 'cancelled';
+        return false;
+    }
+
+    const hostEntry = liveEntries.find(entry => entry.socketId === match.hostSocketId) || liveEntries[0];
+    const roomId = crypto.randomUUID();
+    const room = {
+        roomId,
+        hostName: connectedPlayers[hostEntry.socketId]?.username || hostEntry.username,
+        hostSocketId: hostEntry.socketId,
+        smashUrl,
+        winCondition: match.mode === '1v1' ? 'First to 3' : 'Free for all',
+        mode: match.mode,
+        maxPlayers: match.maxPlayers,
+        isPublic: false,
+        queueType: match.queueType,
+        createdAt: Date.now(),
+        matchmakingMatchId: match.id,
+        roomCreationSource: source,
+        players: [],
+        messages: []
+    };
+
+    activeRoomsMap.set(roomId, room);
+    addRoomHistory(room);
+    for (const entry of liveEntries) {
+        const targetSocket = io.sockets.sockets.get(entry.socketId);
+        const player = connectedPlayers[entry.socketId];
+        if (targetSocket && player) joinRoom(targetSocket, room, player, 'matchmaking_room_ready');
+    }
+    if (match.mode === '1v1' && liveEntries.length >= 2) rememberOpponentPair(liveEntries[0], liveEntries[1]);
+
+    match.status = 'room_ready';
+    match.roomId = roomId;
+    match.smashUrl = smashUrl;
+    for (const entry of liveEntries) {
+        io.to(entry.socketId).emit('match_room_bot_status', {
+            matchId: match.id,
+            status: 'ready',
+            roomId,
+            source,
+            message: source === 'room_bot' ? 'Room Bot created the room.' : 'Room link accepted. Everybody has the same room.'
+        });
+    }
+    setTimeout(() => MATCHMAKING_MATCHES.delete(match.id), 60 * 60 * 1000);
+    broadcastMatchmakingCounts();
+    return true;
+}
+
+function process1v1Queue(key, queue) {
+    for (let i = queue.length - 1; i >= 0; i--) {
+        if (!connectedPlayers[queue[i].socketId] || findPendingMatchForSocket(queue[i].socketId)) queue.splice(i, 1);
+    }
+    if (queue.length < 2) return;
+    queue.sort((a, b) => a.joinedAt - b.joinedAt);
+
+    let madeMatch = true;
+    while (madeMatch && queue.length >= 2) {
+        madeMatch = false;
+        const a = queue[0];
+        let candidates = queue.slice(1).filter(b => b.identity !== a.identity);
+        if (a.queueType === 'ranked') {
+            candidates = candidates.filter(b => {
+                const allowed = Math.max(rankedSearchRange(a), rankedSearchRange(b));
+                return Math.abs(a.rating - b.rating) <= allowed;
+            });
+        }
+        if (!candidates.length) break;
+
+        candidates.sort((b, c) => {
+            const scoreB = Math.abs(a.rating - b.rating) + recentOpponentPenalty(a.identity, b.identity) + Math.max(0, b.joinedAt - a.joinedAt) / 1000;
+            const scoreC = Math.abs(a.rating - c.rating) + recentOpponentPenalty(a.identity, c.identity) + Math.max(0, c.joinedAt - a.joinedAt) / 1000;
+            return scoreB - scoreC;
+        });
+        const b = candidates[0];
+        const bIndex = queue.findIndex(item => item.socketId === b.socketId);
+        if (bIndex < 0) break;
+        queue.splice(bIndex, 1);
+        queue.shift();
+        createReadyCheck([a, b], { mode: '1v1', queueType: a.queueType, maxPlayers: 2 });
+        madeMatch = true;
+    }
+    MATCHMAKING_QUEUES.set(key, queue);
+}
+
+function processFFAQueue(key, queue) {
+    for (let i = queue.length - 1; i >= 0; i--) {
+        if (!connectedPlayers[queue[i].socketId] || findPendingMatchForSocket(queue[i].socketId)) queue.splice(i, 1);
+    }
+    queue.sort((a, b) => a.joinedAt - b.joinedAt);
+    const size = Number(key.split(':').pop()) === 24 ? 24 : 12;
+    while (queue.length >= size) {
+        const group = queue.splice(0, size);
+        createReadyCheck(group, { mode: 'ffa', queueType: group[0]?.queueType || 'casual', maxPlayers: size });
+    }
+    MATCHMAKING_QUEUES.set(key, queue);
+}
+
+function processMatchmakingQueues() {
+    for (const [key, queue] of MATCHMAKING_QUEUES.entries()) {
+        if (key.startsWith('1v1:')) process1v1Queue(key, queue);
+        else if (key.startsWith('ffa:')) processFFAQueue(key, queue);
+    }
+    broadcastMatchmakingCounts();
+}
+
+setInterval(processMatchmakingQueues, MATCHMAKER_TICK_MS).unref?.();
+
+// =========================================================
 // SOCKET SERVER
 // =========================================================
 io.on('connection', socket => {
@@ -1191,6 +1653,48 @@ io.on('connection', socket => {
         friends: new Set(),
         friendRequests: new Set()
     };
+
+    // ---------------- V17 AUTO MATCHMAKING ----------------
+    socket.on('join_matchmaking_queue', options => {
+        enqueueMatchmakingSocket(socket, options || {});
+    });
+
+    socket.on('cancel_matchmaking', () => {
+        const pending = findPendingMatchForSocket(socket.id);
+        if (pending && pending.status === 'ready_check') {
+            failReadyCheck(pending.id, `${connectedPlayers[socket.id]?.username || 'A player'} cancelled the ready check.`, socket.id);
+            return;
+        }
+        removeSocketFromMatchmakingQueues(socket.id, { emitState: true });
+    });
+
+    socket.on('matchmaking_ready', ({ matchId, ready }) => {
+        const match = MATCHMAKING_MATCHES.get(matchId);
+        if (!match || match.status !== 'ready_check' || !match.entries.some(entry => entry.socketId === socket.id)) return;
+        if (ready === false) {
+            failReadyCheck(match.id, `${connectedPlayers[socket.id]?.username || 'A player'} declined the match.`, socket.id);
+            return;
+        }
+        match.ready.add(socket.id);
+        const payload = publicReadyMatch(match);
+        for (const entry of match.entries) io.to(entry.socketId).emit('match_ready_update', payload);
+        if (match.ready.size === match.entries.length) prepareMatchRoom(match);
+    });
+
+    socket.on('submit_match_room', ({ matchId, shareText }) => {
+        const match = MATCHMAKING_MATCHES.get(matchId);
+        if (!match || match.status !== 'waiting_for_host') return;
+        if (match.hostSocketId !== socket.id) return socket.emit('matchmaking_error', { message: 'Only the assigned room host can submit the room link.' });
+        const clean = extractVerifiedLookingRoomUrl(shareText);
+        if (!clean) return socket.emit('matchmaking_error', { message: 'Paste a valid Smash Karts room code, share text, or full share URL.' });
+        if (!finalizeMatchmakingRoom(match, clean, 'matched_host')) {
+            socket.emit('matchmaking_error', { message: 'That room could not be attached to the match.' });
+        }
+    });
+
+    socket.on('get_matchmaking_counts', () => {
+        socket.emit('matchmaking_counts', matchmakingCounts());
+    });
 
     socket.on('set_user_session', userData => {
         // V12: this legacy event is GUEST-ONLY. If an older client claims it
@@ -2382,20 +2886,79 @@ io.on('connection', socket => {
         const actor = connectedPlayers[socket.id];
         if (!isOwnerPlayer(actor)) return;
         socket.emit('admin_dashboard', {
-            users: Object.values(accounts).map(account => ({
-                ...publicAccountState(account),
-                avatar: profileFor(account.username).avatar || '',
-                online: !!findSocketByUsername(account.username),
-                badges: roleBadges(account.roles)
-            })).sort((a, b) => a.username.localeCompare(b.username)),
+            users: Object.values(accounts).map(account => {
+                const profile = profileFor(account.username);
+                const live = findSocketByUsername(account.username);
+                const sessionCount = Object.values(authSessionStore).filter(session => normalizeEmail(session?.email) === normalizeEmail(account.email)).length;
+                const groupCount = Object.values(groupStore).filter(group => (group.members || []).includes(account.username)).length;
+                return {
+                    ...publicAccountState(account),
+                    avatar: profile.avatar || '',
+                    online: !!live,
+                    visibleOnline: live ? live.isOnline !== false : profile.isOnline !== false,
+                    badges: roleBadges(account.roles),
+                    lastLoginAt: account.lastLoginAt || null,
+                    usernameHistory: Array.isArray(account.usernameHistory) ? account.usernameHistory.slice(-20) : [],
+                    settings: normalizeSavedSettings(profile.settings),
+                    friendsCount: (profile.friends || []).length,
+                    archivedChatsCount: (profile.archivedDMs || []).length,
+                    groupCount,
+                    sessionCount,
+                    socketId: live?.id || null,
+                    currentRoom: Array.from(activeRoomsMap.values()).find(room => room.players.some(member => member.id === live?.id))?.roomId || null
+                };
+            }).sort((a, b) => a.username.localeCompare(b.username)),
             reports: reportsForModerators(),
-            audit: auditLog.slice(0, 200),
+            audit: auditLog.slice(0, 300),
+            live: {
+                rooms: Array.from(activeRoomsMap.values()).map(room => ({
+                    roomId: room.roomId,
+                    hostName: room.hostName,
+                    mode: room.mode,
+                    queueType: room.queueType || 'casual',
+                    maxPlayers: room.maxPlayers,
+                    isPublic: room.isPublic !== false,
+                    createdAt: room.createdAt,
+                    smashUrl: room.smashUrl || '',
+                    readyCount: room.players.filter(member => member.ready).length,
+                    players: room.players.map(member => ({ id: member.id, name: member.name, ready: !!member.ready, isGuest: !!member.isGuest }))
+                })).sort((a,b)=>(b.createdAt||0)-(a.createdAt||0)),
+                queues: Array.from(MATCHMAKING_QUEUES.entries()).map(([key, entries]) => ({
+                    key,
+                    players: entries.filter(entry => !!connectedPlayers[entry.socketId]).map(entry => ({
+                        socketId: entry.socketId,
+                        username: connectedPlayers[entry.socketId]?.username || entry.username,
+                        rating: entry.rating,
+                        level: entry.level,
+                        joinedAt: entry.joinedAt,
+                        region: entry.region || 'auto'
+                    }))
+                })).filter(queue => queue.players.length),
+                matches: Array.from(MATCHMAKING_MATCHES.values()).filter(match => !['finished','cancelled'].includes(match.status)).map(match => ({
+                    matchId: match.id,
+                    mode: match.mode,
+                    queueType: match.queueType,
+                    status: match.status,
+                    createdAt: match.createdAt,
+                    readyCount: match.ready?.size || 0,
+                    totalPlayers: match.entries?.length || 0,
+                    roomId: match.roomId || null,
+                    smashUrl: match.smashUrl || '',
+                    players: (match.entries || []).map(entry => connectedPlayers[entry.socketId]?.username || entry.username)
+                })).sort((a,b)=>(b.createdAt||0)-(a.createdAt||0)),
+                guestsOnline: Object.values(connectedPlayers).filter(player => player.isGuest).map(player => ({ id: player.id, username: player.username, visible: player.isOnline !== false }))
+            },
             stats: {
                 accounts: Object.keys(accounts).length,
-                online: Object.values(connectedPlayers).filter(p => !p.isGuest).length,
+                onlineAccounts: Object.values(connectedPlayers).filter(p => !p.isGuest).length,
+                guestsOnline: Object.values(connectedPlayers).filter(p => p.isGuest).length,
+                liveRooms: activeRoomsMap.size,
+                queuedPlayers: Object.values(matchmakingCounts().queues).reduce((sum, count) => sum + Number(count || 0), 0),
+                pendingMatches: Array.from(MATCHMAKING_MATCHES.values()).filter(match => !['finished','cancelled'].includes(match.status)).length,
                 groups: Object.keys(groupStore).length,
                 tournaments: Object.keys(tournamentStore).length,
                 openReports: reportStore.filter(r => r.status === 'open').length,
+                roomBot: SMASH_ROOM_BOT_URL ? 'CONFIGURED' : 'MANUAL FALLBACK',
                 storage: cloudStorageReady ? 'UPSTASH PERSISTENT' : (dataDirectory === path.resolve('/var/data') ? 'DISK PERSISTENT' : 'LOCAL ONLY'),
                 lastCloudSave: lastCloudSaveAt ? new Date(lastCloudSaveAt).toISOString() : 'never',
                 cloudError: lastCloudError || 'none'
@@ -2517,6 +3080,110 @@ io.on('connection', socket => {
         socket.emit('admin_refresh');
     });
 
+    socket.on('admin_force_logout', ({ username }) => {
+        const actor = connectedPlayers[socket.id];
+        if (!isOwnerPlayer(actor)) return;
+        const account = accountByUsername(username);
+        if (!account || account.roles?.owner) return;
+        for (const [hash, session] of Object.entries(authSessionStore)) {
+            if (normalizeEmail(session?.email) === normalizeEmail(account.email)) delete authSessionStore[hash];
+        }
+        const targets = Object.values(connectedPlayers).filter(player => !player.isGuest && normalizeEmail(player.accountEmail) === normalizeEmail(account.email));
+        for (const target of targets) {
+            io.to(target.id).emit('session_revoked', { message: 'Your saved login session was signed out by the site owner.' });
+            const targetSocket = io.sockets.sockets.get(target.id);
+            if (targetSocket) setTimeout(() => targetSocket.disconnect(true), 100);
+        }
+        logAudit(actor, 'FORCE_LOGOUT', account.username, 'All saved sessions revoked');
+        saveHistory();
+        socket.emit('admin_refresh');
+    });
+
+    socket.on('admin_reset_settings', ({ username }) => {
+        const actor = connectedPlayers[socket.id];
+        if (!isOwnerPlayer(actor)) return;
+        const account = accountByUsername(username);
+        if (!account || account.roles?.owner) return;
+        const profile = profileFor(account.username);
+        profile.settings = defaultSavedSettings();
+        logAudit(actor, 'RESET_SETTINGS', account.username, 'Restored default account settings');
+        saveHistory();
+        const target = findSocketByUsername(account.username);
+        if (target) io.to(target.id).emit('saved_settings', { ...profile.settings });
+        socket.emit('admin_refresh');
+    });
+
+    socket.on('admin_set_streamer_live_for_user', ({ username, live }) => {
+        const actor = connectedPlayers[socket.id];
+        if (!isOwnerPlayer(actor)) return;
+        const account = accountByUsername(username);
+        if (!account || account.roles?.owner || !(account.roles?.streamer || account.roles?.tourneyHost)) return;
+        account.streamerLive = !!live;
+        logAudit(actor, 'STREAMER_LIVE_OVERRIDE', account.username, account.streamerLive ? 'LIVE' : 'OFF');
+        saveHistory();
+        broadcastOnlineUsers();
+        const target = findSocketByUsername(account.username);
+        if (target) io.to(target.id).emit('account_state_changed', publicAccountState(account));
+        socket.emit('admin_refresh');
+    });
+
+    socket.on('admin_close_live_room', ({ roomId, reason }) => {
+        const actor = connectedPlayers[socket.id];
+        if (!isOwnerPlayer(actor)) return;
+        const room = activeRoomsMap.get(roomId);
+        if (!room) return;
+        const message = String(reason || 'Room closed by site owner.').slice(0, 200);
+        for (const member of room.players.slice()) {
+            io.to(member.id).emit('moderation_notice', { message });
+            const memberSocket = io.sockets.sockets.get(member.id);
+            if (memberSocket) memberSocket.leave(roomId);
+        }
+        activeRoomsMap.delete(roomId);
+        logAudit(actor, 'CLOSE_LIVE_ROOM', room.hostName || roomId, `${room.mode || ''} ${roomId}`);
+        saveHistory();
+        io.emit('lobby_deleted', { roomId });
+        broadcastPublicRooms();
+        socket.emit('admin_refresh');
+    });
+
+    socket.on('admin_cancel_matchmaking_match', ({ matchId }) => {
+        const actor = connectedPlayers[socket.id];
+        if (!isOwnerPlayer(actor)) return;
+        const match = MATCHMAKING_MATCHES.get(matchId);
+        if (!match || ['finished','cancelled'].includes(match.status)) return;
+        if (match.timer) clearTimeout(match.timer);
+        match.status = 'cancelled';
+        for (const entry of match.entries || []) {
+            io.to(entry.socketId).emit('matchmaking_match_failed', { matchId, message: 'This matchmaking session was cancelled by the site owner.' });
+            io.to(entry.socketId).emit('matchmaking_state', { state: 'idle' });
+        }
+        logAudit(actor, 'CANCEL_MATCH', matchId, `${match.mode || ''} ${match.queueType || ''}`);
+        setTimeout(() => MATCHMAKING_MATCHES.delete(matchId), 1000);
+        broadcastMatchmakingCounts();
+        socket.emit('admin_refresh');
+    });
+
+    socket.on('admin_remove_from_queue', ({ socketId: targetSocketId }) => {
+        const actor = connectedPlayers[socket.id];
+        if (!isOwnerPlayer(actor)) return;
+        const target = connectedPlayers[targetSocketId];
+        if (!target) return;
+        removeSocketFromMatchmakingQueues(targetSocketId, { emitState: true });
+        logAudit(actor, 'REMOVE_FROM_QUEUE', target.username, targetSocketId);
+        socket.emit('admin_refresh');
+    });
+
+    socket.on('admin_export_state', () => {
+        const actor = connectedPlayers[socket.id];
+        if (!isOwnerPlayer(actor)) return;
+        logAudit(actor, 'EXPORT_BACKUP', actor.username, 'Downloaded platform JSON backup');
+        saveHistory();
+        socket.emit('admin_state_export', {
+            filename: `smash-arena-backup-${new Date().toISOString().slice(0,10)}.json`,
+            json: JSON.stringify(stateSnapshot(), null, 2)
+        });
+    });
+
     socket.on('resolve_report', ({ reportId, status }) => {
         const actor = connectedPlayers[socket.id];
         if (!isModeratorPlayer(actor)) return;
@@ -2532,6 +3199,17 @@ io.on('connection', socket => {
 
 
     socket.on('disconnect', () => {
+        removeSocketFromMatchmakingQueues(socket.id);
+        const pendingMatch = findPendingMatchForSocket(socket.id);
+        if (pendingMatch && pendingMatch.status === 'ready_check') {
+            failReadyCheck(pendingMatch.id, `${connectedPlayers[socket.id]?.username || 'A player'} disconnected.`, socket.id);
+        } else if (pendingMatch && ['creating_room','waiting_for_host'].includes(pendingMatch.status)) {
+            pendingMatch.status = 'cancelled';
+            for (const entry of pendingMatch.entries) {
+                if (entry.socketId !== socket.id) io.to(entry.socketId).emit('matchmaking_match_failed', { matchId: pendingMatch.id, message: 'A matched player disconnected before the room was ready.' });
+            }
+            MATCHMAKING_MATCHES.delete(pendingMatch.id);
+        }
         for (const roomId of Array.from(activeRoomsMap.keys())) {
             leaveLiveRoom(socket, roomId);
         }
@@ -5012,7 +5690,8 @@ function installV12Platform() {
             .v12-tournament-card{background:#173477;border:1px solid #ffffff1d;border-radius:14px;padding:12px;margin-bottom:9px}.v12-bracket{display:flex;gap:18px;overflow-x:auto;padding:10px 0}.v12-round{min-width:220px}.v12-match{background:#102653;border:1px solid #ffffff20;border-radius:10px;padding:8px;margin:8px 0}
             #guideModal .v12-guide-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.v12-guide-card{background:#102653;border:1px solid #ffffff1f;border-radius:14px;padding:12px}.v12-guide-card h4{color:#ffe238;font-weight:900;font-size:11px;margin-bottom:5px}.v12-guide-card p{font-size:10px;color:#c8d6f7;line-height:1.45}
             #v12QueueSelector{display:flex;gap:6px;padding:5px;background:#102653;border:1px solid #ffffff1d;border-radius:14px}.v12-queue-btn{flex:1;border:0;border-radius:10px;padding:8px;color:#dbe7ff;background:transparent;font:900 10px Inter,sans-serif;cursor:pointer}.v12-queue-btn.active{background:#ffd318;color:#142f75}
-            @media(max-width:760px){.v12-grid{grid-template-columns:1fr}.v12-list{max-height:200px}.v12-stat-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.v12-profile-hero{grid-template-columns:1fr;text-align:center}.v12-profile-avatar{margin:auto}#guideModal .v12-guide-grid{grid-template-columns:1fr}.v15-tourney-grid{grid-template-columns:1fr}.v15-schedule-row{grid-template-columns:1fr}.v15-tourney-wide{grid-column:auto}#adminModal .v12-grid{height:calc(94vh - 125px);overflow-y:auto}#adminModal .v12-list{max-height:220px}}
+            .v19-admin-tabs{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 10px}.v19-admin-tab{border:1px solid #ffffff20;border-radius:10px;background:#ffffff0d;color:#dbe7ff;padding:7px 10px;font:900 9px Inter,sans-serif;cursor:pointer}.v19-admin-tab.active{background:#ffd318;color:#142f75;border-color:#ffd318}.v19-admin-view{min-height:0}.v19-live-card{background:#0f245b;border:1px solid #ffffff1c;border-radius:13px;padding:10px;margin-bottom:8px}.v19-live-player{display:inline-flex;margin:2px 3px 2px 0;padding:3px 6px;border-radius:999px;background:#ffffff10;border:1px solid #ffffff18;font-size:9px}.v19-devlab-grid{display:grid;grid-template-columns:280px minmax(0,1fr);gap:12px;min-height:560px}.v19-devlab-controls,.v19-devlab-preview{background:#0d2258;border:1px solid #ffffff1d;border-radius:14px;padding:12px;min-height:0;overflow:auto}.v19-lab-option{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 0;border-bottom:1px solid #ffffff10;font-size:10px}.v19-preview-shell{border:1px solid #ffffff1d;border-radius:16px;overflow:hidden;background:#102653}.v19-preview-header{padding:10px 12px;background:#173477;display:flex;align-items:center;justify-content:space-between;gap:8px}.v19-preview-body{padding:12px}.v19-preview-card{background:#173477;border:1px solid #ffffff1a;border-radius:12px;padding:10px;margin-bottom:8px}.v19-device-phone{max-width:390px;margin:auto}.v19-device-tablet{max-width:760px;margin:auto}.v19-lab-banner{background:#6d28d9;color:white;border:1px solid #c4b5fd;border-radius:10px;padding:8px 10px;font:900 10px Inter,sans-serif;margin-bottom:10px}.v19-danger-note{color:#fca5a5;font-size:9px}.v19-account-meta{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px 10px;font-size:9px;color:#bfd0f5}.v19-account-meta b{color:white}.v19-code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:9px;overflow-wrap:anywhere;color:#bfdbfe}.v19-toolbar{display:flex;gap:6px;flex-wrap:wrap}
+            @media(max-width:760px){.v19-devlab-grid{grid-template-columns:1fr}.v19-account-meta{grid-template-columns:1fr}.v12-grid{grid-template-columns:1fr}.v12-list{max-height:200px}.v12-stat-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.v12-profile-hero{grid-template-columns:1fr;text-align:center}.v12-profile-avatar{margin:auto}#guideModal .v12-guide-grid{grid-template-columns:1fr}.v15-tourney-grid{grid-template-columns:1fr}.v15-schedule-row{grid-template-columns:1fr}.v15-tourney-wide{grid-column:auto}#adminModal .v12-grid{height:calc(94vh - 125px);overflow-y:auto}#adminModal .v12-list{max-height:220px}}
         `;
         document.head.appendChild(style);
     }
@@ -5038,6 +5717,16 @@ function installV12Platform() {
             document.getElementById('onlineCounterBtn')?.parentElement?.appendChild(ownerButton);
         }
         ownerButton.classList.toggle('hidden', !accountState?.roles?.owner);
+        let labButton = document.getElementById('ownerDevLabButton');
+        if (!labButton) {
+            labButton = document.createElement('button');
+            labButton.id = 'ownerDevLabButton';
+            labButton.textContent = '🧪 DEV LAB';
+            labButton.className = 'v12-small-btn purple';
+            labButton.onclick = () => window.openDevLab?.();
+            ownerButton.parentElement?.insertBefore(labButton, ownerButton.nextSibling);
+        }
+        labButton.classList.toggle('hidden', !accountState?.roles?.owner);
 
         let level = document.getElementById('headerLevelBadge');
         if (!level) {
@@ -6307,13 +6996,35 @@ function installV12Platform() {
     createFFAFromPage=function(){socket.emit('create_ffa_lobby',{maxPlayers:Number(document.getElementById('ffaMaxPlayers')?.value||12),isPublic:document.getElementById('ffaPrivacy')?.value!=='private',queueType});};
 
     // ------------------------------------------------------------------
-    // OWNER / DEV ADMIN PANEL
+    // OWNER / DEV ADMIN PANEL + SAFE DEV LAB
     // ------------------------------------------------------------------
+    let adminActiveTab = 'players';
+
+    function adminTabButton(id, label) {
+        return `<button class="v19-admin-tab${adminActiveTab===id?' active':''}" data-admin-tab="${id}">${label}</button>`;
+    }
+
     function injectAdminPanel() {
         if (document.getElementById('adminModal')) return;
         const modal=document.createElement('div');modal.id='adminModal';modal.className='hidden fixed inset-0 modal-overlay z-[100] flex items-center justify-center p-4 exclusive-modal';
-        modal.innerHTML=`<div class="v12-modal-card w-full max-w-6xl p-5 max-h-[94vh] overflow-hidden"><div class="flex justify-between items-center gap-3 mb-3"><div><h2 class="font-bungee text-xl text-purple-300">🛡 OWNER / DEV CONTROL CENTER</h2><p class="text-[10px] text-blue-200">PRIME only. Server-enforced permissions.</p></div><button id="adminClose" class="v12-small-btn red">✕ CLOSE</button></div><div id="adminStats" class="flex gap-2 flex-wrap mb-3"></div><div class="v12-grid"><div class="v12-list"><input id="adminSearch" class="smash-input w-full px-3 py-2 rounded-xl text-xs mb-2" placeholder="Search players..."><div id="adminUserList"></div></div><div class="v12-detail"><div id="adminUserDetail" class="text-xs text-blue-200">Select an account.</div><div class="v12-section"><div class="v12-section-title">Reports</div><div id="adminReports" class="max-h-44 overflow-y-auto"></div></div><div class="v12-section"><div class="v12-section-title">Audit log</div><div id="adminAudit" class="max-h-40 overflow-y-auto"></div></div></div></div></div>`;
-        document.body.appendChild(modal);modal.querySelector('#adminClose').onclick=()=>modal.classList.add('hidden');modal.querySelector('#adminSearch').oninput=()=>renderAdminUsers(window.__v12AdminData);
+        modal.innerHTML=`<div class="v12-modal-card w-full max-w-7xl p-5 max-h-[94vh] overflow-hidden"><div class="flex justify-between items-center gap-3 mb-3"><div><h2 class="font-bungee text-xl text-purple-300">🛡 OWNER / DEV CONTROL CENTER</h2><p class="text-[10px] text-blue-200">PRIME only · server-enforced authority · live platform controls.</p></div><div class="v19-toolbar"><button id="adminOpenLab" class="v12-small-btn purple">🧪 DEV LAB</button><button id="adminRefresh" class="v12-small-btn">↻ REFRESH</button><button id="adminClose" class="v12-small-btn red">✕ CLOSE</button></div></div><div id="adminStats" class="flex gap-2 flex-wrap mb-3"></div><div id="adminTabs" class="v19-admin-tabs"></div><div id="adminViewHost" class="flex-1 min-h-0 overflow-hidden"></div></div>`;
+        document.body.appendChild(modal);
+        modal.querySelector('#adminClose').onclick=()=>modal.classList.add('hidden');
+        modal.querySelector('#adminRefresh').onclick=()=>socket.emit('admin_get_dashboard');
+        modal.querySelector('#adminOpenLab').onclick=()=>window.openDevLab?.();
+        renderAdminShell();
+    }
+
+    function renderAdminShell() {
+        const tabs=document.getElementById('adminTabs');
+        if(tabs){tabs.innerHTML=[adminTabButton('players','PLAYERS'),adminTabButton('live','LIVE SESSIONS'),adminTabButton('reports','REPORTS'),adminTabButton('audit','AUDIT LOG'),adminTabButton('tools','OWNER TOOLS')].join('');tabs.querySelectorAll('[data-admin-tab]').forEach(btn=>btn.onclick=()=>{adminActiveTab=btn.dataset.adminTab;renderAdminShell();renderAdminDashboard(window.__v12AdminData);});}
+        const host=document.getElementById('adminViewHost');if(!host)return;
+        if(adminActiveTab==='players')host.innerHTML=`<div class="v12-grid"><div class="v12-list"><input id="adminSearch" class="smash-input w-full px-3 py-2 rounded-xl text-xs mb-2" placeholder="Search username, email, account ID..."><div id="adminUserList"></div></div><div class="v12-detail"><div id="adminUserDetail" class="text-xs text-blue-200">Select an account.</div></div></div>`;
+        else if(adminActiveTab==='live')host.innerHTML=`<div class="v12-detail h-full"><div class="v12-section-title">Live rooms, matchmaking queues & pending matches</div><div id="adminLiveSessions"></div></div>`;
+        else if(adminActiveTab==='reports')host.innerHTML=`<div class="v12-detail h-full"><div class="v12-section-title">Moderation reports</div><div id="adminReports"></div></div>`;
+        else if(adminActiveTab==='audit')host.innerHTML=`<div class="v12-detail h-full"><div class="v12-section-title">Audit log</div><div id="adminAudit"></div></div>`;
+        else host.innerHTML=`<div class="v12-detail h-full"><div id="adminOwnerTools"></div></div>`;
+        document.getElementById('adminSearch')?.addEventListener('input',()=>renderAdminUsers(window.__v12AdminData));
     }
 
     window.openAdminPanel = function () {
@@ -6327,32 +7038,74 @@ function installV12Platform() {
         if(!data)return;window.__v12AdminData=data;
         const list=document.getElementById('adminUserList');if(!list)return;list.replaceChildren();
         const q=String(document.getElementById('adminSearch')?.value||'').toLowerCase();
-        (data.users||[]).filter(u=>!q||u.username.toLowerCase().includes(q)||u.email.toLowerCase().includes(q)).forEach(user=>{const btn=document.createElement('button');btn.className=`v12-user-row${adminSelectedUsername===user.username?' active':''}`;btn.innerHTML=`<div><div class="font-black text-xs">${escapeHTML(user.username)} <span class="text-yellow-300">L${user.level}</span></div><div class="text-[9px] text-blue-200">${escapeHTML(user.email)} · ${user.online?'online':'offline'}</div><div class="flex gap-1 mt-1">${badgeHTML(user.roles)}</div></div><span>›</span>`;btn.onclick=()=>{adminSelectedUsername=user.username;renderAdminUsers(data);renderAdminDetail(user);};list.appendChild(btn);});
+        (data.users||[]).filter(u=>!q||String(u.username||'').toLowerCase().includes(q)||String(u.email||'').toLowerCase().includes(q)||String(u.id||'').toLowerCase().includes(q)).forEach(user=>{const btn=document.createElement('button');btn.className=`v12-user-row${adminSelectedUsername===user.username?' active':''}`;btn.innerHTML=`<div class="min-w-0"><div class="font-black text-xs truncate">${escapeHTML(user.username)} <span class="text-yellow-300">L${user.level}</span></div><div class="text-[9px] text-blue-200 truncate">${escapeHTML(user.email)} · ${user.online?'online':'offline'} · ${user.sessionCount||0} session${user.sessionCount===1?'':'s'}</div><div class="flex gap-1 mt-1 flex-wrap">${badgeHTML(user.roles)}</div></div><span>›</span>`;btn.onclick=()=>{adminSelectedUsername=user.username;renderAdminUsers(data);renderAdminDetail(user);};list.appendChild(btn);});
     }
+
+    function formatAdminDate(value){if(!value)return'Never';try{return new Date(value).toLocaleString();}catch{return String(value);}}
 
     function renderAdminDetail(user) {
         const box=document.getElementById('adminUserDetail');if(!box)return;
-        if(user.roles?.owner){box.innerHTML=`<div class="v12-section"><div class="font-bungee text-lg text-purple-300">${escapeHTML(user.username)} · OWNER / DEV</div><p class="text-xs text-blue-200 mt-2">The OWNER role cannot be edited, banned, muted, renamed, or transferred from this panel.</p></div>`;return;}
-        box.innerHTML=`<div class="flex justify-between gap-3"><div><div class="font-bungee text-lg text-white">${escapeHTML(user.username)}</div><div class="text-[10px] text-blue-200">${escapeHTML(user.email)}</div></div><div class="flex gap-1">${badgeHTML(user.roles)}</div></div>
+        const profileMeta=`<div class="v19-account-meta"><div><b>Account ID</b><div class="v19-code">${escapeHTML(user.id||'')}</div></div><div><b>Created</b><div>${escapeHTML(formatAdminDate(user.createdAt))}</div></div><div><b>Last login</b><div>${escapeHTML(formatAdminDate(user.lastLoginAt))}</div></div><div><b>Saved sessions</b><div>${user.sessionCount||0}</div></div><div><b>Friends</b><div>${user.friendsCount||0}</div></div><div><b>Groups</b><div>${user.groupCount||0}</div></div><div><b>Archived chats</b><div>${user.archivedChatsCount||0}</div></div><div><b>Current room</b><div class="v19-code">${escapeHTML(user.currentRoom||'None')}</div></div></div>`;
+        if(user.roles?.owner){box.innerHTML=`<div class="v12-section"><div class="font-bungee text-lg text-purple-300">${escapeHTML(user.username)} · OWNER / DEV</div><p class="text-xs text-blue-200 mt-2">Protected owner account. It cannot be demoted, banned, muted, force-renamed, or force-logged-out from this panel.</p>${profileMeta}</div><div class="v12-section"><div class="v12-section-title">OWNER TESTING</div><button id="ownerOpenLabFromProfile" class="v12-small-btn purple">OPEN DEV LAB</button></div>`;box.querySelector('#ownerOpenLabFromProfile').onclick=()=>window.openDevLab?.();return;}
+        box.innerHTML=`<div class="flex justify-between gap-3"><div><div class="font-bungee text-lg text-white">${escapeHTML(user.username)}</div><div class="text-[10px] text-blue-200">${escapeHTML(user.email)}</div></div><div class="flex gap-1 flex-wrap">${badgeHTML(user.roles)}</div></div>
+        <div class="v12-section"><div class="v12-section-title">Account information</div>${profileMeta}<details class="mt-2"><summary class="text-[10px] text-yellow-300 cursor-pointer font-black">USERNAME HISTORY</summary><div class="mt-1 text-[9px] text-blue-200">${(user.usernameHistory||[]).length?(user.usernameHistory||[]).map(item=>`<div>${escapeHTML(item.username||'')} · ${escapeHTML(formatAdminDate(item.changedAt))} · by ${escapeHTML(item.changedBy||'self')}</div>`).join(''):'No previous usernames.'}</div></details></div>
         <div class="v12-section"><div class="v12-section-title">Permissions</div><label class="mr-3"><input id="admMod" type="checkbox" ${user.roles?.moderator?'checked':''}> MOD</label><label class="mr-3"><input id="admStreamer" type="checkbox" ${user.roles?.streamer?'checked':''}> STREAMER</label><label><input id="admTourney" type="checkbox" ${user.roles?.tourneyHost?'checked':''}> TOURNEY HOST</label><button id="admSaveRoles" class="v12-small-btn purple ml-2">SAVE ROLES</button></div>
-        <div class="v12-section"><div class="v12-section-title">Moderation</div><input id="admReason" class="smash-input w-full px-2 py-2 rounded-lg text-xs" placeholder="Reason / note"><div class="flex gap-1 flex-wrap mt-2"><button data-action="warn" class="v12-small-btn yellow">WARN</button><button data-action="mute" data-duration="600000" class="v12-small-btn">MUTE 10M</button><button data-action="mute" data-duration="3600000" class="v12-small-btn">MUTE 1H</button><button data-action="mute" data-duration="86400000" class="v12-small-btn">MUTE 24H</button><button data-action="unmute" class="v12-small-btn">UNMUTE</button><button data-action="kick" class="v12-small-btn red">KICK</button><button data-action="ban" data-duration="3600000" class="v12-small-btn red">BAN 1H</button><button data-action="ban" data-duration="86400000" class="v12-small-btn red">BAN 24H</button><button data-action="ban" data-duration="604800000" class="v12-small-btn red">BAN 7D</button><button data-action="ban" data-duration="permanent" class="v12-small-btn red">PERMA BAN</button><button data-action="unban" class="v12-small-btn green">UNBAN</button><button data-action="clear_warnings" class="v12-small-btn">CLEAR WARNINGS</button><button data-action="reset_avatar" class="v12-small-btn">RESET PFP</button></div><div class="text-[10px] text-blue-200 mt-2">Warnings: ${user.warnings||0} · Muted: ${user.mutedUntil?String(user.mutedUntil):'No'} · Banned: ${user.bannedUntil?String(user.bannedUntil):'No'}</div></div>
+        <div class="v12-section"><div class="v12-section-title">Moderation</div><input id="admReason" class="smash-input w-full px-2 py-2 rounded-lg text-xs" placeholder="Reason / moderation note"><div class="flex gap-1 flex-wrap mt-2"><button data-action="warn" class="v12-small-btn yellow">WARN</button><button data-action="mute" data-duration="600000" class="v12-small-btn">MUTE 10M</button><button data-action="mute" data-duration="3600000" class="v12-small-btn">MUTE 1H</button><button data-action="mute" data-duration="86400000" class="v12-small-btn">MUTE 24H</button><button data-action="unmute" class="v12-small-btn">UNMUTE</button><button data-action="kick" class="v12-small-btn red">KICK</button><button data-action="ban" data-duration="3600000" class="v12-small-btn red">BAN 1H</button><button data-action="ban" data-duration="86400000" class="v12-small-btn red">BAN 24H</button><button data-action="ban" data-duration="604800000" class="v12-small-btn red">BAN 7D</button><button data-action="ban" data-duration="permanent" class="v12-small-btn red">PERMA BAN</button><button data-action="unban" class="v12-small-btn green">UNBAN</button><button data-action="clear_warnings" class="v12-small-btn">CLEAR WARNINGS</button><button data-action="reset_avatar" class="v12-small-btn">RESET PFP</button></div><div class="text-[10px] text-blue-200 mt-2">Warnings: ${user.warnings||0} · Muted: ${user.mutedUntil?escapeHTML(formatAdminDate(user.mutedUntil)):'No'} · Banned: ${user.bannedUntil?escapeHTML(user.bannedUntil===-1?'Permanent':formatAdminDate(user.bannedUntil)):'No'}</div></div>
         <div class="v12-section"><div class="v12-section-title">Progress / skill</div><div class="grid grid-cols-3 gap-2"><input id="admLevel" type="number" min="1" max="200" value="${user.level}" class="smash-input px-2 py-2 rounded-lg text-xs"><input id="admR1" type="number" value="${user.rating1v1}" class="smash-input px-2 py-2 rounded-lg text-xs"><input id="admRF" type="number" value="${user.ratingFFA}" class="smash-input px-2 py-2 rounded-lg text-xs"></div><button id="admSaveProgress" class="v12-small-btn green mt-2">SAVE LEVEL + RATINGS</button></div>
-        <div class="v12-section"><div class="v12-section-title">Account tools</div><button id="admRename" class="v12-small-btn">FORCE USERNAME</button> <button id="admProfile" class="v12-small-btn">OPEN PROFILE</button></div>`;
+        <div class="v12-section"><div class="v12-section-title">Account tools</div><div class="v19-toolbar"><button id="admRename" class="v12-small-btn">FORCE USERNAME</button><button id="admProfile" class="v12-small-btn">OPEN PROFILE</button><button id="admLogout" class="v12-small-btn red">FORCE LOGOUT ALL DEVICES</button><button id="admResetSettings" class="v12-small-btn">RESET SETTINGS</button>${user.roles?.streamer||user.roles?.tourneyHost?`<button id="admLiveToggle" class="v12-small-btn ${user.streamerLive?'red':'green'}">${user.streamerLive?'SET NOT LIVE':'SET LIVE'}</button>`:''}</div><div class="text-[9px] text-blue-300 mt-2">Saved settings: ${escapeHTML(JSON.stringify(user.settings||{}))}</div></div>`;
         box.querySelector('#admSaveRoles').onclick=()=>socket.emit('admin_set_roles',{username:user.username,roles:{moderator:box.querySelector('#admMod').checked,streamer:box.querySelector('#admStreamer').checked,tourneyHost:box.querySelector('#admTourney').checked}});
         box.querySelectorAll('[data-action]').forEach(btn=>btn.onclick=()=>{const reason=box.querySelector('#admReason').value||'';const action=btn.dataset.action;if((action==='ban'||action==='kick')&&!reason&&!confirm('No reason entered. Continue?'))return;socket.emit('admin_moderation_action',{username:user.username,action,duration:btn.dataset.duration,reason});});
         box.querySelector('#admSaveProgress').onclick=()=>socket.emit('admin_set_progress',{username:user.username,level:Number(box.querySelector('#admLevel').value),rating1v1:Number(box.querySelector('#admR1').value),ratingFFA:Number(box.querySelector('#admRF').value)});
         box.querySelector('#admRename').onclick=()=>{const next=prompt('Force new username for '+user.username+':');if(next)socket.emit('admin_force_username',{username:user.username,newUsername:next});};
         box.querySelector('#admProfile').onclick=()=>{document.getElementById('adminModal').classList.add('hidden');openPlayerProfile(user.username);};
+        box.querySelector('#admLogout').onclick=()=>{if(confirm(`Force ${user.username} to sign out on every device?`))socket.emit('admin_force_logout',{username:user.username});};
+        box.querySelector('#admResetSettings').onclick=()=>{if(confirm(`Reset ${user.username}'s saved settings to defaults?`))socket.emit('admin_reset_settings',{username:user.username});};
+        const liveToggle=box.querySelector('#admLiveToggle');if(liveToggle)liveToggle.onclick=()=>socket.emit('admin_set_streamer_live_for_user',{username:user.username,live:!user.streamerLive});
     }
 
-    function renderAdminDashboard(data) {
-        const stats=document.getElementById('adminStats');if(stats)stats.innerHTML=Object.entries(data.stats||{}).map(([k,v])=>`<span class="v12-pill">${escapeHTML(k)}: ${v}</span>`).join('');
-        renderAdminUsers(data);
-        if(adminSelectedUsername){const user=(data.users||[]).find(u=>u.username===adminSelectedUsername);if(user)renderAdminDetail(user);}
-        const reports=document.getElementById('adminReports');if(reports){reports.replaceChildren();(data.reports||[]).slice(0,50).forEach(report=>{const row=document.createElement('div');row.className='p-2 border-b border-white/10 text-[10px]';row.innerHTML=`<div><b>${escapeHTML(report.reporter)}</b> reported <b>${escapeHTML(report.reportedUser)}</b> · ${escapeHTML(report.location)} · <span class="v12-pill">${escapeHTML(report.status)}</span></div><div class="text-blue-200 mt-1">${escapeHTML(report.reason)}</div><div class="mt-1">${(report.context||[]).map(c=>`<div>${escapeHTML(c.senderUsername)}: ${escapeHTML(c.message)}</div>`).join('')}</div>`;if(report.status==='open'){const a=document.createElement('div');a.className='flex gap-1 mt-2';['resolved','dismissed'].forEach(status=>{const b=document.createElement('button');b.className='v12-small-btn';b.textContent=status.toUpperCase();b.onclick=()=>socket.emit('resolve_report',{reportId:report.id,status});a.appendChild(b);});row.appendChild(a);}reports.appendChild(row);});}
-        const audit=document.getElementById('adminAudit');if(audit){audit.innerHTML=(data.audit||[]).slice(0,100).map(item=>`<div class="text-[9px] py-1 border-b border-white/10"><b>${escapeHTML(item.actor)}</b> · ${escapeHTML(item.action)} · ${escapeHTML(item.target)}<div class="text-blue-300">${new Date(item.timestamp).toLocaleString()} ${escapeHTML(item.details||'')}</div></div>`).join('');}
+    function renderAdminLive(data){
+        const root=document.getElementById('adminLiveSessions');if(!root)return;root.replaceChildren();const live=data?.live||{};
+        const summary=document.createElement('div');summary.className='v12-section';summary.innerHTML=`<div class="v12-section-title">Runtime</div><div class="flex gap-2 flex-wrap"><span class="v12-pill">${(live.rooms||[]).length} live rooms</span><span class="v12-pill">${(live.matches||[]).length} pending matches</span><span class="v12-pill">${(live.queues||[]).reduce((n,q)=>n+(q.players||[]).length,0)} queued</span><span class="v12-pill">${(live.guestsOnline||[]).length} guests</span></div><p class="text-[9px] text-blue-300 mt-2">The Room Bot can only provide gameplay video after the spectator worker is actually configured. This page never secretly captures a player's screen.</p>`;root.appendChild(summary);
+        const roomSec=document.createElement('div');roomSec.className='v12-section';roomSec.innerHTML='<div class="v12-section-title">LIVE WEBSITE LOBBIES</div>';if(!(live.rooms||[]).length)roomSec.innerHTML+='<p class="text-[10px] text-blue-200">No active lobbies.</p>';(live.rooms||[]).forEach(room=>{const card=document.createElement('div');card.className='v19-live-card';card.innerHTML=`<div class="flex justify-between gap-2"><div><b>${escapeHTML(String(room.mode||'').toUpperCase())}</b> · ${escapeHTML(room.queueType||'casual')} · ${room.players.length}/${room.maxPlayers}<div class="text-[9px] text-blue-200">Host ${escapeHTML(room.hostName||'')} · ${room.isPublic?'PUBLIC':'PRIVATE'} · ${escapeHTML(formatAdminDate(room.createdAt))}</div></div><button class="v12-small-btn red">CLOSE ROOM</button></div><div class="mt-2">${room.players.map(p=>`<span class="v19-live-player">${escapeHTML(p.name)}${p.ready?' ✓':''}</span>`).join('')}</div><div class="v19-code mt-2">${escapeHTML(room.smashUrl||'No Smash Karts URL yet')}</div>`;card.querySelector('button').onclick=()=>{if(confirm('Close this live lobby for everyone?'))socket.emit('admin_close_live_room',{roomId:room.roomId,reason:'Lobby closed by PRIME / site owner.'});};roomSec.appendChild(card);});root.appendChild(roomSec);
+        const queueSec=document.createElement('div');queueSec.className='v12-section';queueSec.innerHTML='<div class="v12-section-title">MATCHMAKING QUEUES</div>';if(!(live.queues||[]).length)queueSec.innerHTML+='<p class="text-[10px] text-blue-200">Nobody is waiting in a queue.</p>';(live.queues||[]).forEach(queue=>{const card=document.createElement('div');card.className='v19-live-card';card.innerHTML=`<b class="text-xs">${escapeHTML(queue.key)}</b>`;(queue.players||[]).forEach(player=>{const row=document.createElement('div');row.className='flex justify-between items-center gap-2 py-1 border-b border-white/10 text-[9px]';row.innerHTML=`<span>${escapeHTML(player.username)} · ${player.rating} rating · L${player.level} · waiting ${Math.max(0,Math.floor((Date.now()-player.joinedAt)/1000))}s</span><button class="v12-small-btn red">REMOVE</button>`;row.querySelector('button').onclick=()=>socket.emit('admin_remove_from_queue',{socketId:player.socketId});card.appendChild(row);});queueSec.appendChild(card);});root.appendChild(queueSec);
+        const matchSec=document.createElement('div');matchSec.className='v12-section';matchSec.innerHTML='<div class="v12-section-title">PENDING / ACTIVE MATCHMAKER SESSIONS</div>';if(!(live.matches||[]).length)matchSec.innerHTML+='<p class="text-[10px] text-blue-200">No pending automatic matches.</p>';(live.matches||[]).forEach(match=>{const card=document.createElement('div');card.className='v19-live-card';card.innerHTML=`<div class="flex justify-between gap-2"><div><b>${escapeHTML(match.mode)} · ${escapeHTML(match.queueType)}</b><div class="text-[9px] text-blue-200">${escapeHTML(match.status)} · ready ${match.readyCount}/${match.totalPlayers}</div><div class="text-[9px] mt-1">${(match.players||[]).map(escapeHTML).join(' vs ')}</div></div><button class="v12-small-btn red">CANCEL MATCH</button></div>`;card.querySelector('button').onclick=()=>{if(confirm('Cancel this matchmaking session?'))socket.emit('admin_cancel_matchmaking_match',{matchId:match.matchId});};matchSec.appendChild(card);});root.appendChild(matchSec);
     }
-    socket.on('admin_dashboard',renderAdminDashboard);socket.on('admin_refresh',()=>socket.emit('admin_get_dashboard'));socket.on('admin_error',data=>showToast(data?.message||'Admin action failed.','❌'));socket.on('moderation_action_complete',data=>{const labels={ban:'Banned',unban:'Unbanned',kick:'Kicked',mute:'Muted',unmute:'Unmuted',warn:'Warned',clear_warnings:'Warnings cleared for',reset_avatar:'PFP reset for'};showToast(`${labels[data?.action]||'Updated'} ${data?.username||'player'}.`,'🛡️');if(lastOpenedProfileUsername&&String(lastOpenedProfileUsername||'').toLowerCase()===String(data?.username||'').toLowerCase())setTimeout(()=>socket.emit('get_public_profile',{username:lastOpenedProfileUsername}),150);});socket.on('moderation_report_received',()=>{if(accountState?.roles?.owner)showToast('New moderation report.','🛡️');});
+
+    function renderAdminReports(data){const reports=document.getElementById('adminReports');if(!reports)return;reports.replaceChildren();if(!(data?.reports||[]).length){reports.innerHTML='<p class="text-[10px] text-blue-200">No reports.</p>';return;}(data.reports||[]).forEach(report=>{const row=document.createElement('div');row.className='v19-live-card text-[10px]';row.innerHTML=`<div><b>${escapeHTML(report.reporter)}</b> reported <b>${escapeHTML(report.reportedUser)}</b> · ${escapeHTML(report.location)} · <span class="v12-pill">${escapeHTML(report.status)}</span></div><div class="text-blue-200 mt-1">${escapeHTML(report.reason)}</div><div class="mt-1">${(report.context||[]).map(c=>`<div>${escapeHTML(c.senderUsername)}: ${escapeHTML(c.message)}</div>`).join('')}</div>`;if(report.status==='open'){const a=document.createElement('div');a.className='flex gap-1 mt-2';['resolved','dismissed'].forEach(status=>{const b=document.createElement('button');b.className='v12-small-btn';b.textContent=status.toUpperCase();b.onclick=()=>socket.emit('resolve_report',{reportId:report.id,status});a.appendChild(b);});row.appendChild(a);}reports.appendChild(row);});}
+
+    function renderAdminAudit(data){const audit=document.getElementById('adminAudit');if(!audit)return;audit.innerHTML=(data?.audit||[]).map(item=>`<div class="text-[9px] py-2 border-b border-white/10"><b>${escapeHTML(item.actor)}</b> · ${escapeHTML(item.action)} · ${escapeHTML(item.target)}<div class="text-blue-300">${new Date(item.timestamp).toLocaleString()} ${escapeHTML(item.details||'')}</div></div>`).join('')||'<p class="text-[10px] text-blue-200">No audit entries.</p>';}
+
+    function renderAdminTools(data){const box=document.getElementById('adminOwnerTools');if(!box)return;const stats=data?.stats||{};box.innerHTML=`<div class="v12-section"><div class="v12-section-title">Platform health</div><div class="flex gap-2 flex-wrap">${Object.entries(stats).map(([k,v])=>`<span class="v12-pill">${escapeHTML(k)}: ${escapeHTML(String(v))}</span>`).join('')}</div><p class="text-[9px] text-blue-300 mt-2">Persistent data should say UPSTASH PERSISTENT before inviting real users.</p></div><div class="v12-section"><div class="v12-section-title">Owner utilities</div><div class="v19-toolbar"><button id="adminExportBackup" class="v12-small-btn green">DOWNLOAD FULL DATA BACKUP</button><button id="adminToolLab" class="v12-small-btn purple">OPEN DEV LAB</button><button id="adminToolRefresh" class="v12-small-btn">REFRESH LIVE DATA</button></div><p class="v19-danger-note mt-2">DEV LAB uses fake local test data. It does not change accounts, bans, ratings, friends, messages, or live matchmaking.</p></div><div class="v12-section"><div class="v12-section-title">Room bot</div><p class="text-[10px] text-blue-200">Status: <b>${escapeHTML(stats.roomBot||'UNKNOWN')}</b></p><p class="text-[9px] text-blue-300 mt-1">The 1v1 matchmaker works without the bot by using the temporary host/paste fallback. Automatic spectator creation stays dormant until you configure the separate worker later.</p></div>`;box.querySelector('#adminExportBackup').onclick=()=>socket.emit('admin_export_state');box.querySelector('#adminToolLab').onclick=()=>window.openDevLab?.();box.querySelector('#adminToolRefresh').onclick=()=>socket.emit('admin_get_dashboard');}
+
+    function renderAdminDashboard(data) {
+        if(!data)return;window.__v12AdminData=data;
+        const stats=document.getElementById('adminStats');if(stats)stats.innerHTML=Object.entries(data.stats||{}).map(([k,v])=>`<span class="v12-pill">${escapeHTML(k)}: ${escapeHTML(String(v))}</span>`).join('');
+        if(adminActiveTab==='players'){renderAdminUsers(data);if(adminSelectedUsername){const user=(data.users||[]).find(u=>u.username===adminSelectedUsername);if(user)renderAdminDetail(user);}}
+        else if(adminActiveTab==='live')renderAdminLive(data);
+        else if(adminActiveTab==='reports')renderAdminReports(data);
+        else if(adminActiveTab==='audit')renderAdminAudit(data);
+        else renderAdminTools(data);
+    }
+
+    socket.on('admin_dashboard',renderAdminDashboard);
+    socket.on('admin_refresh',()=>socket.emit('admin_get_dashboard'));
+    socket.on('admin_error',data=>showToast(data?.message||'Admin action failed.','❌'));
+    socket.on('moderation_action_complete',data=>{const labels={ban:'Banned',unban:'Unbanned',kick:'Kicked',mute:'Muted',unmute:'Unmuted',warn:'Warned',clear_warnings:'Warnings cleared for',reset_avatar:'PFP reset for'};showToast(`${labels[data?.action]||'Updated'} ${data?.username||'player'}.`,'🛡️');if(lastOpenedProfileUsername&&String(lastOpenedProfileUsername||'').toLowerCase()===String(data?.username||'').toLowerCase())setTimeout(()=>socket.emit('get_public_profile',{username:lastOpenedProfileUsername}),150);});
+    socket.on('moderation_report_received',()=>{if(accountState?.roles?.owner)showToast('New moderation report.','🛡️');});
+    socket.on('session_revoked',data=>{showToast(data?.message||'Your session was signed out.','🔒');localStorage.removeItem(SECURE_SESSION_KEY);setTimeout(()=>location.reload(),400);});
+    socket.on('admin_state_export',data=>{if(!data?.json)return;const blob=new Blob([data.json],{type:'application/json'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=data.filename||'smash-arena-backup.json';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);showToast('Backup downloaded.','💾');});
+
+    const DEV_LAB_DEFAULTS={persona:'beginner',device:'desktop',network:'normal',scenario:'dashboard',fakeQueue:true,fakeLobbies:true,fakeDMs:true,fakeGroups:true,fakeTournament:true,fakeReports:false,fakeStreamer:false};
+    let devLabState={...DEV_LAB_DEFAULTS};
+
+    function injectDevLab(){
+        if(document.getElementById('devLabModal'))return;const modal=document.createElement('div');modal.id='devLabModal';modal.className='hidden fixed inset-0 modal-overlay z-[110] flex items-center justify-center p-4 exclusive-modal';modal.innerHTML=`<div class="v12-modal-card w-full max-w-7xl p-5 max-h-[94vh] overflow-hidden flex flex-col"><div class="flex justify-between items-center gap-3 mb-3"><div><h2 class="font-bungee text-xl text-purple-300">🧪 DEV LAB</h2><p class="text-[10px] text-blue-200">Safe fake-data sandbox. PRIME stays OWNER underneath and live data is never changed.</p></div><div class="v19-toolbar"><button id="devLabReset" class="v12-small-btn">RESET</button><button id="devLabClose" class="v12-small-btn red">✕ CLOSE</button></div></div><div class="v19-devlab-grid flex-1 min-h-0"><div class="v19-devlab-controls"><label class="dock-label">Preview as</label><select id="devLabPersona" class="smash-input w-full px-3 py-2 rounded-xl text-xs mb-3"><option value="loggedout">Logged Out</option><option value="guest">Guest</option><option value="beginner">Brand-New Beginner</option><option value="normal">Normal Player</option><option value="level1">Level 1 Player</option><option value="level200">Level 200 Player</option><option value="moderator">Moderator</option><option value="streamer">Streamer</option><option value="tourney">Tourney Host</option><option value="muted">Muted Player</option><option value="banned">Banned Player</option></select><label class="dock-label">Device</label><select id="devLabDevice" class="smash-input w-full px-3 py-2 rounded-xl text-xs mb-3"><option value="desktop">Desktop</option><option value="tablet">Tablet</option><option value="phone">Phone</option></select><label class="dock-label">Network</label><select id="devLabNetwork" class="smash-input w-full px-3 py-2 rounded-xl text-xs mb-3"><option value="normal">Normal</option><option value="slow">Slow / Laggy</option><option value="offline">Disconnected</option></select><label class="dock-label">Screen / scenario</label><select id="devLabScenario" class="smash-input w-full px-3 py-2 rounded-xl text-xs mb-3"><option value="dashboard">Dashboard</option><option value="matchfound">Match Found</option><option value="messages">Messages</option><option value="tournament">Tournament</option><option value="firstlogin">First Login Help</option><option value="moderation">Moderation Notice</option></select><div id="devLabToggles"></div></div><div class="v19-devlab-preview"><div class="v19-lab-banner">TEST MODE · FAKE DATA ONLY · NOTHING HERE SAVES</div><div id="devLabPreview"></div></div></div></div>`;document.body.appendChild(modal);modal.querySelector('#devLabClose').onclick=()=>modal.classList.add('hidden');modal.querySelector('#devLabReset').onclick=()=>{devLabState={...DEV_LAB_DEFAULTS};syncDevLabControls();renderDevLabPreview();};['Persona','Device','Network','Scenario'].forEach(name=>modal.querySelector('#devLab'+name)?.addEventListener('change',e=>{devLabState[name.toLowerCase()]=e.target.value;renderDevLabPreview();}));const toggles=modal.querySelector('#devLabToggles');[['fakeQueue','Fake queue counts'],['fakeLobbies','Fake 12/24 player lobbies'],['fakeDMs','Fake unread DMs'],['fakeGroups','Fake 50-person group'],['fakeTournament','Fake public/private tournament'],['fakeReports','Fake moderation reports'],['fakeStreamer','Fake streamer LIVE']].forEach(([key,label])=>{const row=document.createElement('label');row.className='v19-lab-option';row.innerHTML=`<span>${label}</span><input type="checkbox" data-lab-toggle="${key}">`;row.querySelector('input').onchange=e=>{devLabState[key]=e.target.checked;renderDevLabPreview();};toggles.appendChild(row);});syncDevLabControls();renderDevLabPreview();
+    }
+
+    function syncDevLabControls(){const root=document.getElementById('devLabModal');if(!root)return;root.querySelector('#devLabPersona').value=devLabState.persona;root.querySelector('#devLabDevice').value=devLabState.device;root.querySelector('#devLabNetwork').value=devLabState.network;root.querySelector('#devLabScenario').value=devLabState.scenario;root.querySelectorAll('[data-lab-toggle]').forEach(el=>el.checked=!!devLabState[el.dataset.labToggle]);}
+    function labPersona(){const map={loggedout:{name:'Not signed in',level:null,badges:[],status:'LOGGED OUT'},guest:{name:'Guest-X7K2',level:1,badges:['GUEST'],status:'GUEST'},beginner:{name:'NewKart42',level:1,badges:[],status:'BEGINNER'},normal:{name:'KartPlayer',level:47,badges:[],status:'PLAYER'},level1:{name:'LevelOne',level:1,badges:[],status:'PLAYER'},level200:{name:'VeteranKart',level:200,badges:[],status:'PLAYER'},moderator:{name:'TestMod',level:88,badges:['MOD'],status:'MODERATOR'},streamer:{name:'TestStreamer',level:132,badges:['STREAMER'],status:'STREAMER'},tourney:{name:'TestHost',level:105,badges:['TOURNEY HOST'],status:'TOURNEY HOST'},muted:{name:'MutedKart',level:29,badges:['MUTED'],status:'MUTED'},banned:{name:'BannedKart',level:61,badges:['BANNED'],status:'BANNED'}};return map[devLabState.persona]||map.beginner;}
+    function renderDevLabPreview(){const host=document.getElementById('devLabPreview');if(!host)return;const p=labPersona();const deviceClass=devLabState.device==='phone'?'v19-device-phone':devLabState.device==='tablet'?'v19-device-tablet':'';const net=devLabState.network==='offline'?'🔴 OFFLINE':devLabState.network==='slow'?'🟡 SLOW':'🟢 CONNECTED';let body='';if(devLabState.scenario==='matchfound')body=`<div class="v19-preview-card text-center"><div class="font-bungee text-yellow-300">⚔ MATCH FOUND</div><div class="grid grid-cols-3 items-center gap-2 mt-3"><div><b>${escapeHTML(p.name)}</b><div class="text-[10px]">Rating 1602</div></div><b>VS</b><div><b>KartKing</b><div class="text-[10px]">Rating 1587</div></div></div><button class="v12-small-btn green mt-3">✓ READY</button><div class="text-[9px] text-blue-200 mt-2">Fake countdown: 10s · no live queue affected</div></div>`;else if(devLabState.scenario==='messages')body=`<div class="v19-preview-card"><b>MESSAGES</b><div class="text-[10px] text-blue-200 mt-2">KartKing: gg that last match</div><div class="text-[10px] text-blue-200">Speedy: you playing ranked?</div>${devLabState.fakeDMs?'<span class="v12-pill mt-2">4 unread fake DMs</span>':''}${devLabState.fakeGroups?'<span class="v12-pill mt-2">Test Crew · 50 members</span>':''}</div>`;else if(devLabState.scenario==='tournament')body=`<div class="v19-preview-card"><b>MEGA KARTS TEST EVENT</b><div class="text-[10px] text-blue-200 mt-1">FFA · 120 players · 2 regions · PRIVATE/PUBLIC preview</div><div class="mt-2"><span class="v12-pill">Region 1 60/60</span> <span class="v12-pill">Region 2 47/60</span></div></div>`;else if(devLabState.scenario==='firstlogin')body=`<div class="v19-preview-card"><div class="font-bungee text-yellow-300">WELCOME</div><p class="text-[10px] text-blue-200 mt-2">This is what a first-time player would see: 1v1, FFA, Messages, Spotify, Settings and Help without OWNER controls.</p><button class="v12-small-btn yellow mt-2">START TOUR</button></div>`;else if(devLabState.scenario==='moderation')body=`<div class="v19-preview-card"><div class="font-bungee text-red-300">MODERATION NOTICE</div><p class="text-[10px] mt-2">${devLabState.persona==='banned'?'This account is banned from matchmaking.':devLabState.persona==='muted'?'You are temporarily muted.':'Example warning from a moderator.'}</p></div>`;else body=`<div class="grid grid-cols-2 gap-2"><div class="v19-preview-card"><b>1v1</b><div class="text-[10px] text-blue-200">Quick / Ranked / Casual</div>${devLabState.fakeQueue?'<div class="mt-2"><span class="v12-pill">Ranked 8</span> <span class="v12-pill">Casual 3</span></div>':''}</div><div class="v19-preview-card"><b>FFA</b><div class="text-[10px] text-blue-200">12 / 24 player lobby discovery</div>${devLabState.fakeLobbies?'<div class="mt-2"><span class="v12-pill">12P 8/12</span> <span class="v12-pill">24P 19/24</span></div>':''}</div>${devLabState.fakeTournament?'<div class="v19-preview-card"><b>TOURNAMENT</b><div class="text-[10px] text-blue-200">Public event available</div></div>':''}${devLabState.fakeStreamer?'<div class="v19-preview-card"><b>🔴 STREAMER LIVE</b><div class="text-[10px] text-blue-200">Fake spectator card</div></div>':''}</div>`;host.innerHTML=`<div class="${deviceClass}"><div class="v19-preview-shell"><div class="v19-preview-header"><div><b>${escapeHTML(p.name)}</b>${p.level?` <span class="v12-pill">LVL ${p.level}</span>`:''}<div class="text-[9px] text-blue-200">${p.badges.map(x=>`<span class="v12-pill">${escapeHTML(x)}</span>`).join(' ')}</div></div><span class="text-[10px] font-black">${net}</span></div><div class="v19-preview-body"><div class="text-[9px] text-purple-200 mb-2">Preview persona: ${escapeHTML(p.status)} · device: ${escapeHTML(devLabState.device)} · scenario: ${escapeHTML(devLabState.scenario)}</div>${body}${devLabState.fakeReports?'<div class="v19-preview-card"><b>FAKE REPORT</b><div class="text-[10px] text-blue-200">TestPlayer reported OtherPlayer · message context attached</div></div>':''}</div></div></div>`;}
+    window.openDevLab=function(){if(!accountState?.roles?.owner)return;injectDevLab();document.querySelectorAll('.exclusive-modal').forEach(el=>{if(el.id!=='devLabModal')el.classList.add('hidden');});document.getElementById('devLabModal')?.classList.remove('hidden');syncDevLabControls();renderDevLabPreview();};
 
     // ------------------------------------------------------------------
     // INITIALIZE
@@ -6365,6 +7118,7 @@ function installV12Platform() {
     injectStreamerUI();
     injectQueueSelector();
     injectAdminPanel();
+    injectDevLab();
 
     // Old browser-only sessions are no longer trusted as authenticated.
     const secure = secureSession();
@@ -6391,4 +7145,230 @@ function installV12Platform() {
         const session = secureSession();
         if (session?.token) socket.emit('account_resume', { token: session.token });
     });
+}
+
+
+// ============================================================================
+// V17 AUTO MATCHMAKER CLIENT
+// ============================================================================
+function installV17Matchmaker() {
+    const QUEUE_KEY = 'smash_queue_type_v12';
+    let activeMatchId = null;
+    let readyDeadline = 0;
+    let readyTimer = null;
+    let roomBotConfigured = false;
+    let latestCounts = { queues: {} };
+
+    function currentQueueType() {
+        return localStorage.getItem(QUEUE_KEY) === 'ranked' ? 'ranked' : 'casual';
+    }
+
+    function mmEscape(value) {
+        return String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[ch]));
+    }
+
+    function injectMatchmakerStyles() {
+        if (document.getElementById('v17MatchmakerStyles')) return;
+        const style = document.createElement('style');
+        style.id = 'v17MatchmakerStyles';
+        style.textContent = `
+            .v17-mm-card{background:linear-gradient(135deg,#10265e,#173a89);border:1px solid #ffe23866;border-radius:18px;padding:16px;margin:12px 0;position:relative;overflow:hidden}
+            .v17-mm-card:before{content:'';position:absolute;inset:0 auto auto 0;width:5px;height:100%;background:#ffe238}
+            .v17-mm-title{font-family:Bungee,sans-serif;color:#ffe238;font-size:15px}
+            .v17-mm-sub{font-size:10px;color:#b9ccff;margin-top:3px}
+            .v17-mm-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:12px}
+            .v17-mm-btn{border:1px solid #ffffff30;border-radius:12px;padding:11px 10px;background:#2855bd;color:white;font-size:11px;font-weight:1000;cursor:pointer;min-height:42px}
+            .v17-mm-btn:hover{filter:brightness(1.08)}.v17-mm-btn.rank{background:#ffd318;color:#102653}.v17-mm-btn.stop{background:#7f1d1d}.v17-mm-btn.green{background:#059669}
+            .v17-mm-counts{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}.v17-mm-pill{padding:5px 8px;border:1px solid #ffffff22;border-radius:999px;background:#0c1e4a;color:#dce8ff;font-size:9px;font-weight:900}
+            .v17-mm-status{margin-top:10px;padding:9px 10px;border-radius:12px;background:#091a43;border:1px solid #ffffff18;color:#dce8ff;font-size:10px;min-height:36px}
+            .v17-mm-divider{display:flex;align-items:center;gap:8px;margin:16px 0 8px;color:#89a7e8;font-size:9px;font-weight:900;text-transform:uppercase}.v17-mm-divider:before,.v17-mm-divider:after{content:'';height:1px;background:#ffffff1f;flex:1}
+            #v17MatchModal{z-index:120}.v17-match-card{width:min(680px,95vw);max-height:90vh;overflow-y:auto;background:#10265e;border:2px solid #ffe238;border-radius:24px;padding:20px;box-shadow:0 20px 60px #0008}
+            .v17-match-players{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin:12px 0}.v17-match-player{padding:10px;border-radius:13px;background:#173477;border:1px solid #ffffff20;text-align:center}
+            .v17-ready{color:#34d399;font-weight:1000}.v17-wait{color:#fbbf24;font-weight:1000}.v17-bot-note{padding:10px;border-radius:12px;background:#111d46;border:1px solid #ffffff1f;color:#c9d7ff;font-size:10px;margin-top:10px}
+            @media(max-width:620px){.v17-mm-actions{grid-template-columns:1fr}}
+        `;
+        document.head.appendChild(style);
+    }
+
+    function queueCount(key) { return Number(latestCounts?.queues?.[key] || 0); }
+
+    function renderCounts() {
+        const one = document.getElementById('v17OneCounts');
+        if (one) one.innerHTML = `<span class="v17-mm-pill">Casual ${queueCount('1v1:casual:2')} searching</span><span class="v17-mm-pill">Ranked ${queueCount('1v1:ranked:2')} searching</span><span class="v17-mm-pill">Room Bot: ${roomBotConfigured ? 'CONNECTED' : 'BRIDGE READY'}</span>`;
+        const ffa = document.getElementById('v17FfaCounts');
+        if (ffa) ffa.innerHTML = `<span class="v17-mm-pill">12 Casual ${queueCount('ffa:casual:12')}</span><span class="v17-mm-pill">24 Casual ${queueCount('ffa:casual:24')}</span><span class="v17-mm-pill">12 Ranked ${queueCount('ffa:ranked:12')}</span><span class="v17-mm-pill">24 Ranked ${queueCount('ffa:ranked:24')}</span>`;
+    }
+
+    function injectMatchmakerCards() {
+        const setup = document.getElementById('setupTab');
+        if (setup && !document.getElementById('v17OneMatchmaker')) {
+            const card = document.createElement('div');
+            card.id = 'v17OneMatchmaker';
+            card.className = 'v17-mm-card';
+            card.innerHTML = `<div class="flex justify-between gap-3 items-start"><div><div class="v17-mm-title">⚡ AUTO 1v1 MATCHMAKER</div><div class="v17-mm-sub">The website finds the opponent, ready-checks both players, then prepares one shared Smash Karts room.</div></div><span class="v17-mm-pill">BETA</span></div><div class="v17-mm-actions"><button class="v17-mm-btn" id="v17FindCasual1v1">FIND CASUAL 1v1</button><button class="v17-mm-btn rank" id="v17FindRanked1v1">FIND RANKED 1v1</button></div><div id="v17OneCounts" class="v17-mm-counts"></div><div id="v17OneStatus" class="v17-mm-status">Choose Casual or Ranked. Ranked starts close to your rating and widens the search while you wait.</div><button id="v17CancelOne" class="v17-mm-btn stop hidden mt-2" style="width:100%">CANCEL SEARCH</button><div class="v17-mm-divider">Custom / manual room</div>`;
+            const insertBefore = document.getElementById('v12QueueSelector') || setup.children[1] || null;
+            setup.insertBefore(card, insertBefore);
+            card.querySelector('#v17FindCasual1v1').onclick = () => joinQueue('1v1','casual',2);
+            card.querySelector('#v17FindRanked1v1').onclick = () => joinQueue('1v1','ranked',2);
+            card.querySelector('#v17CancelOne').onclick = cancelQueue;
+        }
+
+        const ffa = document.getElementById('ffaTab');
+        if (ffa && !document.getElementById('v17FfaMatchmaker')) {
+            const card = document.createElement('div');
+            card.id = 'v17FfaMatchmaker';
+            card.className = 'v17-mm-card';
+            card.innerHTML = `<div class="flex justify-between gap-3 items-start"><div><div class="v17-mm-title">⚡ AUTO FFA QUEUE</div><div class="v17-mm-sub">Pick 12 or 24. The queue fills the lobby and gives everybody the same room after the ready check.</div></div><span class="v17-mm-pill">BETA</span></div><div class="v17-mm-actions"><button class="v17-mm-btn" id="v17FindFfa12">AUTO FFA 12</button><button class="v17-mm-btn" id="v17FindFfa24">AUTO FFA 24</button></div><div id="v17FfaCounts" class="v17-mm-counts"></div><div id="v17FfaStatus" class="v17-mm-status">Uses the Casual / Ranked choice above.</div><button id="v17CancelFfa" class="v17-mm-btn stop hidden mt-2" style="width:100%">CANCEL SEARCH</button>`;
+            const target = document.getElementById('v12FfaQueue');
+            if (target?.nextSibling) target.parentElement.insertBefore(card, target.nextSibling); else ffa.insertBefore(card, ffa.children[1] || null);
+            card.querySelector('#v17FindFfa12').onclick = () => joinQueue('ffa',currentQueueType(),12);
+            card.querySelector('#v17FindFfa24').onclick = () => joinQueue('ffa',currentQueueType(),24);
+            card.querySelector('#v17CancelFfa').onclick = cancelQueue;
+        }
+        renderCounts();
+    }
+
+    function injectMatchModal() {
+        if (document.getElementById('v17MatchModal')) return;
+        const modal = document.createElement('div');
+        modal.id = 'v17MatchModal';
+        modal.className = 'hidden fixed inset-0 modal-overlay flex items-center justify-center p-4';
+        modal.innerHTML = `<div class="v17-match-card"><div class="flex justify-between gap-3"><div><div class="font-bungee text-yellow-300 text-lg" id="v17MatchTitle">MATCH FOUND</div><div class="text-[10px] text-blue-200 mt-1" id="v17MatchSubtitle">Ready up.</div></div><button id="v17MatchClose" class="v17-mm-btn stop" style="width:auto;padding:7px 10px;min-height:0">✕</button></div><div id="v17MatchPlayers" class="v17-match-players"></div><div id="v17ReadyCountdown" class="text-center text-yellow-300 font-black text-sm my-2"></div><div id="v17BotStatus" class="v17-bot-note">Waiting for players…</div><div id="v17HostArea" class="hidden mt-3"><div class="text-xs font-black text-white mb-2">YOU ARE THE ROOM HOST</div><p class="text-[10px] text-blue-200 mb-2">Until the automated Smash Karts creator is connected, create a private room in Smash Karts, Copy Share, then paste the entire share text here.</p><div class="flex gap-2 flex-wrap"><button id="v17OpenSmash" class="v17-mm-btn" style="width:auto">OPEN SMASH KARTS</button><input id="v17RoomPaste" class="smash-input flex-1 min-w-[220px] px-3 py-2 rounded-xl text-xs" placeholder="Paste code, full URL, or Share text"><button id="v17SubmitRoom" class="v17-mm-btn green" style="width:auto">SUBMIT ROOM</button></div></div><div class="v17-mm-actions"><button id="v17ReadyButton" class="v17-mm-btn green">✓ READY</button><button id="v17DeclineButton" class="v17-mm-btn stop">DECLINE</button></div></div>`;
+        document.body.appendChild(modal);
+        modal.querySelector('#v17MatchClose').onclick = () => socket.emit('cancel_matchmaking');
+        modal.querySelector('#v17ReadyButton').onclick = () => { if(activeMatchId) socket.emit('matchmaking_ready',{matchId:activeMatchId,ready:true}); };
+        modal.querySelector('#v17DeclineButton').onclick = () => { if(activeMatchId) socket.emit('matchmaking_ready',{matchId:activeMatchId,ready:false}); };
+        modal.querySelector('#v17OpenSmash').onclick = () => window.open('https://smashkarts.io','_blank');
+        modal.querySelector('#v17SubmitRoom').onclick = () => {
+            const shareText = String(document.getElementById('v17RoomPaste')?.value || '').trim();
+            if (!shareText) return showToast('Paste the Smash Karts room Share text first.','⚠️');
+            socket.emit('submit_match_room',{matchId:activeMatchId,shareText});
+        };
+    }
+
+    function setQueueStatus(text, searching = false) {
+        ['v17OneStatus','v17FfaStatus'].forEach(id => { const el=document.getElementById(id); if(el) el.textContent=text; });
+        ['v17CancelOne','v17CancelFfa'].forEach(id => document.getElementById(id)?.classList.toggle('hidden', !searching));
+    }
+
+    function joinQueue(mode, queueType, maxPlayers) {
+        if (queueType === 'ranked' && (typeof AuthSession === 'undefined' || !AuthSession.getUser || AuthSession.getUser()?.isGuest)) {
+            showToast('Ranked requires a saved account. Log in first.','🔒');
+        }
+        socket.emit('join_matchmaking_queue',{mode,queueType,maxPlayers,region:'auto'});
+    }
+
+    function cancelQueue() { socket.emit('cancel_matchmaking'); }
+
+    function renderMatchFound(data) {
+        activeMatchId = data.matchId;
+        readyDeadline = Number(data.deadline || 0);
+        const modal = document.getElementById('v17MatchModal');
+        modal?.classList.remove('hidden');
+        document.getElementById('v17HostArea')?.classList.add('hidden');
+        const title = document.getElementById('v17MatchTitle');
+        if (title) title.textContent = data.mode === 'ffa' ? `${data.maxPlayers}-PLAYER FFA FOUND` : `${String(data.queueType).toUpperCase()} 1v1 FOUND`;
+        const subtitle = document.getElementById('v17MatchSubtitle');
+        if (subtitle) subtitle.textContent = 'Everyone must ready up before the room is prepared.';
+        renderReadyPlayers(data);
+        const readyBtn = document.getElementById('v17ReadyButton');
+        if (readyBtn) { readyBtn.disabled=false; readyBtn.textContent='✓ READY'; readyBtn.classList.remove('hidden'); }
+        document.getElementById('v17DeclineButton')?.classList.remove('hidden');
+        const bot = document.getElementById('v17BotStatus');
+        if (bot) bot.textContent = data.roomBotConfigured ? 'Room Bot is connected. It will create the room after everyone readies.' : 'Queue Bot is active. Automatic Smash Karts room creation is the next connector; manual host fallback is enabled.';
+        startReadyTimer();
+    }
+
+    function renderReadyPlayers(data) {
+        const wrap = document.getElementById('v17MatchPlayers');
+        if (!wrap) return;
+        const ready = new Set(data.readySocketIds || []);
+        wrap.innerHTML = (data.players || []).map(player => `<div class="v17-match-player"><div class="font-black text-white">${mmEscape(player.username)}</div><div class="text-[10px] text-blue-200 mt-1">L${Number(player.level||1)} · Rating ${Number(player.rating||1000)}</div><div class="mt-2 ${ready.has(player.socketId)?'v17-ready':'v17-wait'}">${ready.has(player.socketId)?'✓ READY':'WAITING'}</div></div>`).join('');
+    }
+
+    function startReadyTimer() {
+        clearInterval(readyTimer);
+        const tick = () => {
+            const el = document.getElementById('v17ReadyCountdown');
+            if (!el) return;
+            const seconds = Math.max(0, Math.ceil((readyDeadline-Date.now())/1000));
+            el.textContent = readyDeadline ? `READY CHECK: ${seconds}s` : '';
+            if (seconds <= 0) clearInterval(readyTimer);
+        };
+        tick(); readyTimer=setInterval(tick,250);
+    }
+
+    socket.on('matchmaking_counts', data => {
+        latestCounts = data || {queues:{}};
+        roomBotConfigured = !!data?.roomBotConfigured;
+        renderCounts();
+    });
+
+    socket.on('matchmaking_state', data => {
+        if (data?.state === 'queued') {
+            const label = data.mode === 'ffa' ? `Searching ${data.queueType.toUpperCase()} FFA ${data.maxPlayers}…` : `Searching ${data.queueType.toUpperCase()} 1v1…`;
+            setQueueStatus(label, true);
+        } else if (data?.state === 'idle') {
+            setQueueStatus('Search cancelled.', false);
+        }
+    });
+
+    socket.on('match_found', data => { setQueueStatus('Match found — ready up.', false); renderMatchFound(data); });
+    socket.on('match_ready_update', data => {
+        if (data?.matchId !== activeMatchId) return;
+        renderReadyPlayers(data);
+        if (data.readyCount === data.totalPlayers) {
+            const btn=document.getElementById('v17ReadyButton'); if(btn){btn.disabled=true;btn.textContent='✓ ALL READY';}
+            document.getElementById('v17DeclineButton')?.classList.add('hidden');
+        }
+    });
+
+    socket.on('match_room_bot_status', data => {
+        if (data?.matchId !== activeMatchId) return;
+        const el=document.getElementById('v17BotStatus'); if(el) el.textContent=data.message || data.status || 'Room Bot update';
+        if (['creating','manual_fallback','ready'].includes(data?.status)) {
+            document.getElementById('v17ReadyButton')?.classList.add('hidden');
+            document.getElementById('v17DeclineButton')?.classList.add('hidden');
+            const countdown=document.getElementById('v17ReadyCountdown'); if(countdown) countdown.textContent='';
+        }
+    });
+
+    socket.on('match_room_host_required', data => {
+        if (data?.matchId !== activeMatchId) return;
+        document.getElementById('v17HostArea')?.classList.remove('hidden');
+        const input=document.getElementById('v17RoomPaste'); if(input){input.value='';input.focus();}
+    });
+
+    socket.on('match_room_waiting', data => {
+        if (data?.matchId !== activeMatchId) return;
+        const el=document.getElementById('v17BotStatus'); if(el) el.textContent=`${data.hostUsername || 'Room host'} is preparing the Smash Karts room…`;
+    });
+
+    socket.on('matchmaking_room_ready', room => {
+        activeMatchId = null;
+        clearInterval(readyTimer);
+        document.getElementById('v17MatchModal')?.classList.add('hidden');
+        setQueueStatus('Room ready.', false);
+        activeRoomData = room;
+        showToast('Match ready — the room is prepared for everybody.','⚡');
+        if (typeof openPreGameLobby === 'function') openPreGameLobby(room);
+    });
+
+    socket.on('matchmaking_match_failed', data => {
+        if (!activeMatchId || data?.matchId === activeMatchId) {
+            activeMatchId = null;
+            clearInterval(readyTimer);
+            document.getElementById('v17MatchModal')?.classList.add('hidden');
+        }
+        setQueueStatus(data?.youCancelled ? 'Match cancelled.' : (data?.message || 'Match cancelled. Searching players who readied may be requeued.'), false);
+        if (!data?.youCancelled) showToast(data?.message || 'Match cancelled.','⚠️');
+    });
+
+    socket.on('matchmaking_error', data => showToast(data?.message || 'Matchmaking error.','⚠️'));
+
+    injectMatchmakerStyles();
+    injectMatchmakerCards();
+    injectMatchModal();
+    socket.emit('get_matchmaking_counts');
+    socket.on('connect', () => socket.emit('get_matchmaking_counts'));
 }
