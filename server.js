@@ -6975,25 +6975,24 @@ function installV12Platform() {
     // ------------------------------------------------------------------
     let queueType = localStorage.getItem(QUEUE_KEY) === 'ranked' ? 'ranked' : 'casual';
     function injectQueueSelector() {
-        if (document.getElementById('v12QueueSelector')) return;
-        const setup=document.getElementById('setupTab');
-        const createButton=setup?.querySelector('button[onclick="createLobby()"]');
-        if(setup&&createButton){const wrap=document.createElement('div');wrap.id='v12QueueSelector';wrap.innerHTML='<button class="v12-queue-btn" data-q="casual">CASUAL</button><button class="v12-queue-btn" data-q="ranked">RANKED</button>';setup.insertBefore(wrap,createButton);wrap.querySelectorAll('button').forEach(btn=>btn.onclick=()=>{queueType=btn.dataset.q;localStorage.setItem(QUEUE_KEY,queueType);if(secureSession()?.token)socket.emit('update_saved_settings',{queueType});refreshQueueButtons();});}
-        const ffa=document.getElementById('ffaTab');
-        if(ffa&&!document.getElementById('v12FfaQueue')){const wrap=document.createElement('div');wrap.id='v12FfaQueue';wrap.className='hub-card';wrap.innerHTML='<span class="dock-label">Match type</span><div id="v12FfaQueueInner" class="flex gap-2"><button class="v12-queue-btn flex-1" data-q="casual">CASUAL</button><button class="v12-queue-btn flex-1" data-q="ranked">RANKED</button></div>';ffa.insertBefore(wrap,ffa.children[1]||null);wrap.querySelectorAll('button').forEach(btn=>btn.onclick=()=>{queueType=btn.dataset.q;localStorage.setItem(QUEUE_KEY,queueType);if(secureSession()?.token)socket.emit('update_saved_settings',{queueType});refreshQueueButtons();});}
-        refreshQueueButtons();
+        // V20: 1v1 Ranked/Casual is chosen from the simple matchmaker card.
+        // FFA is intentionally restored to its original simple page with no Ranked/Casual selector.
+        document.getElementById('v12QueueSelector')?.remove();
+        document.getElementById('v12FfaQueue')?.remove();
     }
-    function refreshQueueButtons(){document.querySelectorAll('[data-q]').forEach(btn=>btn.classList.toggle('active',btn.dataset.q===queueType));}
+    function refreshQueueButtons() {}
 
     createLobby = function () {
         const user=AuthSession.getUser();
         let smashUrlInput=document.getElementById('smashUrl')?.value.trim()||'';
         smashUrlInput=extractSmashUrlClient(smashUrlInput);
         if(!smashUrlInput)return showToast('Error: A valid Smash Karts room link or code is required!','⚠️');
-        socket.emit('create_room',{playerName:user?.username||'Player',smashUrl:smashUrlInput,winCondition:document.getElementById('winCondition')?.value||'First to 3',mode:'1v1',queueType});
+        // Manual/custom rooms are casual. Ranked results belong to the automatic queue/referee flow.
+        socket.emit('create_room',{playerName:user?.username||'Player',smashUrl:smashUrlInput,winCondition:document.getElementById('winCondition')?.value||'First to 3',mode:'1v1',queueType:'casual'});
     };
-    playFFAFromPage=function(){socket.emit('play_ffa',{queueType});};
-    createFFAFromPage=function(){socket.emit('create_ffa_lobby',{maxPlayers:Number(document.getElementById('ffaMaxPlayers')?.value||12),isPublic:document.getElementById('ffaPrivacy')?.value!=='private',queueType});};
+    // FFA stays exactly as the original lobby experience: PLAY FFA or CREATE LOBBY (12/24, public/private).
+    playFFAFromPage=function(){socket.emit('play_ffa');};
+    createFFAFromPage=function(){socket.emit('create_ffa_lobby',{maxPlayers:Number(document.getElementById('ffaMaxPlayers')?.value||12),isPublic:document.getElementById('ffaPrivacy')?.value!=='private'});};
 
     // ------------------------------------------------------------------
     // OWNER / DEV ADMIN PANEL + SAFE DEV LAB
@@ -7194,37 +7193,73 @@ function installV17Matchmaker() {
 
     function renderCounts() {
         const one = document.getElementById('v17OneCounts');
-        if (one) one.innerHTML = `<span class="v17-mm-pill">Casual ${queueCount('1v1:casual:2')} searching</span><span class="v17-mm-pill">Ranked ${queueCount('1v1:ranked:2')} searching</span><span class="v17-mm-pill">Room Bot: ${roomBotConfigured ? 'CONNECTED' : 'BRIDGE READY'}</span>`;
-        const ffa = document.getElementById('v17FfaCounts');
-        if (ffa) ffa.innerHTML = `<span class="v17-mm-pill">12 Casual ${queueCount('ffa:casual:12')}</span><span class="v17-mm-pill">24 Casual ${queueCount('ffa:casual:24')}</span><span class="v17-mm-pill">12 Ranked ${queueCount('ffa:ranked:12')}</span><span class="v17-mm-pill">24 Ranked ${queueCount('ffa:ranked:24')}</span>`;
+        if (one) {
+            const casual = queueCount('1v1:casual:2');
+            const ranked = queueCount('1v1:ranked:2');
+            one.textContent = `Casual ${casual} searching  •  Ranked ${ranked} searching`;
+        }
     }
 
     function injectMatchmakerCards() {
+        // V20: keep FFA exactly as its original PLAY / CREATE page.
+        document.getElementById('v17FfaMatchmaker')?.remove();
+        document.getElementById('v12FfaQueue')?.remove();
+
         const setup = document.getElementById('setupTab');
-        if (setup && !document.getElementById('v17OneMatchmaker')) {
-            const card = document.createElement('div');
-            card.id = 'v17OneMatchmaker';
-            card.className = 'v17-mm-card';
-            card.innerHTML = `<div class="flex justify-between gap-3 items-start"><div><div class="v17-mm-title">⚡ AUTO 1v1 MATCHMAKER</div><div class="v17-mm-sub">The website finds the opponent, ready-checks both players, then prepares one shared Smash Karts room.</div></div><span class="v17-mm-pill">BETA</span></div><div class="v17-mm-actions"><button class="v17-mm-btn" id="v17FindCasual1v1">FIND CASUAL 1v1</button><button class="v17-mm-btn rank" id="v17FindRanked1v1">FIND RANKED 1v1</button></div><div id="v17OneCounts" class="v17-mm-counts"></div><div id="v17OneStatus" class="v17-mm-status">Choose Casual or Ranked. Ranked starts close to your rating and widens the search while you wait.</div><button id="v17CancelOne" class="v17-mm-btn stop hidden mt-2" style="width:100%">CANCEL SEARCH</button><div class="v17-mm-divider">Custom / manual room</div>`;
-            const insertBefore = document.getElementById('v12QueueSelector') || setup.children[1] || null;
-            setup.insertBefore(card, insertBefore);
-            card.querySelector('#v17FindCasual1v1').onclick = () => joinQueue('1v1','casual',2);
-            card.querySelector('#v17FindRanked1v1').onclick = () => joinQueue('1v1','ranked',2);
-            card.querySelector('#v17CancelOne').onclick = cancelQueue;
+        if (!setup || document.getElementById('v17OneMatchmaker')) {
+            renderCounts();
+            return;
         }
 
-        const ffa = document.getElementById('ffaTab');
-        if (ffa && !document.getElementById('v17FfaMatchmaker')) {
-            const card = document.createElement('div');
-            card.id = 'v17FfaMatchmaker';
-            card.className = 'v17-mm-card';
-            card.innerHTML = `<div class="flex justify-between gap-3 items-start"><div><div class="v17-mm-title">⚡ AUTO FFA QUEUE</div><div class="v17-mm-sub">Pick 12 or 24. The queue fills the lobby and gives everybody the same room after the ready check.</div></div><span class="v17-mm-pill">BETA</span></div><div class="v17-mm-actions"><button class="v17-mm-btn" id="v17FindFfa12">AUTO FFA 12</button><button class="v17-mm-btn" id="v17FindFfa24">AUTO FFA 24</button></div><div id="v17FfaCounts" class="v17-mm-counts"></div><div id="v17FfaStatus" class="v17-mm-status">Uses the Casual / Ranked choice above.</div><button id="v17CancelFfa" class="v17-mm-btn stop hidden mt-2" style="width:100%">CANCEL SEARCH</button>`;
-            const target = document.getElementById('v12FfaQueue');
-            if (target?.nextSibling) target.parentElement.insertBefore(card, target.nextSibling); else ffa.insertBefore(card, ffa.children[1] || null);
-            card.querySelector('#v17FindFfa12').onclick = () => joinQueue('ffa',currentQueueType(),12);
-            card.querySelector('#v17FindFfa24').onclick = () => joinQueue('ffa',currentQueueType(),24);
-            card.querySelector('#v17CancelFfa').onclick = cancelQueue;
+        // Put the old manual room fields behind one small CUSTOM ROOM button.
+        let customWrap = document.getElementById('v20CustomRoom');
+        if (!customWrap) {
+            const smashInput = document.getElementById('smashUrl');
+            const manualGrid = smashInput?.closest('.grid');
+            const createButton = setup.querySelector('button[onclick="createLobby()"]');
+            if (manualGrid || createButton) {
+                customWrap = document.createElement('div');
+                customWrap.id = 'v20CustomRoom';
+                customWrap.className = 'hidden space-y-4';
+                if (manualGrid) setup.insertBefore(customWrap, manualGrid);
+                else setup.appendChild(customWrap);
+                if (manualGrid) customWrap.appendChild(manualGrid);
+                if (createButton) customWrap.appendChild(createButton);
+            }
         }
+
+        const card = document.createElement('div');
+        card.id = 'v17OneMatchmaker';
+        card.className = 'v17-mm-card';
+        card.innerHTML = `
+            <div class="text-center">
+                <div class="v17-mm-title">1v1 MATCHMAKING</div>
+                <div class="v17-mm-sub">Pick Casual or Ranked. We find the opponent and handle the shared room.</div>
+            </div>
+            <div class="v17-mm-actions">
+                <button class="v17-mm-btn" id="v17FindCasual1v1">CASUAL</button>
+                <button class="v17-mm-btn rank" id="v17FindRanked1v1">RANKED</button>
+            </div>
+            <div id="v17OneCounts" class="text-center text-[9px] text-blue-200 mt-2"></div>
+            <div id="v17OneStatus" class="v17-mm-status hidden"></div>
+            <button id="v17CancelOne" class="v17-mm-btn stop hidden mt-2" style="width:100%">CANCEL SEARCH</button>
+            <button id="v20CustomRoomButton" class="mt-3 text-[10px] font-black text-blue-200 hover:text-white underline" style="width:100%">CUSTOM ROOM</button>
+        `;
+
+        const header = setup.firstElementChild;
+        if (header?.nextSibling) setup.insertBefore(card, header.nextSibling);
+        else setup.appendChild(card);
+
+        card.querySelector('#v17FindCasual1v1').onclick = () => joinQueue('1v1','casual',2);
+        card.querySelector('#v17FindRanked1v1').onclick = () => joinQueue('1v1','ranked',2);
+        card.querySelector('#v17CancelOne').onclick = cancelQueue;
+        card.querySelector('#v20CustomRoomButton').onclick = () => {
+            const wrap = document.getElementById('v20CustomRoom');
+            if (!wrap) return;
+            const opening = wrap.classList.contains('hidden');
+            wrap.classList.toggle('hidden', !opening);
+            card.querySelector('#v20CustomRoomButton').textContent = opening ? 'HIDE CUSTOM ROOM' : 'CUSTOM ROOM';
+        };
         renderCounts();
     }
 
@@ -7247,8 +7282,12 @@ function installV17Matchmaker() {
     }
 
     function setQueueStatus(text, searching = false) {
-        ['v17OneStatus','v17FfaStatus'].forEach(id => { const el=document.getElementById(id); if(el) el.textContent=text; });
-        ['v17CancelOne','v17CancelFfa'].forEach(id => document.getElementById(id)?.classList.toggle('hidden', !searching));
+        const status = document.getElementById('v17OneStatus');
+        if (status) {
+            status.textContent = text || '';
+            status.classList.toggle('hidden', !text);
+        }
+        document.getElementById('v17CancelOne')?.classList.toggle('hidden', !searching);
     }
 
     function joinQueue(mode, queueType, maxPlayers) {
