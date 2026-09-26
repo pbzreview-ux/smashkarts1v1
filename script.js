@@ -1,970 +1,1537 @@
-const socket = io();
-let currentMode = '1v1';
-let currentGameplayMode = 'popup'; // Default mode
-let activeRoomData = null;
-let chatInactivityTimer = null;
-let activeDMTargetUser = null;
-let unreadMessageCount = 0;
-let pendingChallengeData = null;
-let friendChallengeTargetUser = null;
-let onlineUsersCache = [];
-let publicRoomsCache = [];
-let pendingFriendRequests = [];
-let currentRoomCode = '';
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smashkarts1v1s Arena</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="/socket.io/socket.io.js"></script>
+    <link rel="stylesheet" href="style.css">
 
-function updateGameplayMode(mode) {
-    currentGameplayMode = mode;
-}
-
-function escapeHTML(str) {
-    if (!str) return '';
-    return String(str)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#039;');
-}
-
-function showToast(message, icon = '🔔') {
-    const container = document.getElementById('toastContainer');
-    if (!container) return;
-    const toast = document.createElement('div');
-    toast.className = 'toast-msg';
-    toast.innerHTML = `<span>${icon}</span> <span>${escapeHTML(message)}</span>`;
-    container.appendChild(toast);
-
-    setTimeout(() => {
-        toast.style.opacity = '0';
-        toast.style.transform = 'translateY(-20px)';
-        setTimeout(() => toast.remove(), 300);
-    }, 3505);
-}
-
-function incrementUnreadBadge() {
-    unreadMessageCount++;
-    const badge = document.getElementById('messagesBadge');
-    if (!badge) return;
-    badge.innerText = unreadMessageCount;
-    badge.classList.remove('hidden');
-}
-
-function clearUnreadBadge() {
-    unreadMessageCount = 0;
-    const badge = document.getElementById('messagesBadge');
-    if (!badge) return;
-    badge.innerText = '0';
-    badge.classList.add('hidden');
-}
-
-function openSettingsModal() {
-    document.getElementById('settingsModal').classList.remove('hidden');
-}
-
-function closeSettingsModal() {
-    document.getElementById('settingsModal').classList.add('hidden');
-}
-
-function toggleOnlineStatus(isOnline) {
-    socket.emit('toggle_online_status', isOnline);
-    showToast(isOnline ? "You are now VISIBLE online." : "You are now HIDDEN (Invisible).", isOnline ? "🟢" : "👻");
-}
-
-/* ================== MEMORY FUNCTIONS ================== */
-function getLocalFriends(username) {
-    return JSON.parse(localStorage.getItem(`friends_${username}`)) || [];
-}
-
-function saveLocalFriends(username, friendsArray) {
-    localStorage.setItem(`friends_${username}`, JSON.stringify(friendsArray));
-}
-
-function isUserFriend(targetUsername) {
-    const currentUser = AuthSession.getUser();
-    if (!currentUser) return false;
-    
-    let localFriends = getLocalFriends(currentUser.username);
-    if (localFriends.includes(targetUsername)) return true;
-
-    const myUserObj = onlineUsersCache.find(u => u.username === currentUser.username);
-    if (myUserObj && myUserObj.friends && myUserObj.friends.includes(targetUsername)) {
-        localFriends.push(targetUsername);
-        saveLocalFriends(currentUser.username, localFriends);
-        return true;
-    }
-    return false;
-}
-
-function renderLeaderboard(topPlayers) {
-    const list = document.getElementById('leaderboardList');
-    if (!list) return;
-    list.innerHTML = topPlayers.length === 0 ? `<p class="text-xs text-blue-200">No matches recorded yet.</p>` : '';
-    topPlayers.forEach((p, idx) => {
-        const item = document.createElement('div');
-        item.className = 'flex justify-between items-center bg-blue-900/60 border border-white/10 p-3 rounded-2xl';
-        item.innerHTML = `
-            <div class="flex items-center gap-3">
-                <span class="font-bungee text-sm ${idx===0 ? 'text-yellow-300' : 'text-white'}">#${idx + 1}</span>
-                <span class="font-bold text-xs text-white">👤 ${escapeHTML(p.username)}</span>
-            </div>
-            <span class="font-black text-xs text-yellow-300">${p.matches} Games Played</span>
-        `;
-        list.appendChild(item);
-    });
-}
-/* ======================================================= */
-
-const AuthSession = {
-    INACTIVITY_LIMIT_MS: 30 * 60 * 1000,
-    WARNING_WINDOW_MS: 60 * 1000,
-    THROTTLE_MS: 5000,
-    lastActivity: Date.now(),
-    isWarningShown: false,
-
-    getRegisteredUsers() {
-        try {
-            return JSON.parse(localStorage.getItem("registered_users")) || [];
-        } catch(e) {
-            return [];
-        }
-    },
-
-    saveRegisteredUser(userObj) {
-        const users = this.getRegisteredUsers();
-        users.push(userObj);
-        localStorage.setItem("registered_users", JSON.stringify(users));
-    },
-
-    findUser(email, password) {
-        const users = this.getRegisteredUsers();
-        return users.find(u => u.email.toLowerCase() === email.toLowerCase() && u.password === password);
-    },
-
-    userExists(email) {
-        const users = this.getRegisteredUsers();
-        return users.some(u => u.email.toLowerCase() === email.toLowerCase());
-    },
-
-    login(email, username) {
-        const cleanUser = (username && username.trim() !== '') ? username.trim() : "Player";
-        const session = { email, username: cleanUser, token: "token_" + Date.now() };
-        localStorage.setItem("user_session", JSON.stringify(session));
-        document.getElementById("authModal").classList.add("hidden");
-        this.startTracker();
-        updateUserUI();
-        
-        renderLeaderboard(JSON.parse(localStorage.getItem('saved_leaderboard')) || []);
-        updateFriendsTabList();
-        
-        showToast(`Welcome back, ${cleanUser}!`, "🎮");
-    },
-
-    getUser() {
-        const sessionStr = localStorage.getItem("user_session");
-        if (!sessionStr) return null;
-        try {
-            return JSON.parse(sessionStr);
-        } catch(e) {
-            return null;
-        }
-    },
-
-    isLoggedIn() {
-        return this.getUser() !== null;
-    },
-
-    logout() {
-        localStorage.removeItem("user_session");
-        window.location.reload();
-    },
-
-    startTracker() {
-        this.lastActivity = Date.now();
-    },
-
-    handleActivity() {
-        if (this.isWarningShown) return;
-        const now = Date.now();
-        if (now - this.lastActivity > this.THROTTLE_MS) {
-            this.lastActivity = now;
-        }
-    },
-
-    resetInactivity() {
-        this.lastActivity = Date.now();
-        this.hideWarning();
-    },
-
-    checkInactivity() {
-        if (!this.isLoggedIn()) return;
-        const timeIdle = Date.now() - this.lastActivity;
-        const timeRemaining = this.INACTIVITY_LIMIT_MS - timeIdle;
-
-        if (timeRemaining <= 0) {
-            this.logout();
-        } else if (timeRemaining <= this.WARNING_WINDOW_MS) {
-            this.showWarning(Math.ceil(timeRemaining / 1000));
-        } else {
-            if (this.isWarningShown) this.hideWarning();
-        }
-    },
-
-    showWarning(secondsLeft) {
-        this.isWarningShown = true;
-        document.getElementById("inactivityModal").classList.remove("hidden");
-        document.getElementById("countdownTimer").textContent = secondsLeft;
-    },
-
-    hideWarning() {
-        this.isWarningShown = false;
-        document.getElementById("inactivityModal").classList.add("hidden");
-    }
-};
-
-function toggleAuthTab(type) {
-    const loginForm = document.getElementById("loginForm");
-    const regForm = document.getElementById("registerForm");
-    const tabLogin = document.getElementById("tabLoginBtn");
-    const tabReg = document.getElementById("tabRegisterBtn");
-
-    if (type === 'login') {
-        loginForm.classList.remove("hidden");
-        regForm.classList.add("hidden");
-        tabLogin.className = "font-bungee text-lg text-yellow-300 border-b-2 border-yellow-300 pb-1";
-        tabReg.className = "font-bungee text-lg text-white/50 pb-1 hover:text-white";
-    } else {
-        loginForm.classList.add("hidden");
-        regForm.classList.remove("hidden");
-        tabReg.className = "font-bungee text-lg text-yellow-300 border-b-2 border-yellow-300 pb-1";
-        tabLogin.className = "font-bungee text-lg text-white/50 pb-1 hover:text-white";
-    }
-}
-
-function handleAuthSubmit(e, type) {
-    e.preventDefault();
-    if (type === 'register') {
-        const username = document.getElementById('regUsername').value.trim();
-        const email = document.getElementById('regEmail').value.trim();
-        const password = document.getElementById('regPassword').value.trim();
-
-        if (AuthSession.userExists(email)) {
-            showToast("An account with this email already exists! Please log in.", "⚠️");
-            toggleAuthTab('login');
-            return;
+    <style>
+        :root {
+            --arena-blue: #203d88;
+            --arena-deep: #102653;
+            --arena-panel: #173477;
+            --arena-yellow: #ffe238;
+            --arena-dock-width: 380px;
         }
 
-        AuthSession.saveRegisteredUser({ username, email, password });
-        showToast("Account successfully created! Please log in.", "🎉");
-        toggleAuthTab('login');
-        document.getElementById('regUsername').value = '';
-        document.getElementById('regEmail').value = '';
-        document.getElementById('regPassword').value = '';
-    } else {
-        const email = document.getElementById('loginEmail').value.trim();
-        const password = document.getElementById('loginPassword').value.trim();
+        #gameScreen { --menu-height: 52px; }
+        #gameScreen [hidden] { display: none !important; }
 
-        const foundUser = AuthSession.findUser(email, password);
-        if (!foundUser) {
-            showToast("Account not found! Please sign up first.", "❌");
-            return;
+        /* =========================
+           GAME TOP BAR
+           ========================= */
+        #gameTopBar {
+            position: absolute;
+            inset: 0 0 auto;
+            z-index: 150;
         }
 
-        AuthSession.login(foundUser.email, foundUser.username);
-    }
-}
-
-function promptEditUsername() {
-    const user = AuthSession.getUser();
-    document.getElementById("newUsernameInput").value = user ? user.username : "";
-    document.getElementById("editUsernameModal").classList.remove("hidden");
-}
-
-function closeEditUsernameModal() {
-    document.getElementById("editUsernameModal").classList.add("hidden");
-}
-
-function saveNewUsername() {
-    const newUname = document.getElementById("newUsernameInput").value;
-    const user = AuthSession.getUser();
-    if (newUname && newUname.trim() !== '') {
-        AuthSession.login(user ? user.email : 'player@example.com', newUname.trim());
-        closeEditUsernameModal();
-    }
-}
-
-function updateUserUI() {
-    const user = AuthSession.getUser();
-    if (user) {
-        document.getElementById("userDisplayTag").innerText = user.username;
-        socket.emit("set_user_session", user);
-    }
-}
-
-function openOnlineModal() {
-    if (!AuthSession.isLoggedIn()) {
-        showToast("Please log in to view online players!", "⚠️");
-        return;
-    }
-    document.getElementById('onlineUsersModal').classList.remove('hidden');
-}
-
-function closeOnlineModal() {
-    document.getElementById('onlineUsersModal').classList.add('hidden');
-}
-
-socket.on('online_users_update', ({ count, users }) => {
-    onlineUsersCache = users;
-    document.getElementById('onlineCountBadge').innerText = `${count} Online`;
-    renderOnlineUsersList(users);
-    updateFriendsTabList();
-});
-
-function renderOnlineUsersList(users) {
-    const container = document.getElementById('onlineUsersList');
-    if (!container) return;
-    container.innerHTML = '';
-
-    const currentUser = AuthSession.getUser();
-    const myUsername = currentUser ? currentUser.username : '';
-
-    users.forEach(u => {
-        if (u.id === socket.id || u.username === myUsername) return;
-
-        const isFriend = isUserFriend(u.username);
-        const row = document.createElement('div');
-        row.className = 'flex justify-between items-center bg-blue-950/80 p-3 rounded-2xl border border-white/10';
-        
-        row.innerHTML = `
-            <span class="font-bold text-xs text-white">👤 ${escapeHTML(u.username)}</span>
-            <div class="flex gap-2">
-                ${isFriend 
-                    ? `<button onclick="openTabDMWith('${escapeHTML(u.username)}')" class="bg-blue-600 hover:bg-blue-500 text-white text-[10px] font-bold px-2.5 py-1.5 rounded-lg">💬 Message</button>`
-                    : `<button onclick="sendFriendRequest('${u.id}', '${escapeHTML(u.username)}')" class="bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold px-2.5 py-1.5 rounded-lg">➕ Add Friend</button>`
-                }
-            </div>
-        `;
-        container.appendChild(row);
-    });
-}
-
-function sendFriendRequest(targetSocketId, username) {
-    socket.emit('send_friend_request', { targetSocketId });
-    showToast(`Friend request sent to ${username}!`, "➕");
-}
-
-socket.on('receive_friend_request', (data) => {
-    incrementUnreadBadge();
-    showToast(`New Friend Request from ${data.fromUsername}! Check Messages tab.`, "👋");
-});
-
-socket.on('friend_requests_update', (requests) => {
-    pendingFriendRequests = requests;
-    if (requests && requests.length > 0) {
-        incrementUnreadBadge();
-    }
-    updateFriendsTabList();
-});
-
-function acceptFriendRequestByName(username) {
-    socket.emit('accept_friend_request', { challengerUsername: username });
-    showToast(`Accepted friend request from ${username}!`, "🤝");
-    
-    const user = AuthSession.getUser();
-    if (user) {
-        let friends = getLocalFriends(user.username);
-        if (!friends.includes(username)) {
-            friends.push(username);
-            saveLocalFriends(user.username, friends);
+        #arenaToolbar {
+            box-sizing: border-box;
+            min-height: 52px;
+            padding: 5px 12px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: nowrap;
+            gap: 8px;
+            background: var(--arena-blue);
+            border-bottom: 1px solid #ffffff30;
+            color: var(--arena-yellow);
         }
-    }
-    updateFriendsTabList();
-}
 
-function declineFriendRequestByName(username) {
-    socket.emit('decline_friend_request', { challengerUsername: username });
-    showToast(`Declined friend request from ${username}.`, "✕");
-}
-
-socket.on('friend_request_accepted', (data) => {
-    showToast(`You and ${data.username} are now friends!`, "🤝");
-    const user = AuthSession.getUser();
-    if (user) {
-        let friends = getLocalFriends(user.username);
-        if (!friends.includes(data.username)) {
-            friends.push(data.username);
-            saveLocalFriends(user.username, friends);
+        .arena-brand,
+        .arena-actions {
+            display: flex;
+            align-items: center;
+            gap: 6px;
         }
-    }
-    updateFriendsTabList();
-});
 
-function initiateFriend1v1(friendUsername) {
-    friendChallengeTargetUser = friendUsername;
-    document.getElementById('friendChallengeHeader').innerText = `⚔️ CREATE 1v1 ROOM LINK FOR ${friendUsername.toUpperCase()}`;
-    document.getElementById('friendChallengeIframe').src = "https://smashkarts.io";
-    document.getElementById('friendChallengeCodeInput').value = '';
-    document.getElementById('friendChallengeModal').classList.remove('hidden');
-}
+        .arena-brand {
+            min-width: 0;
+            flex: 1 1 auto;
+            flex-wrap: nowrap;
+            font-family: "Bungee", sans-serif;
+            font-size: 15px;
+        }
 
-function closeFriendChallengeModal() {
-    document.getElementById('friendChallengeIframe').src = "";
-    document.getElementById('friendChallengeModal').classList.add('hidden');
-    friendChallengeTargetUser = null;
-}
+        .arena-actions {
+            margin-left: auto;
+            justify-content: flex-end;
+            flex: 0 0 auto;
+            flex-wrap: nowrap;
+            gap: 4px;
+        }
 
-function sendFriendChallengeWithCode() {
-    let codeInput = document.getElementById('friendChallengeCodeInput').value.trim();
-    codeInput = extractSmashUrlClient(codeInput);
+        #gameModeBadge {
+            padding: 2px 8px;
+            border-radius: 999px;
+            background: #ffd318;
+            color: #142f75;
+            font: 900 10px "Inter", sans-serif;
+            text-transform: uppercase;
+        }
 
-    if (!codeInput) {
-        showToast("Error: You must paste a valid Smash Karts room link or code!", "⚠️");
-        return;
-    }
+        #gameLobbyInfo {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            min-width: 0;
+            max-width: 310px;
+            padding: 4px 7px;
+            border: 1px solid #ffffff32;
+            border-radius: 12px;
+            background: var(--arena-deep);
+        }
 
-    const user = AuthSession.getUser();
-    const targetUserObj = onlineUsersCache.find(u => u.username === friendChallengeTargetUser);
+        #gameLobbyPlayerCount {
+            color: var(--arena-yellow);
+            font: 900 9px "Inter", sans-serif;
+            white-space: nowrap;
+        }
 
-    if (!targetUserObj) {
-        showToast(`${friendChallengeTargetUser} is not currently online!`, "⚠️");
-        closeFriendChallengeModal();
-        return;
-    }
+        #gameLobbyPlayerNames {
+            color: white;
+            font: 800 9px "Inter", sans-serif;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
 
-    socket.emit('send_match_challenge', {
-        targetSocketId: targetUserObj.id,
-        targetUsername: friendChallengeTargetUser,
-        fromUsername: user ? user.username : 'Player',
-        mode: '1v1',
-        smashUrl: codeInput
-    });
+        .arena-button {
+            padding: 6px 8px;
+            border: 1px solid #ffda25;
+            border-radius: 13px;
+            background: #ffffff15;
+            color: var(--arena-yellow);
+            font: 900 9px "Inter", sans-serif;
+            cursor: pointer;
+            transition: .15s ease;
+        }
 
-    showToast(`1v1 match challenge sent to ${friendChallengeTargetUser}!`, "⚔️");
-    closeFriendChallengeModal();
-}
+        .arena-button:hover { transform: translateY(-1px); background: #ffffff22; }
+        .arena-button.active { background: #ffd318; color: #142f75; }
+        #arenaChatButton { background: #ffd318; color: #142f75; }
+        #arenaOptionsButton { background: #234caa; border-color: #7f99d7; }
 
-socket.on('receive_match_challenge', (data) => {
-    pendingChallengeData = data;
-    document.getElementById('challengeText').innerText = `${data.fromUsername} challenged you to a 1v1 match!`;
-    document.getElementById('challengeModal').classList.remove('hidden');
-});
+        #arenaMenuToggle {
+            position: absolute;
+            top: 100%;
+            right: 24px;
+            padding: 5px 10px;
+            border: 1px solid #ffd318;
+            border-top: 0;
+            border-radius: 0 0 12px 12px;
+            background: var(--arena-blue);
+            color: var(--arena-yellow);
+            font: 900 9px "Inter", sans-serif;
+            cursor: pointer;
+            box-shadow: 0 5px 12px #0004;
+        }
 
-function acceptChallenge() {
-    if (pendingChallengeData) {
-        const user = AuthSession.getUser();
-        socket.emit('accept_match_challenge', {
-            challengerSocketId: pendingChallengeData.challengerSocketId,
-            targetUsername: user ? user.username : 'Player',
-            smashUrl: pendingChallengeData.smashUrl
-        });
-    }
-    document.getElementById('challengeModal').classList.add('hidden');
-}
+        /* Old options element stays for compatibility, but is never floated. */
+        #arenaOptions { display: none !important; }
 
-function declineChallenge() {
-    pendingChallengeData = null;
-    document.getElementById('challengeModal').classList.add('hidden');
-    showToast("Challenge declined.", "✕");
-}
+        /* =========================
+           GAME STAGE + DOCK
+           The dock SHRINKS the game.
+           It does not pile over it.
+           ========================= */
+        #gameStage {
+            position: absolute;
+            inset: 0;
+        }
 
-socket.on('challenge_game_start', (room) => {
-    activeRoomData = room;
-    enterGameFromLobby();
-});
+        #gameScreen.arena-menu-open #gameStage {
+            top: var(--menu-height);
+        }
 
-function showMessagesTab() {
-    showTab('messagesTab');
-    clearUnreadBadge();
-    updateFriendsTabList();
-}
+        #smashFrame {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            border: 0;
+            transition: width .18s ease;
+        }
 
-function updateFriendsTabList() {
-    const container = document.getElementById('friendsTabList');
-    if (!container) return;
-    container.innerHTML = '';
-    
-    const currentUser = AuthSession.getUser();
-    if (!currentUser) return;
+        #gameDock {
+            position: absolute;
+            right: 0;
+            top: 0;
+            bottom: 0;
+            width: var(--arena-dock-width);
+            display: none;
+            flex-direction: column;
+            background: #0d2258;
+            border-left: 2px solid #ffffff22;
+            color: white;
+            z-index: 20;
+        }
 
-    let friendNames = getLocalFriends(currentUser.username);
-    
-    const myUserObj = onlineUsersCache.find(u => u.username === currentUser.username);
-    if (myUserObj && myUserObj.friends) {
-        myUserObj.friends.forEach(f => {
-            if (!friendNames.includes(f)) friendNames.push(f);
-        });
-        saveLocalFriends(currentUser.username, friendNames);
-    }
+        #gameScreen.game-dock-open #gameDock { display: flex; }
+        #gameScreen.game-dock-open #smashFrame { width: calc(100% - var(--arena-dock-width)); }
 
-    if (pendingFriendRequests && pendingFriendRequests.length > 0) {
-        const pendingHeader = document.createElement('div');
-        pendingHeader.className = 'font-bungee text-[10px] text-yellow-300 mb-1 mt-1';
-        pendingHeader.innerText = 'PENDING REQUESTS';
-        container.appendChild(pendingHeader);
+        #gameDockHeader {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            padding: 11px 12px;
+            border-bottom: 1px solid #ffffff1f;
+            background: #173477;
+        }
 
-        pendingFriendRequests.forEach(reqName => {
-            const reqRow = document.createElement('div');
-            reqRow.className = 'bg-yellow-500/20 border border-yellow-400/50 p-2 rounded-xl flex items-center justify-between mb-2';
-            reqRow.innerHTML = `
-                <span class="font-bold text-xs text-white">👤 ${escapeHTML(reqName)}</span>
-                <div class="flex gap-1">
-                    <button onclick="acceptFriendRequestByName('${escapeHTML(reqName)}')" class="bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold px-2.5 py-1 rounded-lg">✔ Accept</button>
-                    <button onclick="declineFriendRequestByName('${escapeHTML(reqName)}')" class="bg-red-600 hover:bg-red-500 text-white text-[10px] font-bold px-2.5 py-1 rounded-lg">✕</button>
+        #gameDockTitle {
+            font-family: "Bungee", sans-serif;
+            color: var(--arena-yellow);
+            font-size: 13px;
+        }
+
+        #gameDockTabs {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 6px;
+            padding: 8px;
+            background: #132e70;
+            border-bottom: 1px solid #ffffff1f;
+        }
+
+        .dock-tab-button {
+            border: 1px solid #ffffff20;
+            border-radius: 10px;
+            padding: 8px 4px;
+            color: #dbe7ff;
+            font-size: 10px;
+            font-weight: 900;
+            background: #ffffff0d;
+            cursor: pointer;
+        }
+
+        .dock-tab-button.active {
+            color: #142f75;
+            background: var(--arena-yellow);
+            border-color: var(--arena-yellow);
+        }
+
+        #gameDockBody {
+            flex: 1;
+            min-height: 0;
+            overflow: hidden;
+        }
+
+        .game-dock-panel {
+            height: 100%;
+            padding: 12px;
+            overflow-y: auto;
+        }
+
+        .game-dock-panel.hidden { display: none !important; }
+
+        .dock-card {
+            background: #173477;
+            border: 1px solid #ffffff1f;
+            border-radius: 14px;
+            padding: 11px;
+            margin-bottom: 10px;
+        }
+
+        .dock-label {
+            display: block;
+            color: #9db8f5;
+            font-size: 9px;
+            font-weight: 900;
+            text-transform: uppercase;
+            margin-bottom: 6px;
+        }
+
+        .dock-action {
+            width: 100%;
+            border: 1px solid #ffffff20;
+            border-radius: 11px;
+            padding: 9px 10px;
+            color: white;
+            background: #264fa7;
+            font-size: 11px;
+            font-weight: 900;
+            cursor: pointer;
+        }
+
+        .dock-action:hover { filter: brightness(1.08); }
+        .dock-action.yellow { background: #ffd318; color: #142f75; }
+        .dock-action.green { background: #10b981; }
+        .dock-action.red { background: #dc2626; }
+
+        #gameDockPlayerList,
+        #matchChatMessages {
+            display: flex;
+            flex-direction: column;
+            gap: 7px;
+        }
+
+        #matchChatMessages {
+            height: calc(100% - 100px);
+            overflow-y: auto;
+            padding-right: 4px;
+        }
+
+        #chatOverlay {
+            position: static !important;
+            width: 100% !important;
+            max-height: none !important;
+            background: transparent !important;
+            border: 0 !important;
+            box-shadow: none !important;
+            padding: 0 !important;
+            backdrop-filter: none !important;
+        }
+
+        #chatOverlay.hidden-overlay { display: block !important; }
+
+        /* =========================
+           HEADER ORGANIZATION
+           ========================= */
+        #headerRightActions {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+        }
+
+        #connectionPill {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 7px 10px;
+            border: 1px solid #ffffff2a;
+            border-radius: 12px;
+            background: #12316e;
+            color: white;
+            font-size: 10px;
+            font-weight: 900;
+        }
+
+        #connectionDot {
+            width: 8px;
+            height: 8px;
+            border-radius: 999px;
+            background: #22c55e;
+        }
+
+        #settingsFloatingBtn { display: none !important; }
+
+        /* Shared card styling for FFA and Settings. */
+        .hub-card {
+            background: #173477b8;
+            border: 1px solid #ffffff1f;
+            border-radius: 16px;
+            padding: 14px;
+        }
+
+        /* =========================
+           SPOTIFY WEB PLAYER
+           ========================= */
+        .spotify-mini {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            min-width: 150px;
+            max-width: 230px;
+            height: 30px;
+            padding: 3px 4px 3px 8px;
+            border: 1px solid #2d5c3a;
+            border-radius: 999px;
+            background: #121212;
+            color: white;
+        }
+
+        .spotify-mini-copy {
+            min-width: 0;
+            flex: 1;
+            cursor: pointer;
+        }
+
+        .spotify-mini-track {
+            display: block;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            font: 800 9px "Inter", sans-serif;
+        }
+
+        .spotify-mini-skip {
+            width: 24px;
+            height: 24px;
+            flex: 0 0 24px;
+            border: 0;
+            border-radius: 999px;
+            background: #1ed760;
+            color: #000;
+            font-size: 11px;
+            font-weight: 1000;
+            cursor: pointer;
+        }
+
+        .spotify-web-shell {
+            background: #121212;
+            color: white;
+            border: 1px solid #ffffff1f;
+            border-radius: 18px;
+            overflow: hidden;
+        }
+
+        .spotify-web-top {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 14px;
+            background: #181818;
+            border-bottom: 1px solid #ffffff14;
+        }
+
+        .spotify-logo-text {
+            color: #1ed760;
+            font: 900 16px "Inter", sans-serif;
+        }
+
+        .spotify-web-body { padding: 14px; }
+
+        .spotify-now {
+            display: grid;
+            grid-template-columns: 86px minmax(0,1fr);
+            gap: 14px;
+            align-items: center;
+            padding: 12px;
+            border-radius: 14px;
+            background: #181818;
+        }
+
+        .spotify-now img {
+            width: 86px;
+            height: 86px;
+            border-radius: 10px;
+            object-fit: cover;
+            background: #282828;
+        }
+
+        .spotify-controls {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 10px;
+        }
+
+        .spotify-control {
+            min-width: 38px;
+            height: 38px;
+            padding: 0 12px;
+            border: 0;
+            border-radius: 999px;
+            background: #282828;
+            color: white;
+            font-weight: 1000;
+            cursor: pointer;
+        }
+
+        .spotify-control.primary {
+            background: #1ed760;
+            color: #000;
+        }
+
+        .spotify-search-row {
+            display: flex;
+            gap: 8px;
+            margin-top: 14px;
+        }
+
+        .spotify-results {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            margin-top: 12px;
+            max-height: 420px;
+            overflow-y: auto;
+        }
+
+        .spotify-result {
+            display: grid;
+            grid-template-columns: 48px minmax(0,1fr) auto;
+            align-items: center;
+            gap: 10px;
+            padding: 8px;
+            border-radius: 10px;
+            background: #181818;
+            cursor: pointer;
+        }
+
+        .spotify-result:hover { background: #282828; }
+
+        .spotify-result img {
+            width: 48px;
+            height: 48px;
+            object-fit: cover;
+            border-radius: 6px;
+            background: #282828;
+        }
+
+        .spotify-result-title,
+        .spotify-result-sub {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .spotify-result-title { font-size: 12px; font-weight: 900; }
+        .spotify-result-sub { font-size: 10px; color: #a7a7a7; margin-top: 2px; }
+
+
+        /* =========================
+           DISCORD-LIKE DIRECT MESSAGES
+           ========================= */
+        .discord-shell {
+            display: grid;
+            grid-template-columns: 245px minmax(0, 1fr);
+            height: min(620px, calc(100vh - 245px));
+            min-height: 430px;
+            overflow: hidden;
+            border: 1px solid #ffffff1f;
+            border-radius: 18px;
+            background: #101c46;
+        }
+
+        .discord-sidebar {
+            display: flex;
+            min-width: 0;
+            flex-direction: column;
+            background: #152557;
+            border-right: 1px solid #ffffff16;
+        }
+
+        .discord-sidebar-head {
+            padding: 12px;
+            border-bottom: 1px solid #ffffff15;
+        }
+
+        .discord-friend-list {
+            flex: 1;
+            min-height: 0;
+            overflow-y: auto;
+            padding: 8px;
+        }
+
+        .discord-friend {
+            width: 100%;
+            display: flex;
+            align-items: center;
+            gap: 9px;
+            padding: 8px;
+            margin-bottom: 3px;
+            border: 0;
+            border-radius: 9px;
+            background: transparent;
+            color: #d9e2ff;
+            text-align: left;
+            cursor: pointer;
+        }
+
+        .discord-friend:hover,
+        .discord-friend.active {
+            background: #ffffff12;
+            color: white;
+        }
+
+        .discord-avatar {
+            position: relative;
+            width: 34px;
+            height: 34px;
+            flex: 0 0 34px;
+            display: grid;
+            place-items: center;
+            border-radius: 50%;
+            background: #3d58a8;
+            color: white;
+            font-size: 11px;
+            font-weight: 1000;
+        }
+
+
+
+        .profile-avatar-button,
+        .profile-avatar-preview {
+            width: 42px;
+            height: 42px;
+            border-radius: 9999px;
+            overflow: hidden;
+            flex: 0 0 auto;
+            display: grid;
+            place-items: center;
+            background: #ffd318;
+            border: 2px solid #ffffff55;
+            color: #142f75;
+            font-weight: 900;
+            position: relative;
+        }
+
+        .profile-avatar-preview {
+            width: 72px;
+            height: 72px;
+            margin: 0 auto 10px;
+        }
+
+        .profile-avatar-button img,
+        .profile-avatar-preview img,
+        .round-user-avatar img,
+        .discord-avatar img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            border-radius: 9999px;
+            display: block;
+        }
+
+        .round-user-avatar {
+            width: 38px;
+            height: 38px;
+            border-radius: 9999px;
+            overflow: hidden;
+            flex: 0 0 auto;
+            display: grid;
+            place-items: center;
+            background: #1e3a8a;
+            border: 1px solid #ffffff2f;
+            color: white;
+            font-weight: 900;
+            font-size: 12px;
+        }
+
+        .spotify-nav-icon {
+            width: 25px;
+            height: 25px;
+            display: block;
+        }
+
+        .sidebar-text-icon {
+            font-family: "Bungee", sans-serif;
+            font-size: 10px;
+            letter-spacing: -0.3px;
+        }
+        .discord-avatar.big {
+            width: 40px;
+            height: 40px;
+            flex-basis: 40px;
+            font-size: 13px;
+        }
+
+        .discord-status-dot {
+            position: absolute;
+            right: -1px;
+            bottom: -1px;
+            width: 10px;
+            height: 10px;
+            border: 2px solid #152557;
+            border-radius: 50%;
+            background: #6b7280;
+        }
+
+        .discord-status-dot.online { background: #22c55e; }
+
+        .discord-chat {
+            display: flex;
+            min-width: 0;
+            flex-direction: column;
+            background: #182b62;
+        }
+
+        .discord-chat-head {
+            min-height: 58px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            padding: 9px 14px;
+            border-bottom: 1px solid #ffffff15;
+            box-shadow: 0 1px 0 #0002;
+        }
+
+        .discord-messages {
+            flex: 1;
+            min-height: 0;
+            overflow-y: auto;
+            padding: 14px 14px 6px;
+        }
+
+        .discord-message {
+            display: grid;
+            grid-template-columns: 40px minmax(0, 1fr);
+            gap: 10px;
+            padding: 5px 0;
+        }
+
+        .discord-message:hover { background: #ffffff05; }
+
+        .discord-message-name {
+            color: white;
+            font-size: 12px;
+            font-weight: 900;
+        }
+
+        .discord-message-time {
+            margin-left: 7px;
+            color: #8ea0cf;
+            font-size: 9px;
+            font-weight: 700;
+        }
+
+        .discord-message-text {
+            color: #e6ebff;
+            font-size: 12px;
+            line-height: 1.45;
+            overflow-wrap: anywhere;
+            white-space: pre-wrap;
+        }
+
+        .discord-composer {
+            display: flex;
+            align-items: flex-end;
+            gap: 8px;
+            padding: 10px 12px 12px;
+        }
+
+        .discord-composer textarea {
+            min-height: 42px;
+            max-height: 120px;
+            resize: vertical;
+        }
+
+        .discord-section-label {
+            padding: 8px 8px 5px;
+            color: #8ea0cf;
+            font-size: 9px;
+            font-weight: 1000;
+            letter-spacing: .08em;
+            text-transform: uppercase;
+        }
+
+        .discord-request {
+            padding: 8px;
+            margin-bottom: 5px;
+            border: 1px solid #ffd31855;
+            border-radius: 10px;
+            background: #ffd31812;
+        }
+
+        .discord-unread {
+            margin-left: auto;
+            min-width: 18px;
+            height: 18px;
+            display: grid;
+            place-items: center;
+            border-radius: 999px;
+            background: #ef4444;
+            color: white;
+            font-size: 9px;
+            font-weight: 1000;
+        }
+
+        /* =========================
+           SPOTIFY WEB-STYLE LIBRARY
+           ========================= */
+        .spotify-app-grid {
+            display: grid;
+            grid-template-columns: 180px minmax(0, 1fr);
+            min-height: 460px;
+        }
+
+        .spotify-library-nav {
+            padding: 12px;
+            background: #0f0f0f;
+            border-right: 1px solid #ffffff12;
+        }
+
+        .spotify-nav-button {
+            width: 100%;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px;
+            margin-bottom: 5px;
+            border: 0;
+            border-radius: 8px;
+            background: transparent;
+            color: #b3b3b3;
+            font-size: 11px;
+            font-weight: 900;
+            text-align: left;
+            cursor: pointer;
+        }
+
+        .spotify-nav-button:hover,
+        .spotify-nav-button.active {
+            background: #242424;
+            color: white;
+        }
+
+        .spotify-main-view {
+            min-width: 0;
+            padding: 14px;
+            background: linear-gradient(#1b1b1b, #121212 190px);
+        }
+
+        .spotify-view-title {
+            margin-bottom: 10px;
+            color: white;
+            font-size: 18px;
+            font-weight: 1000;
+        }
+
+        .spotify-playlist {
+            width: 100%;
+            display: grid;
+            grid-template-columns: 46px minmax(0,1fr);
+            gap: 9px;
+            align-items: center;
+            padding: 7px;
+            border: 0;
+            border-radius: 9px;
+            background: transparent;
+            color: white;
+            text-align: left;
+            cursor: pointer;
+        }
+
+        .spotify-playlist:hover { background: #282828; }
+        .spotify-playlist img {
+            width: 46px;
+            height: 46px;
+            object-fit: cover;
+            border-radius: 5px;
+            background: #282828;
+        }
+
+
+        /* =========================
+           ONE-AT-A-TIME MODALS
+           ========================= */
+        .exclusive-modal { isolation: isolate; }
+
+        body:has(#gameScreen:not(.hidden)) { overflow: hidden; }
+
+        @media (max-width: 980px) {
+            :root { --arena-dock-width: 330px; }
+            #gameLobbyPlayerNames { max-width: 130px; }
+        }
+
+        @media (max-width: 760px) {
+            #arenaToolbar { padding: 4px 6px; }
+            .arena-brand { font-size: 12px; }
+            .arena-actions { gap: 3px; }
+            .arena-button { padding: 5px 6px; font-size: 8px; }
+            #gameLobbyInfo { max-width: 200px; }
+            #gameLobbyPlayerNames { max-width: 90px; }
+
+            #gameScreen.game-dock-open #smashFrame { display: none; }
+            #gameDock { width: 100%; }
+            .spotify-mini { min-width: 110px; max-width: 150px; }
+            .discord-shell { grid-template-columns: 1fr; height: auto; min-height: 520px; }
+            .discord-sidebar { max-height: 190px; border-right: 0; border-bottom: 1px solid #ffffff16; }
+            .discord-chat { min-height: 370px; }
+            .spotify-app-grid { grid-template-columns: 1fr; }
+            .spotify-library-nav { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; border-right: 0; border-bottom: 1px solid #ffffff12; }
+            .spotify-nav-button { margin: 0; justify-content: center; }
+        }
+    </style>
+</head>
+
+<body class="min-h-screen flex flex-col justify-between overflow-x-hidden">
+
+    <div id="toastContainer"></div>
+
+    <!-- SETTINGS: normal modal, never covered by connection status. -->
+    <div id="settingsModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4 exclusive-modal">
+        <div class="w-full max-w-xl bg-blue-900 border-2 border-yellow-400 rounded-3xl p-6 shadow-2xl max-h-[90vh] overflow-y-auto">
+            <div class="flex justify-between items-center mb-5">
+                <div>
+                    <h3 class="font-bungee text-lg text-yellow-300">⚙️ SETTINGS</h3>
+                    <p class="text-[11px] text-blue-200 mt-1">Gameplay and account settings.</p>
                 </div>
-            `;
-            container.appendChild(reqRow);
-        });
-    }
-
-    const friendsHeader = document.createElement('div');
-    friendsHeader.className = 'font-bungee text-[10px] text-yellow-300 mb-1 mt-2';
-    friendsHeader.innerText = 'YOUR FRIENDS';
-    container.appendChild(friendsHeader);
-
-    if (friendNames.length === 0) {
-        const emptyMsg = document.createElement('p');
-        emptyMsg.className = 'text-xs text-blue-200 mt-1';
-        emptyMsg.innerText = 'No friends added yet. Open "Online Players" to add friends!';
-        container.appendChild(emptyMsg);
-        return;
-    }
-
-    friendNames.forEach(name => {
-        const targetOnlineObj = onlineUsersCache.find(u => u.username === name);
-        const isOnline = !!targetOnlineObj;
-
-        const wrapper = document.createElement('div');
-        wrapper.className = `p-2 rounded-xl flex flex-col gap-1 transition-all mb-1.5 ${activeDMTargetUser === name ? 'bg-yellow-400/30 border border-yellow-400' : 'bg-blue-950/60 hover:bg-blue-800/60'}`;
-        
-        wrapper.innerHTML = `
-            <div class="flex items-center justify-between">
-                <span class="font-bold text-xs text-white">👤 ${escapeHTML(name)}</span>
-                <span class="w-2 h-2 rounded-full ${isOnline ? 'bg-emerald-400' : 'bg-gray-500'}" title="${isOnline ? 'Online' : 'Offline'}"></span>
+                <button onclick="closeSettingsModal()" class="text-white hover:text-red-400 font-bold text-lg">✕</button>
             </div>
-            <div class="flex gap-1 mt-1">
-                <button onclick="openTabDMWith('${escapeHTML(name)}')" class="bg-blue-600 hover:bg-blue-500 text-white text-[10px] font-bold px-2 py-1 rounded-lg flex-1">💬 DM</button>
-                ${isOnline 
-                    ? `<button onclick="initiateFriend1v1('${escapeHTML(name)}')" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 text-[10px] font-black px-2 py-1 rounded-lg uppercase flex-1">⚔️ 1v1</button>`
-                    : `<button disabled class="bg-gray-600 text-gray-400 text-[10px] font-bold px-2 py-1 rounded-lg flex-1 cursor-not-allowed">Offline</button>`
-                }
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div class="hub-card">
+                    <span class="dock-label">Gameplay</span>
+                    <label class="text-xs text-blue-200">Gameplay mode</label>
+                    <select id="settingsGameplayMode" class="smash-input w-full px-3 py-2 rounded-xl text-xs mt-1">
+                        <option value="popup">Popup Window</option>
+                        <option value="embed">Type in Code / Embedded</option>
+                    </select>
+                    <button onclick="saveMainSettings()" class="dock-action mt-3">SAVE SETTINGS</button>
+                </div>
+
+                <div class="hub-card">
+                    <span class="dock-label">Account</span>
+                    <div id="settingsProfileAvatar" class="profile-avatar-preview"><span id="settingsProfileFallback">👤</span><img id="settingsProfileImage" class="hidden" alt="Profile picture"></div>
+                    <input id="profilePictureInput" type="file" accept="image/png,image/jpeg,image/webp" class="hidden" onchange="handleProfilePictureUpload(event)">
+                    <button id="uploadProfilePictureButton" onclick="openProfilePicturePicker()" class="dock-action">📷 UPLOAD PROFILE PICTURE</button>
+                    <button id="removeProfilePictureButton" onclick="removeProfilePicture()" class="dock-action mt-2 hidden">REMOVE PICTURE</button>
+                    <button onclick="promptEditUsername()" class="dock-action mt-2">✏️ CHANGE USERNAME</button>
+                    <button id="settingsAccountButton" onclick="openOptionalLogin()" class="dock-action yellow mt-2">LOG IN TO SAVE STATS</button>
+                    <p id="profilePictureAccountNote" class="text-[10px] text-blue-200 mt-2">Profile pictures are saved with a logged-in account.</p>
+                </div>
             </div>
-        `;
-        container.appendChild(wrapper);
-    });
-}
 
-function openTabDMWith(username) {
-    activeDMTargetUser = username;
-    showMessagesTab();
-    clearUnreadBadge();
-    document.getElementById('activeDMChatHeader').innerText = `💬 MESSAGE WITH ${username.toUpperCase()}`;
-    socket.emit('get_dm_history', { targetUsername: username });
-}
-
-function sendTabDM() {
-    const input = document.getElementById('tabDMInput');
-    const user = AuthSession.getUser();
-    if (input.value.trim() && activeDMTargetUser) {
-        socket.emit('send_direct_message', {
-            targetUsername: activeDMTargetUser,
-            message: input.value.trim(),
-            senderUsername: user ? user.username : 'Player'
-        });
-        input.value = '';
-    }
-}
-
-socket.on('dm_error', (data) => {
-    showToast(data.message, "⚠️");
-});
-
-socket.on('receive_direct_message', (data) => {
-    incrementUnreadBadge();
-    showToast(`New message from ${data.senderUsername}`, "💬");
-    if (activeDMTargetUser === data.senderUsername) {
-        renderDMMessages(data.history);
-    }
-});
-
-socket.on('dm_sent_success', (data) => {
-    renderDMMessages(data.history);
-});
-
-socket.on('load_dm_history', (data) => {
-    renderDMMessages(data.history);
-});
-
-function renderDMMessages(history) {
-    const container = document.getElementById('tabDMMessages');
-    if (!container) return;
-    container.innerHTML = '';
-    const user = AuthSession.getUser();
-    const myUname = user ? user.username : 'Player';
-
-    const capped = history.slice(-10);
-    capped.forEach(msg => {
-        const isMe = msg.senderUsername === myUname;
-        const div = document.createElement('div');
-        div.className = isMe ? 'text-right' : 'text-left';
-        div.innerHTML = `<span class="${isMe ? 'bg-yellow-400 text-blue-950' : 'bg-blue-800 text-white'} font-bold px-2.5 py-1 rounded-xl inline-block text-[11px] mb-1">${isMe ? 'Me' : escapeHTML(msg.senderUsername)}: ${escapeHTML(msg.message)}</span>`;
-        container.appendChild(div);
-    });
-    container.scrollTop = container.scrollHeight;
-}
-
-socket.on('leaderboard_update', (topPlayers) => {
-    localStorage.setItem('saved_leaderboard', JSON.stringify(topPlayers));
-    renderLeaderboard(topPlayers);
-});
-
-function triggerChatActivityTimer() {
-    const overlay = document.getElementById('chatOverlay');
-    if (!overlay) return;
-    overlay.classList.remove('hidden-overlay');
-    clearTimeout(chatInactivityTimer);
-    chatInactivityTimer = setTimeout(() => {
-        overlay.classList.add('hidden-overlay');
-        const label = document.getElementById('toggleChatBtnLabel');
-        if (label) label.innerText = 'Show Chat';
-    }, 5005);
-}
-
-function toggleOverlayChat() {
-    const overlay = document.getElementById('chatOverlay');
-    const label = document.getElementById('toggleChatBtnLabel');
-    if (!overlay) return;
-    if (overlay.classList.contains('hidden-overlay')) {
-        overlay.classList.remove('hidden-overlay');
-        if (label) label.innerText = 'Hide Chat';
-        triggerChatActivityTimer();
-    } else {
-        overlay.classList.add('hidden-overlay');
-        if (label) label.innerText = 'Show Chat';
-        clearTimeout(chatInactivityTimer);
-    }
-}
-
-document.getElementById('matchChatInput')?.addEventListener('input', triggerChatActivityTimer);
-
-function toggleGameTopBar() {
-    const topBar = document.getElementById('gameTopBar');
-    const icon = document.getElementById('topBarTabIcon');
-    if (!topBar) return;
-
-    if (topBar.classList.contains('translate-y-0')) {
-        topBar.classList.remove('translate-y-0');
-        if (icon) icon.innerText = '▼';
-    } else {
-        topBar.classList.add('translate-y-0');
-        if (icon) icon.innerText = '▲';
-    }
-}
-
-function openMakeCodeModal() {
-    document.getElementById('makeCodeIframe').src = "https://smashkarts.io";
-    document.getElementById('makeCodeModal').classList.remove('hidden');
-}
-
-function closeMakeCodeModal() {
-    document.getElementById('makeCodeIframe').src = "";
-    document.getElementById('makeCodeModal').classList.add('hidden');
-}
-
-function extractSmashUrlClient(rawInput) {
-    if (!rawInput) return "";
-    let text = String(rawInput).trim();
-    
-    if (text.includes('ttps://')) {
-        text = text.replace('ttps://', 'https://');
-    }
-
-    text = text.replace(/['"]+/g, '');
-
-    const linkMatch = text.match(/https?:\/\/(www\.)?smashkarts\.io(\/link\/)?\?[^\s]+/i);
-    if (linkMatch) {
-        let matchedUrl = linkMatch[0];
-        if (!matchedUrl.includes('/link/')) {
-            matchedUrl = matchedUrl.replace('smashkarts.io/?', 'smashkarts.io/link/?');
-        }
-        return matchedUrl;
-    }
-    
-    const roomMatch = text.match(/Room:\s*([A-Za-z0-9]+)/i) || text.match(/room=([A-Za-z0-9]+)/i);
-    if (roomMatch) {
-        return `https://smashkarts.io/link/?room=${encodeURIComponent(roomMatch[1])}`;
-    }
-
-    if (text.length > 0 && !text.includes(' ') && !text.includes('\n') && !text.includes('/')) {
-        return `https://smashkarts.io/link/?room=${encodeURIComponent(text)}`;
-    }
-
-    return "";
-}
-
-function copyAndPlay() {
-    const codeInput = document.getElementById('copyCodeInput').value.trim();
-    const cleanLink = extractSmashUrlClient(codeInput);
-    
-    if (!cleanLink) {
-        showToast("Error: You must paste the Smash Karts room link or code first!", "⚠️");
-        return;
-    }
-    
-    document.getElementById('smashUrl').value = cleanLink;
-    closeMakeCodeModal();
-    createLobby();
-}
-
-function switchMatchMode(mode) {
-    currentMode = mode;
-    showTab('setupTab');
-    document.getElementById('btnNav1v1').classList.toggle('active', mode === '1v1');
-    document.getElementById('btnNav2v2').classList.toggle('active', mode === '2v2');
-    document.getElementById('arenaTitle').innerText = `${mode.toUpperCase()} MATCHMAKING`;
-    document.getElementById('arenaSubtitle').innerText = `Start or join a ${mode} match`;
-}
-
-function showTab(tabId) {
-    document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
-    document.querySelectorAll('.sidebar-btn').forEach(btn => btn.classList.remove('active'));
-    
-    if (tabId === 'leaderboardTab') document.getElementById('btnNavLeaderboard').classList.add('active');
-    if (tabId === 'messagesTab') document.getElementById('btnNavMessages').classList.add('active');
-    if (tabId === 'setupTab') {
-        document.getElementById(currentMode === '2v2' ? 'btnNav2v2' : 'btnNav1v1').classList.add('active');
-    }
-    
-    document.getElementById(tabId).classList.remove('hidden');
-}
-
-function createLobby() {
-    const user = AuthSession.getUser();
-    const playerName = user ? user.username : "Player";
-    
-    let smashUrlInput = document.getElementById('smashUrl').value.trim();
-    smashUrlInput = extractSmashUrlClient(smashUrlInput);
-
-    if (!smashUrlInput) {
-        showToast("Error: A valid Smash Karts room link or code is required!", "⚠️");
-        return;
-    }
-
-    const winCondition = document.getElementById('winCondition').value;
-    socket.emit('create_room', { playerName, smashUrl: smashUrlInput, winCondition, mode: currentMode });
-}
-
-socket.on('room_error', (data) => {
-    showToast(data.message, "❌");
-});
-
-socket.on('room_created', (room) => openPreGameLobby(room));
-
-function openPreGameLobby(room) {
-    activeRoomData = room;
-    closeFindGameModal();
-    document.getElementById('preGameLobbyModal').classList.remove('hidden');
-    updatePreGameLobbyUI(room);
-}
-
-function updatePreGameLobbyUI(room) {
-    const playerList = document.getElementById('preGamePlayerList');
-    if (!playerList) return;
-    playerList.innerHTML = '';
-    room.players.forEach((p, idx) => {
-        const item = document.createElement('div');
-        item.className = 'bg-blue-900/60 p-2 rounded-xl border border-white/10 flex justify-between';
-        item.innerHTML = `<span class="font-bold text-white">👤 ${escapeHTML(p.name)}</span><span class="text-yellow-300 font-bold text-[10px]">Slot ${idx+1}</span>`;
-        playerList.appendChild(item);
-    });
-}
-
-function closePreGameLobbyModal() {
-    document.getElementById('preGameLobbyModal').classList.add('hidden');
-}
-
-function enterGameFromLobby() {
-    if (!activeRoomData || !activeRoomData.smashUrl) {
-        showToast("Error: No valid Smash Karts launch room URL found!", "⚠️");
-        return;
-    }
-    
-    closePreGameLobbyModal();
-
-    const user = AuthSession.getUser();
-    if (user) {
-        socket.emit('record_match_played', user.username);
-        
-        let localLeaderboard = JSON.parse(localStorage.getItem('saved_leaderboard')) || [];
-        let pIndex = localLeaderboard.findIndex(p => p.username === user.username);
-        if (pIndex >= 0) {
-            localLeaderboard[pIndex].matches = (localLeaderboard[pIndex].matches || 0) + 1;
-        } else {
-            localLeaderboard.push({ username: user.username, matches: 1 });
-        }
-        localLeaderboard.sort((a, b) => b.matches - a.matches);
-        localStorage.setItem('saved_leaderboard', JSON.stringify(localLeaderboard));
-        renderLeaderboard(localLeaderboard);
-    }
-
-    const gameScreen = document.getElementById('gameScreen');
-    const smashFrame = document.getElementById('smashFrame');
-    const gameRoomCodeDisplay = document.getElementById('gameRoomCodeDisplay');
-    
-    let roomCode = "us643345";
-    if (activeRoomData && activeRoomData.smashUrl) {
-        const match = activeRoomData.smashUrl.match(/room=([A-Za-z0-9]+)/i);
-        if (match) roomCode = match[1];
-    }
-
-    currentRoomCode = roomCode;
-    if (gameRoomCodeDisplay) {
-        gameRoomCodeDisplay.innerText = roomCode;
-    }
-
-    let popupMsgDiv = document.getElementById('popupMessageOverlay');
-    if (!popupMsgDiv && gameScreen) {
-        popupMsgDiv = document.createElement('div');
-        popupMsgDiv.id = 'popupMessageOverlay';
-        popupMsgDiv.className = 'absolute inset-0 flex items-center justify-center pointer-events-none z-10';
-        gameScreen.appendChild(popupMsgDiv);
-    }
-
-    if (currentGameplayMode === 'popup') {
-        window.open(activeRoomData.smashUrl, '_blank', 'width=1000,height=700');
-        if (smashFrame) smashFrame.classList.add('hidden');
-        if (popupMsgDiv) {
-            popupMsgDiv.innerHTML = `<div class="bg-blue-950/90 border border-yellow-400/50 px-5 py-2.5 rounded-xl shadow-xl text-yellow-300 font-bungee text-xs tracking-wide">JOIN POP UP TAB :)</div>`;
-            popupMsgDiv.classList.remove('hidden');
-        }
-    } else {
-        if (popupMsgDiv) popupMsgDiv.classList.add('hidden');
-        if (smashFrame) {
-            smashFrame.classList.remove('hidden');
-            smashFrame.src = activeRoomData.smashUrl || "https://smashkarts.io";
-        }
-    }
-    
-    gameScreen.classList.remove('game-fade-exit', 'hidden');
-    const badge = document.getElementById('gameModeBadge');
-    if (badge) badge.innerText = activeRoomData.mode;
-    triggerChatActivityTimer();
-}
-
-function copyActiveRoomCode(code) {
-    const codeToCopy = code || currentRoomCode;
-    if (navigator.clipboard && codeToCopy) {
-        navigator.clipboard.writeText(codeToCopy).then(() => {
-            showToast(`Room code (${codeToCopy}) copied to clipboard!`, "📋");
-        }).catch(() => {
-            showToast("Failed to copy code.", "❌");
-        });
-    }
-}
-
-function leaveEmbeddedGame() {
-    if (activeRoomData) {
-        socket.emit('leave_match', { roomId: activeRoomData.roomId });
-    }
-
-    const gameScreen = document.getElementById('gameScreen');
-    const smashFrame = document.getElementById('smashFrame');
-    if (smashFrame) {
-        smashFrame.src = '';
-    }
-
-    const popupMsgDiv = document.getElementById('popupMessageOverlay');
-    if (popupMsgDiv) popupMsgDiv.classList.add('hidden');
-
-    const topBar = document.getElementById('gameTopBar');
-    if (topBar) topBar.classList.remove('translate-y-0');
-
-    gameScreen.classList.add('game-fade-exit');
-
-    setTimeout(() => {
-        gameScreen.classList.add('hidden');
-        document.getElementById('mainDashboard').classList.remove('hidden');
-        activeRoomData = null;
-        
-        const smashUrlInput = document.getElementById('smashUrl');
-        if (smashUrlInput) smashUrlInput.value = '';
-    }, 355);
-}
-
-function sendPreGameChatMessage() {
-    const input = document.getElementById('preGameChatInput');
-    const user = AuthSession.getUser();
-    if (input.value.trim() && activeRoomData) {
-        socket.emit('send_match_chat', { roomId: activeRoomData.roomId, message: input.value.trim(), senderName: user ? user.username : 'Player' });
-        input.value = '';
-    }
-}
-
-function sendMatchChatMessage() {
-    const input = document.getElementById('matchChatInput');
-    const user = AuthSession.getUser();
-    if (input.value.trim() && activeRoomData) {
-        socket.emit('send_match_chat', { roomId: activeRoomData.roomId, message: input.value.trim(), senderName: user ? user.username : 'Player' });
-        input.value = '';
-        triggerChatActivityTimer();
-    }
-}
-
-socket.on('receive_match_chat', (data) => {
-    const msg = `<div class="bg-blue-950/80 p-1.5 rounded-xl border border-white/10"><strong class="text-yellow-300">${escapeHTML(data.senderName)}:</strong> ${escapeHTML(data.message)}</div>`;
-    
-    const matchChat = document.getElementById('matchChatMessages');
-    const preGameChat = document.getElementById('preGameChatMessages');
-
-    if (matchChat) matchChat.innerHTML += msg;
-    if (preGameChat) preGameChat.innerHTML += msg;
-
-    if (matchChat) {
-        while (matchChat.children.length > 10) matchChat.removeChild(matchChat.firstChild);
-        matchChat.scrollTop = matchChat.scrollHeight;
-    }
-    if (preGameChat) {
-        while (preGameChat.children.length > 10) preGameChat.removeChild(preGameChat.firstChild);
-        preGameChat.scrollTop = preGameChat.scrollHeight;
-    }
-});
-
-function openFindGameModal() {
-    document.getElementById('findGameModal').classList.remove('hidden');
-    socket.emit('get_public_rooms');
-}
-
-function closeFindGameModal() {
-    document.getElementById('findGameModal').classList.add('hidden');
-}
-
-socket.on('public_rooms_update', (rooms) => {
-    publicRoomsCache = rooms;
-    const container = document.getElementById('publicRoomsList');
-    if (!container) return;
-    container.innerHTML = rooms.length === 0 ? `<p class="text-center text-xs text-blue-200">No rooms active.</p>` : '';
-    
-    rooms.forEach(room => {
-        const row = document.createElement('div');
-        row.className = 'flex justify-between items-center bg-blue-950/80 p-3 rounded-2xl';
-        row.innerHTML = `
-            <div>
-                <p class="text-xs text-white font-bold">${escapeHTML(room.hostName)} (${escapeHTML(room.mode)})</p>
-                <p class="text-[10px] text-blue-200">${escapeHTML(room.winCondition)}</p>
+            <div class="hub-card mt-4" style="background:#111827">
+                <div class="flex items-center justify-between gap-3">
+                    <div>
+                        <div class="flex items-center gap-2">
+                            <span class="dock-label" style="color:#1ed760">Spotify</span><button type="button" onclick="openSpotifySetupInfo()" title="Spotify setup help" style="width:22px;height:22px;border-radius:999px;border:1px solid #1ed760;color:#1ed760;font-weight:900;font-size:11px;line-height:1">i</button>
+                            
+                        </div>
+                        <p class="text-[11px] text-gray-300 mt-1">Connect one Spotify account normally. Premium users get full in-site playback and skip controls; Free users get in-site search plus the official Spotify player.</p>
+                    </div>
+                    <span id="spotifySettingsStatus" class="text-[10px] font-bold text-gray-300">Ready to connect</span>
+                </div>
+                <div class="grid grid-cols-2 gap-2 mt-3">
+                    <button id="spotifySettingsConnectButton" onclick="spotifyConnect()" class="dock-action green">CONNECT SPOTIFY</button>
+                    <button onclick="openSpotifyWebsite()" class="dock-action">OPEN SPOTIFY WEB</button>
+                </div>
             </div>
-            <button onclick="joinPublicRoomById('${room.roomId}')" class="bg-emerald-500 hover:bg-emerald-400 text-white font-black px-3 py-1.5 rounded-xl text-xs uppercase">Join</button>
-        `;
-        container.appendChild(row);
-    });
-});
+        </div>
+    </div>
 
-document.addEventListener("DOMContentLoaded", () => {
-    if (AuthSession.isLoggedIn()) {
-        document.getElementById("authModal").classList.add("hidden");
-        AuthSession.startTracker();
-        updateUserUI();
-        
-        renderLeaderboard(JSON.parse(localStorage.getItem('saved_leaderboard')) || []);
-        updateFriendsTabList();
-    } else {
-        document.getElementById("authModal").classList.remove("hidden");
-    }
-});
+    <div id="editUsernameModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4 exclusive-modal">
+        <div class="w-full max-w-sm bg-blue-900 border-2 border-yellow-400 rounded-3xl p-6 shadow-2xl">
+            <h3 class="font-bungee text-lg text-yellow-300 mb-3">✏️ CHANGE USERNAME</h3>
+            <input type="text" id="newUsernameInput" placeholder="Enter new username..." class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold mb-4">
+            <div class="flex gap-2">
+                <button onclick="closeEditUsernameModal()" class="w-1/2 bg-gray-600 hover:bg-gray-500 text-white font-bold py-2.5 rounded-xl text-xs">Cancel</button>
+                <button onclick="saveNewUsername()" class="w-1/2 btn-smash text-white font-bungee py-2.5 rounded-xl text-xs">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Optional account login. No forced login. -->
+    <div id="authModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4 exclusive-modal">
+        <div class="w-full max-w-md bg-blue-900 border-2 border-yellow-400 rounded-3xl p-6 shadow-2xl">
+            <div class="flex justify-between items-start gap-3 mb-5">
+                <div>
+                    <h3 class="font-bungee text-lg text-yellow-300">SAVE YOUR STATS</h3>
+                    <p class="text-[11px] text-blue-200 mt-1">Playing as a guest is free. Log in only if you want permanent stats, history, friends and progression.</p>
+                </div>
+                <button onclick="closeAuthModalOptional()" class="text-white hover:text-red-400 font-bold text-lg">✕</button>
+            </div>
+
+            <div class="flex border-b border-white/20 mb-6 pb-2 gap-4 justify-center">
+                <button id="tabLoginBtn" onclick="toggleAuthTab('login')" class="font-bungee text-lg text-yellow-300 border-b-2 border-yellow-300 pb-1">LOG IN</button>
+                <button id="tabRegisterBtn" onclick="toggleAuthTab('register')" class="font-bungee text-lg text-white/50 pb-1 hover:text-white">CREATE ACCOUNT</button>
+            </div>
+
+            <form id="loginForm" onsubmit="handleAuthSubmit(event, 'login')" class="space-y-4">
+                <div>
+                    <label class="block text-xs font-bold uppercase text-blue-200 mb-1">Username</label>
+                    <input type="text" id="loginUsername" placeholder="Username" class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
+                </div>
+                <div>
+                    <label class="block text-xs font-bold uppercase text-blue-200 mb-1">Email Address</label>
+                    <input type="email" id="loginEmail" required placeholder="player@example.com" class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
+                </div>
+                <div>
+                    <label class="block text-xs font-bold uppercase text-blue-200 mb-1">Password</label>
+                    <input type="password" id="loginPassword" required placeholder="••••••••" class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
+                </div>
+                <button type="submit" class="btn-smash w-full py-3.5 rounded-2xl font-bungee text-lg text-white">LOG IN & SAVE STATS</button>
+            </form>
+
+            <form id="registerForm" onsubmit="handleAuthSubmit(event, 'register')" class="space-y-4 hidden">
+                <div>
+                    <label class="block text-xs font-bold uppercase text-blue-200 mb-1">Username</label>
+                    <input type="text" id="regUsername" required placeholder="SpeedRacer99" class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
+                </div>
+                <div>
+                    <label class="block text-xs font-bold uppercase text-blue-200 mb-1">Email Address</label>
+                    <input type="email" id="regEmail" required placeholder="player@example.com" class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
+                </div>
+                <div>
+                    <label class="block text-xs font-bold uppercase text-blue-200 mb-1">Password</label>
+                    <input type="password" id="regPassword" required placeholder="••••••••" class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
+                </div>
+                <button type="submit" class="btn-smash w-full py-3.5 rounded-2xl font-bungee text-lg text-white">CREATE ACCOUNT</button>
+            </form>
+        </div>
+    </div>
+
+    <div id="onlineUsersModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4 exclusive-modal">
+        <div class="w-full max-w-md bg-blue-900 border-2 border-emerald-400 rounded-3xl p-6 shadow-2xl">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="font-bungee text-lg text-emerald-300">🟢 ONLINE PLAYERS</h3>
+                <button onclick="closeOnlineModal()" class="text-white hover:text-red-400 font-bold text-lg">✕</button>
+            </div>
+            <div id="onlineUsersList" class="max-h-80 overflow-y-auto space-y-2"></div>
+        </div>
+    </div>
+
+    <!-- =========================================================
+         GAME SCREEN
+         ========================================================= -->
+    <div id="gameScreen" class="hidden fixed inset-0 z-40 bg-black overflow-hidden">
+
+        <div id="gameTopBar">
+            <div id="arenaToolbar" hidden>
+                <div class="arena-brand">
+                    <span>🎮 SMASH KARTS</span>
+                    <span id="gameModeBadge">1v1</span>
+                    <div id="gameLobbyInfo">
+                        <span id="gameLobbyPlayerCount">👥 0 IN LOBBY</span>
+                        <span id="gameLobbyPlayerNames">No active players</span>
+                    </div>
+                </div>
+
+                <div class="arena-actions">
+                    <button id="copyRoomCodeBtn" class="arena-button" onclick="copyActiveRoomCode()" title="Copy room code">
+                        Code: (<span id="gameRoomCodeDisplay">------</span>)
+                    </button>
+                    <button id="gamePasteCodeButton" class="arena-button" onclick="pasteCodeIntoCurrentLobby()">📋 PASTE CODE</button>
+                    <button id="gameLobbyButton" class="arena-button" onclick="openGameDock('lobby')">👥 LOBBY</button>
+                    <div id="spotifyMiniPlayer" class="spotify-mini" title="Click the song to open Music">
+                        <div class="spotify-mini-copy" onclick="openGameDock('music')">
+                            <span id="spotifyMiniTrack" class="spotify-mini-track">🎵 Spotify</span>
+                        </div>
+                        <button class="spotify-mini-skip" onclick="spotifyNextTrack()" title="Skip song">⏭</button>
+                    </div>
+                    <button id="arenaChatButton" class="arena-button" onclick="toggleOverlayChat()">💬 <span id="toggleChatBtnLabel">Show Chat</span></button>
+                    <button id="arenaOptionsButton" class="arena-button" onclick="openGameDock('tools')">⚙ OPTIONS</button>
+                </div>
+            </div>
+
+            <button id="arenaMenuToggle" aria-controls="arenaToolbar" aria-expanded="false">
+                <span id="topBarTabIcon">▼</span>
+                <span id="arenaMenuLabel">SHOW MENU</span>
+            </button>
+
+            <div id="arenaOptions" hidden></div>
+        </div>
+
+        <div id="gameStage">
+            <iframe
+                id="smashFrame"
+                src=""
+                title="Smash Karts game"
+                allow="autoplay; fullscreen 'none'">
+            </iframe>
+
+            <!-- ONE organized dock. Nothing stacks on top of it. -->
+            <aside id="gameDock">
+                <div id="gameDockHeader">
+                    <span id="gameDockTitle">👥 LOBBY</span>
+                    <button onclick="closeGameDock()" class="arena-button" style="padding:6px 9px">✕</button>
+                </div>
+
+                <div id="gameDockTabs">
+                    <button class="dock-tab-button" data-dock-tab="lobby" onclick="openGameDock('lobby')">👥 Lobby</button>
+                    <button class="dock-tab-button" data-dock-tab="chat" onclick="openGameDock('chat')">💬 Chat</button>
+                    <button class="dock-tab-button" data-dock-tab="music" onclick="openGameDock('music')">🎵 Spotify</button>
+                    <button class="dock-tab-button" data-dock-tab="tools" onclick="openGameDock('tools')">⚙ Options</button>
+                </div>
+
+                <div id="gameDockBody">
+                    <section id="dockLobbyPanel" class="game-dock-panel">
+                        <div class="dock-card">
+                            <span class="dock-label">Lobby status</span>
+                            <div id="dockLobbySummary" class="font-bold text-sm text-white">Not in a lobby</div>
+                            <div id="dockReadySummary" class="text-[11px] text-blue-200 mt-1">0 ready</div>
+                        </div>
+                        <div class="dock-card">
+                            <span class="dock-label">Players</span>
+                            <div id="gameDockPlayerList"></div>
+                        </div>
+                        <div class="grid grid-cols-2 gap-2">
+                            <button id="dockReadyButton" class="dock-action green" onclick="toggleMyReadyStatus()">✓ READY</button>
+                            <button class="dock-action yellow" onclick="pasteCodeIntoCurrentLobby()">📋 PASTE CODE</button>
+                        </div>
+                        <div class="dock-card mt-2">
+                            <span class="dock-label">Quick reactions</span>
+                            <div class="grid grid-cols-5 gap-1">
+                                <button class="dock-action" onclick="sendLobbyReaction('🔥')">🔥</button>
+                                <button class="dock-action" onclick="sendLobbyReaction('😂')">😂</button>
+                                <button class="dock-action" onclick="sendLobbyReaction('🏁')">🏁</button>
+                                <button class="dock-action" onclick="sendLobbyReaction('💀')">💀</button>
+                                <button class="dock-action" onclick="sendLobbyReaction('GG')">GG</button>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section id="dockChatPanel" class="game-dock-panel hidden">
+                        <div id="chatOverlay">
+                            <div class="flex justify-between items-center mb-2">
+                                <span class="font-bungee text-xs text-yellow-300">💬 LOBBY CHAT</span>
+                                <span class="text-[10px] text-blue-200">same chat as lobby</span>
+                            </div>
+                            <div id="matchChatMessages"></div>
+                            <div class="flex gap-2 mt-3">
+                                <input type="text" id="matchChatInput" placeholder="Type..." onkeydown="if(event.key==='Enter') sendMatchChatMessage()" class="smash-input flex-1 px-3 py-2 rounded-xl text-xs">
+                                <button onclick="sendMatchChatMessage()" class="bg-yellow-400 text-blue-950 font-black px-3 py-2 rounded-xl text-xs">Send</button>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section id="dockMusicPanel" class="game-dock-panel hidden">
+                        <div class="spotify-web-shell">
+                            <div class="spotify-web-top">
+                                <div>
+                                    <div class="spotify-logo-text">Spotify Web</div>
+                                    <div id="spotifyDockStatus" class="text-[10px] text-gray-400 mt-1">Not connected</div>
+                                </div>
+                                <button id="spotifyDockConnectButton" onclick="spotifyConnect()" class="dock-action green" style="width:auto">CONNECT</button>
+                            </div>
+                            <div class="spotify-web-body">
+                                <div class="spotify-now">
+                                    <img id="spotifyDockArt" alt="">
+                                    <div class="min-w-0">
+                                        <div id="spotifyDockTrack" class="font-black text-sm truncate">Nothing playing</div>
+                                        <div id="spotifyDockArtist" class="text-[11px] text-gray-400 truncate mt-1">Connect Spotify to start</div>
+                                        <div class="spotify-controls">
+                                            <button onclick="spotifyPreviousTrack()" class="spotify-control">⏮</button>
+                                            <button id="spotifyDockPlayButton" onclick="spotifyTogglePlayback()" class="spotify-control primary">▶</button>
+                                            <button onclick="spotifyNextTrack()" class="spotify-control">⏭</button>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div id="spotifyDockFreePlayerWrap" class="hidden mb-3">
+                                    <iframe id="spotifyDockEmbed" title="Spotify player" style="border-radius:14px;width:100%;height:152px;border:0" allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture" loading="lazy"></iframe>
+                                </div>
+
+                                <div class="spotify-search-row">
+                                    <input id="spotifyDockSearchInput" type="text" placeholder="Search Spotify for any song..." onkeydown="if(event.key==='Enter') spotifySearch('dock')" class="smash-input flex-1 px-3 py-2 rounded-xl text-xs">
+                                    <button onclick="spotifySearch('dock')" class="dock-action green" style="width:auto">SEARCH</button>
+                                </div>
+                                <div id="spotifyDockResults" class="spotify-results"></div>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section id="dockToolsPanel" class="game-dock-panel hidden">
+                        <div class="grid grid-cols-2 gap-2">
+                            <button class="dock-action" onclick="copyActiveRoomCode()">📋 COPY CODE</button>
+                            <button class="dock-action" onclick="openOnlineModal()">🟢 ONLINE</button>
+                            <button class="dock-action" onclick="toggleArenaFullscreen()">⛶ FULLSCREEN</button>
+                            <button class="dock-action" onclick="openSettingsModal()">⚙️ SETTINGS</button>
+                            <button class="dock-action" onclick="rollArenaDice()">🎲 DICE</button>
+                            <button class="dock-action" onclick="flipArenaCoin()">🪙 COIN</button>
+                        </div>
+                        <button class="dock-action red mt-3" onclick="leaveEmbeddedGame()">✕ EXIT GAME</button>
+                    </section>
+                </div>
+            </aside>
+        </div>
+    </div>
+
+    <!-- =========================================================
+         DASHBOARD
+         ========================================================= -->
+    <div id="mainDashboard" class="min-h-screen flex flex-col justify-between">
+        <header class="w-full px-6 py-4 flex justify-between items-center gap-4 flex-wrap">
+            <div class="flex items-center gap-3 flex-wrap">
+                <div class="flex items-center gap-2 bg-blue-900/40 p-2 pr-4 rounded-2xl border border-white/20">
+                    <button id="headerAvatarButton" class="profile-avatar-button" onclick="openMyProfile()" title="Open my profile">
+                        <span id="headerProfileFallback">👤</span>
+                        <img id="headerProfileImage" class="hidden" alt="Profile picture">
+                    </button>
+                    <div>
+                        <span id="accountModeLabel" class="block text-[10px] font-bold uppercase text-blue-200">Guest</span>
+                        <div class="flex items-center gap-2">
+                            <span id="userDisplayTag" class="text-sm font-bold text-white">Guest</span>
+                        </div>
+                    </div>
+                </div>
+
+                <button id="onlineCounterBtn" onclick="openOnlineModal()" class="bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/50 px-3 py-2 rounded-2xl flex items-center gap-2">
+                    <span class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                    <span id="onlineCountBadge" class="text-xs font-bold text-emerald-300">0 Online</span>
+                </button>
+
+                <div id="connectionPill">
+                    <span id="connectionDot"></span>
+                    <span id="connectionText">Connected</span>
+                </div>
+            </div>
+
+            <div id="headerRightActions">
+                <button id="headerAccountButton" onclick="openOptionalLogin()" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 text-xs font-black px-4 py-2 rounded-xl">LOG IN TO SAVE STATS</button>
+                <button onclick="openSettingsModal()" class="bg-blue-800 hover:bg-blue-700 text-white text-xs font-bold px-4 py-2 rounded-xl">⚙️ SETTINGS</button>
+            </div>
+        </header>
+
+        <div class="flex flex-1 w-full max-w-7xl mx-auto px-4">
+            <aside class="flex flex-col gap-4 py-6 pr-4 items-center">
+                <button id="btnNavFFA" onclick="openFfaPage()" title="FFA" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center shadow-lg"><span class="sidebar-text-icon">FFA</span></button>
+                <button id="btnNav1v1" onclick="switchMatchMode('1v1')" title="1v1 Matchmaking" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center shadow-lg active"><span class="sidebar-text-icon">1v1</span></button>
+                <button id="btnNavMessages" onclick="showMessagesTab()" title="Friends & Messages" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-lg">💬<span id="messagesBadge" class="unread-badge hidden">0</span></button>
+                <button id="btnNavMusic" onclick="openMusicPage()" title="Spotify" class="sidebar-btn w-12 h-12 rounded-2xl flex items-center justify-center shadow-lg" aria-label="Spotify">
+                    <svg class="spotify-nav-icon" viewBox="0 0 24 24" aria-hidden="true">
+                        <circle cx="12" cy="12" r="11" fill="#1ED760"/>
+                        <path d="M6.6 9.1c3.6-1 7.7-.8 11.1.7" fill="none" stroke="#07140b" stroke-width="1.8" stroke-linecap="round"/>
+                        <path d="M7.2 12.2c3.1-.8 6.7-.6 9.7.6" fill="none" stroke="#07140b" stroke-width="1.6" stroke-linecap="round"/>
+                        <path d="M7.8 15.1c2.6-.6 5.4-.5 8 .5" fill="none" stroke="#07140b" stroke-width="1.45" stroke-linecap="round"/>
+                    </svg>
+                </button>
+            </aside>
+
+            <main class="flex-1 flex flex-col items-center">
+                <div class="mb-8">
+                    <div class="bg-gradient-to-b from-yellow-300 to-yellow-500 border-4 border-white rounded-3xl px-10 py-3 shadow-2xl">
+                        <span class="font-bungee text-3xl sm:text-4xl text-blue-950">Smashkarts1v1s</span>
+                    </div>
+                </div>
+
+                <div class="w-full max-w-4xl bg-blue-950/40 border-2 border-white/20 backdrop-blur-xl rounded-3xl p-6 shadow-2xl mb-8">
+                    <div id="messagesTab" class="tab-content hidden space-y-4">
+                        <div class="flex justify-between items-center gap-3">
+                            <div>
+                                <h2 class="font-bungee text-xl text-yellow-300">💬 MESSAGES</h2>
+                                <p class="text-xs text-blue-200 mt-1">Simple Discord-style DMs with your friends.</p>
+                            </div>
+                            <button onclick="openOnlineModal()" class="bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs px-4 py-2 rounded-xl">+ FIND FRIENDS</button>
+                        </div>
+
+                        <div id="guestMessagesNotice" class="hidden bg-yellow-500/15 border border-yellow-400/40 rounded-xl p-3 text-xs text-yellow-100">
+                            Direct messages are saved-account features. Log in to save friends and conversations.
+                        </div>
+
+                        <div class="discord-shell">
+                            <aside class="discord-sidebar">
+                                <div class="discord-sidebar-head">
+                                    <div class="font-bungee text-xs text-white mb-2">DIRECT MESSAGES</div>
+                                    <input id="dmFriendSearch" type="text" placeholder="Find a friend..." oninput="filterDiscordFriends()" class="smash-input w-full px-3 py-2 rounded-lg text-xs">
+                                </div>
+                                <div id="friendsTabList" class="discord-friend-list"></div>
+                            </aside>
+
+                            <section class="discord-chat">
+                                <div class="discord-chat-head">
+                                    <div class="flex items-center gap-2 min-w-0">
+                                        <div id="dmChatAvatar" class="discord-avatar big">💬</div>
+                                        <div class="min-w-0">
+                                            <div id="activeDMChatHeader" class="font-black text-sm text-white truncate">Select a friend</div>
+                                            <div id="dmChatStatus" class="text-[10px] text-blue-200">Choose somebody from the left.</div>
+                                        </div>
+                                    </div>
+
+                                </div>
+
+                                <div id="tabDMMessages" class="discord-messages">
+                                    <div id="dmEmptyState" class="h-full grid place-items-center text-center text-blue-200 text-xs">
+                                        Select a friend to start messaging.
+                                    </div>
+                                </div>
+
+                                <div class="discord-composer">
+                                    <textarea id="tabDMInput" placeholder="Message a friend..." onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendTabDM();}" class="smash-input flex-1 px-3 py-2 rounded-xl text-xs"></textarea>
+                                    <button onclick="sendTabDM()" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 font-black px-4 py-3 rounded-xl text-xs">SEND</button>
+                                </div>
+                            </section>
+                        </div>
+                    </div>
+
+                    <div id="setupTab" class="tab-content space-y-6">
+                        <div class="flex justify-between items-center border-b border-white/10 pb-4 gap-3">
+                            <div>
+                                <h2 id="arenaTitle" class="font-bungee text-2xl text-white">1v1 MATCHMAKING</h2>
+                                <p id="arenaSubtitle" class="text-xs text-blue-200">Start or join a match</p>
+                            </div>
+                            <button onclick="openFindGameModal()" class="text-xs bg-emerald-500 hover:bg-emerald-400 text-white font-black px-5 py-2.5 rounded-xl uppercase">🔍 Public Lobbies</button>
+                        </div>
+
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-xs font-bold uppercase text-blue-200 mb-2">Smash Karts Room Link or Code</label>
+                                <div class="flex gap-2">
+                                    <input type="text" id="smashUrl" placeholder="Paste link or code here..." class="smash-input flex-1 px-4 py-3 rounded-2xl text-sm font-bold">
+                                    <button onclick="openMakeCodeModal()" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 font-black px-3 py-3 rounded-2xl text-xs uppercase flex-shrink-0">⚡ Make Code</button>
+                                </div>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-bold uppercase text-blue-200 mb-2">Win Condition</label>
+                                <select id="winCondition" class="smash-input w-full px-4 py-3 rounded-2xl text-sm font-bold">
+                                    <option value="First to 3">First to 3</option>
+                                    <option value="First to 6">First to 6</option>
+                                    <option value="First to 10">First to 10</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <button onclick="createLobby()" class="btn-smash w-full py-4 rounded-2xl font-bungee text-xl text-white">+ CREATE LOBBY & PRE-CHAT</button>
+                    </div>
+
+                    <!-- FFA is now a normal page, never a floating overlay. -->
+                    <div id="ffaTab" class="tab-content hidden space-y-6">
+                        <div class="flex justify-between items-center border-b border-white/10 pb-4 gap-3">
+                            <div>
+                                <h2 class="font-bungee text-2xl text-white">FFA MATCHMAKING</h2>
+                                <p class="text-xs text-blue-200">Join an FFA lobby or create one</p>
+                            </div>
+                            <button onclick="openFindGameModal()" class="text-xs bg-emerald-500 hover:bg-emerald-400 text-white font-black px-5 py-2.5 rounded-xl uppercase">🔍 Public Lobbies</button>
+                        </div>
+
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div class="hub-card">
+                                <h3 class="font-bungee text-sm text-yellow-300 mb-2">JOIN</h3>
+                                <p class="text-xs text-blue-200 mb-4">Jump into an open public FFA lobby.</p>
+                                <button onclick="playFFAFromPage()" class="btn-smash w-full py-4 rounded-2xl font-bungee text-lg text-white">🔥 PLAY FFA</button>
+                            </div>
+                            <div class="hub-card">
+                                <h3 class="font-bungee text-sm text-yellow-300 mb-2">CREATE</h3>
+                                <div class="grid grid-cols-2 gap-2 mb-3">
+                                    <select id="ffaMaxPlayers" class="smash-input px-3 py-2 rounded-xl text-xs font-bold">
+                                        <option value="12" selected>12 players</option>
+                                        <option value="24">24 players</option>
+                                    </select>
+                                    <select id="ffaPrivacy" class="smash-input px-3 py-2 rounded-xl text-xs font-bold">
+                                        <option value="public">Public</option>
+                                        <option value="private">Private</option>
+                                    </select>
+                                </div>
+                                <button onclick="createFFAFromPage()" class="bg-emerald-500 hover:bg-emerald-400 w-full py-4 rounded-2xl font-bungee text-lg text-white">+ CREATE LOBBY</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Spotify is a normal page. Players just connect their account. -->
+                    <div id="musicTab" class="tab-content hidden space-y-4">
+                        <div class="flex justify-between items-center border-b border-white/10 pb-4 gap-3">
+                            <div>
+                                <h2 class="font-bungee text-2xl text-white">SPOTIFY</h2>
+                                <p class="text-xs text-blue-200">Connect Spotify for in-site search. Premium gets full playback controls; Free uses the official Spotify player.</p>
+                            </div>
+                            <div class="flex gap-2 items-center">
+                                <button id="spotifyPageConnectButton" onclick="spotifyConnect()" class="dock-action green" style="width:auto">CONNECT SPOTIFY</button>
+                                <button onclick="openSpotifyWebsite()" class="dock-action" style="width:auto">OPEN SPOTIFY WEB</button>
+                            </div>
+                        </div>
+
+                        <div class="spotify-web-shell">
+                            <div class="spotify-web-top">
+                                <div>
+                                    <div class="spotify-logo-text">Spotify</div>
+                                    <div id="spotifyPageStatus" class="text-[10px] text-gray-400 mt-1">Not connected</div>
+                                </div>
+                                <button onclick="spotifyDisconnect()" class="spotify-control">DISCONNECT</button>
+                            </div>
+
+                            <div class="spotify-app-grid">
+                                <aside class="spotify-library-nav">
+                                    <button id="spotifyNavSearch" class="spotify-nav-button active" onclick="spotifyShowView('search')">⌕ Search</button>
+                                    <button id="spotifyNavPlaylists" class="spotify-nav-button" onclick="spotifyShowView('playlists')">♫ Your Playlists</button>
+                                    <button id="spotifyNavRecent" class="spotify-nav-button" onclick="spotifyShowView('recent')">↻ Recently Played</button>
+                                </aside>
+
+                                <section class="spotify-main-view">
+                                    <div class="spotify-now mb-4">
+                                        <img id="spotifyPageArt" alt="">
+                                        <div class="min-w-0">
+                                            <div id="spotifyPageTrack" class="font-black text-lg truncate">Nothing playing</div>
+                                            <div id="spotifyPageArtist" class="text-xs text-gray-400 truncate mt-1">Connect Spotify to start</div>
+                                            <div class="spotify-controls">
+                                                <button onclick="spotifyPreviousTrack()" class="spotify-control">⏮</button>
+                                                <button id="spotifyPagePlayButton" onclick="spotifyTogglePlayback()" class="spotify-control primary">▶</button>
+                                                <button onclick="spotifyNextTrack()" class="spotify-control">⏭</button>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div id="spotifyFreePlayerWrap" class="hidden mb-4">
+                                        <div class="spotify-view-title mb-2">Spotify Player</div>
+                                        <iframe id="spotifyPageEmbed" title="Spotify player" style="border-radius:14px;width:100%;height:152px;border:0" allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture" loading="lazy"></iframe>
+                                    </div>
+
+                                    <div id="spotifySearchView">
+                                        <div class="spotify-view-title">Search Spotify</div>
+                                        <div class="spotify-search-row" style="margin-top:0">
+                                            <input id="spotifyPageSearchInput" type="text" placeholder="What do you want to listen to?" onkeydown="if(event.key==='Enter') spotifySearch('page')" class="smash-input flex-1 px-4 py-3 rounded-xl text-sm">
+                                            <button onclick="spotifySearch('page')" class="dock-action green" style="width:auto">SEARCH</button>
+                                        </div>
+                                        <div id="spotifyPageResults" class="spotify-results"></div>
+                                    </div>
+
+                                    <div id="spotifyPlaylistsView" class="hidden">
+                                        <div class="flex justify-between items-center gap-2">
+                                            <div class="spotify-view-title">Your Playlists</div>
+                                            <button onclick="spotifyLoadPlaylists()" class="spotify-control">↻</button>
+                                        </div>
+                                        <div id="spotifyPlaylistResults" class="spotify-results"></div>
+                                    </div>
+
+                                    <div id="spotifyRecentView" class="hidden">
+                                        <div class="flex justify-between items-center gap-2">
+                                            <div class="spotify-view-title">Recently Played</div>
+                                            <button onclick="spotifyLoadRecent()" class="spotify-control">↻</button>
+                                        </div>
+                                        <div id="spotifyRecentResults" class="spotify-results"></div>
+                                    </div>
+                                </section>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <!-- =========================================================
+         PRE-GAME LOBBY - only one full modal at a time
+         ========================================================= -->
+    <div id="preGameLobbyModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4 exclusive-modal">
+        <div class="w-full max-w-3xl bg-blue-900 border-2 border-yellow-400 rounded-3xl p-6 shadow-2xl relative flex flex-col max-h-[90vh]">
+            <div class="flex justify-between items-center border-b border-white/10 pb-3 mb-4">
+                <div>
+                    <h3 class="font-bungee text-lg text-yellow-300">👥 MATCH LOBBY</h3>
+                    <p id="preGameLobbyMeta" class="text-[10px] text-blue-200 mt-1"></p>
+                </div>
+                <button onclick="closePreGameLobbyModal()" class="text-white hover:text-red-400 font-bold text-lg">✕</button>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 flex-1 min-h-0">
+                <div class="bg-blue-950/80 rounded-2xl p-3 border border-white/10 flex flex-col min-h-0">
+                    <h4 class="font-bungee text-xs text-yellow-300 mb-2">👥 PLAYERS (0)</h4>
+                    <div id="preGamePlayerList" class="space-y-2 text-xs overflow-y-auto flex-1"></div>
+                    <button id="preGameReadyButton" onclick="toggleMyReadyStatus()" class="bg-emerald-500 hover:bg-emerald-400 text-white font-black py-2 rounded-xl text-xs mt-3">✓ READY</button>
+                    <button onclick="enterGameFromLobby()" class="btn-smash w-full py-3 rounded-xl font-bungee text-sm text-white mt-2">🚀 JOIN GAME</button>
+                </div>
+
+                <div class="md:col-span-2 bg-blue-950/80 rounded-2xl p-3 border border-white/10 flex flex-col min-h-0">
+                    <div class="flex justify-between items-center gap-2 mb-2">
+                        <h4 class="font-bungee text-xs text-yellow-300">💬 LOBBY CHAT</h4>
+                        <button onclick="openGameDock('music')" class="text-[10px] text-green-300 font-bold">🎵 Spotify</button>
+                    </div>
+                    <div id="preGameChatMessages" class="flex-1 overflow-y-auto space-y-2 text-xs pr-1 mb-3 min-h-[160px]"></div>
+                    <div class="flex gap-2">
+                        <input type="text" id="preGameChatInput" placeholder="Chat with lobby..." onkeydown="if(event.key==='Enter') sendPreGameChatMessage()" class="smash-input flex-1 px-3 py-2 rounded-xl text-xs">
+                        <button onclick="sendPreGameChatMessage()" class="bg-yellow-400 text-blue-950 font-black px-4 py-2 rounded-xl text-xs uppercase">Send</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="makeCodeModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4 exclusive-modal">
+        <div class="w-full max-w-3xl bg-blue-900 border-2 border-white/30 rounded-3xl p-5 shadow-2xl flex flex-col h-[85vh]">
+            <div class="flex justify-between items-center mb-3">
+                <h3 class="font-bungee text-base text-yellow-300">⚡ MAKE ROOM CODE IN SMASH KARTS</h3>
+                <button onclick="closeMakeCodeModal()" class="text-white hover:text-red-400 font-bold text-lg">✕</button>
+            </div>
+            <div class="flex-1 bg-black rounded-2xl overflow-hidden mb-3">
+                <iframe id="makeCodeIframe" src="" title="Create a Smash Karts room" class="w-full h-full border-0"></iframe>
+            </div>
+            <div class="flex gap-2">
+                <input type="text" id="copyCodeInput" placeholder="Paste created room link/code..." class="smash-input flex-1 px-3 py-2 rounded-xl text-xs font-bold">
+                <button onclick="copyAndPlay()" class="btn-smash px-5 py-2 rounded-xl font-bungee text-xs text-white">📋 COPY & PLAY NOW</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="findGameModal" class="hidden fixed inset-0 modal-overlay z-50 flex items-center justify-center p-4 exclusive-modal">
+        <div class="w-full max-w-lg bg-blue-900 border-2 border-white/30 rounded-3xl p-6 shadow-2xl relative">
+            <div class="flex justify-between items-center mb-4">
+                <div>
+                    <h3 class="font-bungee text-lg text-yellow-300">🎮 ACTIVE MATCHES</h3>
+                    <p class="text-[10px] text-blue-200">1v1 and FFA</p>
+                </div>
+                <button onclick="closeFindGameModal()" class="text-white hover:text-red-400 font-bold text-lg">✕</button>
+            </div>
+            <div class="flex gap-2 mb-3">
+                <input id="publicRoomSearch" type="text" placeholder="Search host or mode..." class="smash-input flex-1 px-3 py-2 rounded-xl text-xs">
+                <button onclick="socket.emit('get_public_rooms')" class="bg-blue-700 text-white font-bold px-3 rounded-xl text-xs">↻</button>
+            </div>
+            <div id="publicRoomsList" class="max-h-80 overflow-y-auto space-y-2.5"></div>
+        </div>
+    </div>
+
+    <!-- Spotify information -->
+    <div id="spotifySetupInfoModal" class="hidden fixed inset-0 modal-overlay z-[80] flex items-center justify-center p-4 exclusive-modal">
+        <div class="w-full max-w-lg bg-[#121212] border-2 border-[#1ed760] rounded-3xl p-6 shadow-2xl text-white">
+            <div class="flex items-start justify-between gap-4 mb-4">
+                <div>
+                    <h3 class="font-bungee text-lg text-[#1ed760]">🎵 SPOTIFY HELP</h3>
+                    <p class="text-xs text-gray-300 mt-1">How Spotify works on Smashkarts1v1s.</p>
+                </div>
+                <button type="button" onclick="closeSpotifySetupInfo()" class="text-white hover:text-red-400 font-bold text-xl">✕</button>
+            </div>
+
+            <div class="space-y-3 text-sm">
+                <div class="bg-white/5 border border-white/10 rounded-2xl p-4">
+                    <div class="font-black text-[#1ed760] mb-2">CONNECT YOUR SPOTIFY</div>
+                    <p class="text-gray-200">Press <strong>Connect Spotify</strong>, sign into your normal Spotify account, and approve access. You do not need to enter any developer information on this website.</p>
+                </div>
+
+                <div class="bg-white/5 border border-white/10 rounded-2xl p-4">
+                    <div class="font-black text-white mb-2">FREE + PREMIUM</div>
+                    <p class="text-gray-200">Both account types can use the Music page. Premium gets the full in-site playback controls. Free accounts use Spotify's official player for playback while keeping search and music browsing in the site.</p>
+                </div>
+
+                <div class="bg-white/5 border border-white/10 rounded-2xl p-4">
+                    <div class="font-black text-white mb-2">WHILE YOU PLAY</div>
+                    <p class="text-gray-200">The thin game bar shows the current song. Open Music when you want to search or change songs without stacking extra windows over the game.</p>
+                </div>
+            </div>
+
+            <div class="mt-5">
+                <button type="button" onclick="closeSpotifySetupInfo()" class="dock-action green">GOT IT</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/script.js?v=13"></script>
+
+    <script>
+        /*
+           Small layout controller only.
+           The full guest/lobby/music logic comes from server.js after script.js.
+        */
+        (() => {
+            window.openSpotifySetupInfo = function() {
+                document.querySelectorAll('.exclusive-modal').forEach((el) => {
+                    if (el.id !== 'spotifySetupInfoModal') el.classList.add('hidden');
+                });
+                const modal = document.getElementById('spotifySetupInfoModal');
+                if (modal) modal.classList.remove('hidden');
+            };
+
+            window.closeSpotifySetupInfo = function() {
+                document.getElementById('spotifySetupInfoModal')?.classList.add('hidden');
+            };
+
+            const screen = document.getElementById('gameScreen');
+            const toolbar = document.getElementById('arenaToolbar');
+            const menuToggle = document.getElementById('arenaMenuToggle');
+
+            function measureToolbar() {
+                const h = toolbar.hidden ? 0 : toolbar.getBoundingClientRect().height;
+                if (h > 0) screen.style.setProperty('--menu-height', `${h}px`);
+            }
+
+            window.setArenaToolbarOpen = function(open) {
+                toolbar.hidden = !open;
+                screen.classList.toggle('arena-menu-open', open);
+                menuToggle.setAttribute('aria-expanded', String(open));
+                document.getElementById('topBarTabIcon').textContent = open ? '▲' : '▼';
+                document.getElementById('arenaMenuLabel').textContent = open ? 'HIDE MENU' : 'SHOW MENU';
+                measureToolbar();
+            };
+
+            window.toggleGameTopBar = function() {
+                setArenaToolbarOpen(toolbar.hidden);
+            };
+
+            menuToggle.addEventListener('click', toggleGameTopBar);
+            window.addEventListener('resize', measureToolbar);
+            if (typeof ResizeObserver !== 'undefined') new ResizeObserver(measureToolbar).observe(toolbar);
+            setArenaToolbarOpen(false);
+        })();
+    </script>
+</body>
+</html>

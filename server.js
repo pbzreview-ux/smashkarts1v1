@@ -9,6 +9,7 @@ const zlib = require('zlib');
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: '*' } });
+const PLATFORM_VERSION = 'V21.100';
 
 // =========================================================
 // SPOTIFY CONFIG + EXISTING SCRIPT.JS + THIS UPGRADE PACK
@@ -25,6 +26,17 @@ app.get('/api/spotify-config', (req, res) => {
 
     res.json({
         clientId: String(process.env.SPOTIFY_CLIENT_ID || '').trim()
+    });
+});
+
+app.get('/api/platform-status', (req, res) => {
+    res.set({ 'Cache-Control': 'no-store' });
+    res.json({
+        ok: true,
+        version: PLATFORM_VERSION,
+        storage: cloudStorageReady ? 'upstash' : (dataDirectory === path.resolve('/var/data') ? 'disk' : 'local'),
+        roomBotConfigured: !!SMASH_ROOM_BOT_URL,
+        now: Date.now()
     });
 });
 
@@ -50,7 +62,8 @@ app.get('/script.js', (req, res) => {
         '\nwindow.__SPOTIFY_CLIENT_ID__ = ' + JSON.stringify(String(process.env.SPOTIFY_CLIENT_ID || '').trim()) + ';' +
         '\n;(' + installMegaArena.toString() + ')();' +
         '\n;(' + installV12Platform.toString() + ')();' +
-        '\n;(' + installV17Matchmaker.toString() + ')();'
+        '\n;(' + installV17Matchmaker.toString() + ')();' +
+        '\n;(' + installV21UltraPack.toString() + ')();'
     );
 });
 
@@ -329,6 +342,27 @@ function profileFor(username) {
     if (typeof profiles[username].avatar !== 'string') profiles[username].avatar = '';
     profiles[username].settings = normalizeSavedSettings(profiles[username].settings);
     return profiles[username];
+}
+
+function normalizeV21ProfileExtras(value) {
+    const input = value && typeof value === 'object' ? value : {};
+    const statusText = String(input.statusText || '').replace(/[\r\n\t]+/g, ' ').trim().slice(0, 80);
+    const statusPreset = ['online','chill','ranked','ffa','tournament','streaming','coaching','away'].includes(String(input.statusPreset || '').toLowerCase())
+        ? String(input.statusPreset).toLowerCase()
+        : 'online';
+    return {
+        statusText,
+        statusPreset,
+        lfg: !!input.lfg,
+        privacyMode: !!input.privacyMode,
+        updatedAt: Number(input.updatedAt) || 0
+    };
+}
+
+function v21ExtrasFor(username) {
+    const profile = profileFor(username);
+    profile.v21 = normalizeV21ProfileExtras(profile.v21);
+    return profile.v21;
 }
 
 function savePlayer(player) {
@@ -814,6 +848,9 @@ function publicProfileState(username, viewer = null) {
         online: !!onlinePlayer && onlinePlayer.isOnline !== false,
         playing: activeRoom ? String(activeRoom.mode || '').toUpperCase() : '',
         streamerLive: !!account.streamerLive,
+        customStatus: v21ExtrasFor(account.username).privacyMode && viewer?.username !== account.username ? '' : v21ExtrasFor(account.username).statusText,
+        statusPreset: v21ExtrasFor(account.username).statusPreset,
+        lookingForGame: !!v21ExtrasFor(account.username).lfg,
         canSeeMusic: !!viewer && !viewer.isGuest && usersAreFriends(viewer.username, account.username)
     };
 }
@@ -1364,16 +1401,17 @@ function publicReadyMatch(match) {
 }
 
 function createReadyCheck(entries, { mode, queueType, maxPlayers }) {
+    // V21: instant matchmaking. The READY step is intentionally removed.
     const match = {
         id: crypto.randomUUID(),
         mode,
         queueType,
         maxPlayers,
         entries: entries.map(entry => ({ ...entry })),
-        ready: new Set(),
+        ready: new Set(entries.map(entry => entry.socketId)),
         status: 'ready_check',
         createdAt: Date.now(),
-        readyDeadline: Date.now() + MATCH_READY_TIMEOUT_MS,
+        readyDeadline: 0,
         hostSocketId: null,
         roomId: null,
         smashUrl: '',
@@ -1382,11 +1420,18 @@ function createReadyCheck(entries, { mode, queueType, maxPlayers }) {
     MATCHMAKING_MATCHES.set(match.id, match);
     const payload = publicReadyMatch(match);
     for (const entry of match.entries) {
-        io.to(entry.socketId).emit('match_found', payload);
-        io.to(entry.socketId).emit('matchmaking_state', { state: 'ready_check', matchId: match.id });
+        io.to(entry.socketId).emit('match_found', { ...payload, instant: true });
+        io.to(entry.socketId).emit('matchmaking_state', {
+            state: 'match_found',
+            matchId: match.id,
+            instant: true
+        });
     }
-    match.timer = setTimeout(() => failReadyCheck(match.id, 'Somebody did not ready up in time.'), MATCH_READY_TIMEOUT_MS + 250);
     broadcastMatchmakingCounts();
+    setTimeout(() => {
+        const current = MATCHMAKING_MATCHES.get(match.id);
+        if (current && current.status === 'ready_check') prepareMatchRoom(current);
+    }, 250);
     return match;
 }
 
@@ -1595,8 +1640,10 @@ function process1v1Queue(key, queue) {
         if (!candidates.length) break;
 
         candidates.sort((b, c) => {
-            const scoreB = Math.abs(a.rating - b.rating) + recentOpponentPenalty(a.identity, b.identity) + Math.max(0, b.joinedAt - a.joinedAt) / 1000;
-            const scoreC = Math.abs(a.rating - c.rating) + recentOpponentPenalty(a.identity, c.identity) + Math.max(0, c.joinedAt - a.joinedAt) / 1000;
+            const regionPenaltyB = a.region !== 'auto' && b.region !== 'auto' && a.region !== b.region ? 120 : 0;
+            const regionPenaltyC = a.region !== 'auto' && c.region !== 'auto' && a.region !== c.region ? 120 : 0;
+            const scoreB = Math.abs(a.rating - b.rating) + recentOpponentPenalty(a.identity, b.identity) + regionPenaltyB + Math.max(0, b.joinedAt - a.joinedAt) / 1000;
+            const scoreC = Math.abs(a.rating - c.rating) + recentOpponentPenalty(a.identity, c.identity) + regionPenaltyC + Math.max(0, c.joinedAt - a.joinedAt) / 1000;
             return scoreB - scoreC;
         });
         const b = candidates[0];
@@ -1662,7 +1709,20 @@ io.on('connection', socket => {
     socket.on('cancel_matchmaking', () => {
         const pending = findPendingMatchForSocket(socket.id);
         if (pending && pending.status === 'ready_check') {
-            failReadyCheck(pending.id, `${connectedPlayers[socket.id]?.username || 'A player'} cancelled the ready check.`, socket.id);
+            failReadyCheck(pending.id, `${connectedPlayers[socket.id]?.username || 'A player'} cancelled the match.`, socket.id);
+            return;
+        }
+        if (pending && ['creating_room','waiting_for_host'].includes(pending.status)) {
+            pending.status = 'cancelled';
+            for (const entry of pending.entries) {
+                io.to(entry.socketId).emit('matchmaking_match_failed', {
+                    matchId: pending.id,
+                    message: `${connectedPlayers[socket.id]?.username || 'A player'} cancelled before the room was ready.`,
+                    youCancelled: entry.socketId === socket.id
+                });
+            }
+            MATCHMAKING_MATCHES.delete(pending.id);
+            broadcastMatchmakingCounts();
             return;
         }
         removeSocketFromMatchmakingQueues(socket.id, { emitState: true });
@@ -3219,6 +3279,171 @@ io.on('connection', socket => {
     });
 });
 
+// =========================================================
+// V21 ULTRA PACK SERVER BRIDGE
+// =========================================================
+io.on('connection', socket => {
+    const currentPlayer = () => connectedPlayers[socket.id] || null;
+
+    socket.on('v21_ping', payload => {
+        socket.emit('v21_pong', {
+            clientSentAt: Number(payload?.clientSentAt) || Date.now(),
+            serverAt: Date.now()
+        });
+    });
+
+    socket.on('v21_get_profile_extras', () => {
+        const player = currentPlayer();
+        if (!player || player.isGuest) {
+            return socket.emit('v21_profile_extras', {
+                statusText: '',
+                statusPreset: 'online',
+                lfg: false,
+                privacyMode: false,
+                guest: true
+            });
+        }
+        socket.emit('v21_profile_extras', { ...v21ExtrasFor(player.username), guest: false });
+    });
+
+    socket.on('v21_update_profile_extras', patch => {
+        const player = currentPlayer();
+        if (!player || player.isGuest) {
+            return socket.emit('v21_error', { message: 'Log in to save your profile status across devices.' });
+        }
+        const current = v21ExtrasFor(player.username);
+        const next = normalizeV21ProfileExtras({
+            ...current,
+            ...(patch && typeof patch === 'object' ? patch : {}),
+            updatedAt: Date.now()
+        });
+        profileFor(player.username).v21 = next;
+        saveHistory();
+        socket.emit('v21_profile_extras', { ...next, guest: false });
+        broadcastOnlineUsers();
+    });
+
+    socket.on('v21_get_dashboard', () => {
+        const player = currentPlayer();
+        if (!player) return;
+        const account = player.isGuest ? null : accountByUsername(player.username);
+        const profile = player.isGuest ? null : profileFor(player.username);
+        const usernameKey = normalizeUsernameKey(player.username);
+        const matches = Object.values(matchHistory)
+            .filter(match => {
+                const names = new Set([
+                    ...(match?.participants || []),
+                    ...(match?.players || []).map(item => item?.name)
+                ].filter(Boolean).map(normalizeUsernameKey));
+                return names.has(usernameKey);
+            })
+            .sort((a, b) => Number(b?.createdAt || 0) - Number(a?.createdAt || 0))
+            .slice(0, 60)
+            .map(match => ({
+                roomId: match.roomId || '',
+                mode: match.mode || '',
+                queueType: match.queueType || 'casual',
+                createdAt: Number(match.createdAt || 0),
+                hostName: match.hostName || '',
+                participants: Array.from(new Set([
+                    ...(match.participants || []),
+                    ...(match.players || []).map(item => item?.name)
+                ].filter(Boolean))).slice(0, 24),
+                roomCreationSource: match.roomCreationSource || '',
+                hasRoomLink: !!match.smashUrl
+            }));
+
+        const groups = player.isGuest
+            ? []
+            : Object.values(groupStore)
+                .filter(group => groupVisibleTo(group, player))
+                .map(groupSummary);
+
+        const tournaments = tournamentListFor(player).slice(0, 100);
+
+        socket.emit('v21_dashboard', {
+            version: PLATFORM_VERSION,
+            user: account ? publicAccountState(account) : {
+                username: player.username,
+                level: player.level || 1,
+                rating1v1: player.rating1v1 || 1000,
+                ratingFFA: player.ratingFFA || 1000,
+                roles: publicRoles(player.roles),
+                guest: true
+            },
+            profile: profile ? {
+                friendsCount: (profile.friends || []).length,
+                extras: { ...v21ExtrasFor(player.username) }
+            } : { friendsCount: 0, extras: normalizeV21ProfileExtras({}) },
+            matches,
+            groups,
+            tournaments,
+            onlineCount: Object.values(connectedPlayers).filter(item => item.isOnline !== false).length,
+            roomBotConfigured: !!SMASH_ROOM_BOT_URL,
+            storage: cloudStorageReady ? 'UPSTASH PERSISTENT' : (dataDirectory === path.resolve('/var/data') ? 'DISK PERSISTENT' : 'LOCAL ONLY')
+        });
+    });
+
+    socket.on('v21_logout_other_sessions', () => {
+        const player = currentPlayer();
+        if (!player || player.isGuest) return socket.emit('v21_error', { message: 'Log in first.' });
+        if (!player.sessionTokenHash) return socket.emit('v21_error', { message: 'This browser session cannot safely identify itself yet. Log out and back in once, then retry.' });
+        const email = normalizeEmail(player.accountEmail);
+        let removed = 0;
+        for (const [hash, record] of Object.entries(authSessionStore)) {
+            if (normalizeEmail(record?.email) !== email) continue;
+            if (hash === player.sessionTokenHash) continue;
+            delete authSessionStore[hash];
+            removed++;
+        }
+        saveHistory();
+        socket.emit('v21_security_result', { removed });
+    });
+
+    socket.on('v21_export_my_data', () => {
+        const player = currentPlayer();
+        if (!player || player.isGuest) return socket.emit('v21_error', { message: 'Log in to export saved account data.' });
+        const account = accountByUsername(player.username);
+        if (!account) return;
+        const profile = profileFor(player.username);
+        const stableId = `acct:${account.id}`;
+        const myMessages = {};
+        for (const [key, messages] of Object.entries(directMessageStore)) {
+            if (String(key).includes(stableId) || String(key).toLowerCase().includes(normalizeUsernameKey(player.username))) {
+                myMessages[key] = messages;
+            }
+        }
+        const myGroups = Object.values(groupStore).filter(group => (group.members || []).includes(player.username));
+        const myTournaments = Object.values(tournamentStore).filter(tournament =>
+            tournament.hostUsername === player.username ||
+            (tournament.participants || []).includes(player.username) ||
+            (tournament.invited || []).includes(player.username)
+        );
+        socket.emit('v21_my_data_export', {
+            filename: `smash-arena-${player.username}-data.json`,
+            json: JSON.stringify({
+                exportedAt: new Date().toISOString(),
+                account: {
+                    id: account.id,
+                    username: account.username,
+                    email: account.email,
+                    roles: publicRoles(account.roles),
+                    level: account.level,
+                    xp: account.xp,
+                    rating1v1: account.rating1v1,
+                    ratingFFA: account.ratingFFA,
+                    createdAt: account.createdAt,
+                    lastLoginAt: account.lastLoginAt
+                },
+                profile,
+                messages: myMessages,
+                groups: myGroups,
+                tournaments: myTournaments
+            }, null, 2)
+        });
+    });
+});
+
 function broadcastOnlineUsers() {
     const users = Object.values(connectedPlayers)
         .filter(p => p.isOnline !== false)
@@ -3233,7 +3458,10 @@ function broadcastOnlineUsers() {
             level: p.level || 1,
             rating1v1: p.rating1v1 || 1000,
             ratingFFA: p.ratingFFA || 1000,
-            streamerLive: !p.isGuest && !!accountByUsername(p.username)?.streamerLive
+            streamerLive: !p.isGuest && !!accountByUsername(p.username)?.streamerLive,
+            customStatus: p.isGuest ? '' : (v21ExtrasFor(p.username).privacyMode ? '' : v21ExtrasFor(p.username).statusText),
+            statusPreset: p.isGuest ? 'online' : v21ExtrasFor(p.username).statusPreset,
+            lookingForGame: p.isGuest ? false : !!v21ExtrasFor(p.username).lfg
         }));
 
     io.emit('online_users_update', {
@@ -7410,4 +7638,549 @@ function installV17Matchmaker() {
     injectMatchModal();
     socket.emit('get_matchmaking_counts');
     socket.on('connect', () => socket.emit('get_matchmaking_counts'));
+}
+
+// =========================================================
+// V21.100 — 100 FEATURE ULTRA PACK
+// =========================================================
+function installV21UltraPack() {
+    if (window.__V21_ULTRA_INSTALLED__) return;
+    window.__V21_ULTRA_INSTALLED__ = true;
+
+    const VERSION = 'V21.100';
+    const STORE = 'smash_v21_ultra';
+    const SESSION_STARTED = Date.now();
+    const DEFAULTS = {
+        region: 'auto',
+        queueSound: true,
+        matchNotifications: false,
+        autoRequeue: false,
+        compact: false,
+        focus: false,
+        density: 'comfortable',
+        accent: 'gold',
+        background: 100,
+        reducedMotion: false,
+        highContrast: false,
+        fontScale: 100,
+        queueType: 'casual',
+        sidebarCollapsed: false,
+        lastPage: '1v1',
+        mutedDMs: [],
+        pinnedGroups: [],
+        favoriteFriends: [],
+        friendNotes: {},
+        followedStreamers: [],
+        tournamentWatchlist: [],
+        tournamentReminders: [],
+        queueHistory: [],
+        recentOpponents: [],
+        analytics: { queueSamples: [], rating1v1: [], ratingFFA: [], sessionMatches: 0 },
+        drafts: {},
+        coach: { threshold: 15, sampleMs: 600, cooldownMs: 4500, deaths: [], clipMarkers: [] },
+        featureSpotlightSeen: false,
+        streamerHideCode: false
+    };
+
+    const FEATURES = [
+        ['Matchmaking','Instant match flow — READY step removed'],
+        ['Matchmaking','Queue cancel X that actually leaves search'],
+        ['Matchmaking','Live queue elapsed timer'],
+        ['Matchmaking','Estimated wait indicator'],
+        ['Matchmaking','Remember Casual / Ranked preference'],
+        ['Matchmaking','Region preference selector'],
+        ['Matchmaking','Auto-requeue toggle after failed match'],
+        ['Matchmaking','Recent-opponent protection indicator'],
+        ['Matchmaking','Queue-found sound toggle'],
+        ['Matchmaking','Browser notification on match found'],
+        ['Matchmaking','Header queue-status mini pill'],
+        ['Matchmaking','Ranked search-range display'],
+        ['Matchmaking','Quick Match action'],
+        ['Matchmaking','Last 10 queue attempts history'],
+        ['Matchmaking','Escape key leaves queue'],
+        ['Room','Clean Join Match modal'],
+        ['Room','Open room in a new tab'],
+        ['Room','Copy full Smash Karts room link'],
+        ['Room','Copy room code only'],
+        ['Room','Room-link parameter inspector'],
+        ['Room','Launch countdown'],
+        ['Room','Room Bot status badge'],
+        ['Room','Manual fallback wizard'],
+        ['Room','Streamer-safe hidden room code'],
+        ['Room','Rejoin last room shortcut'],
+        ['Workspace','Ctrl+K command palette'],
+        ['Workspace','Global action search'],
+        ['Workspace','Quick actions tray'],
+        ['Workspace','Collapsible sidebar'],
+        ['Workspace','Compact mode'],
+        ['Workspace','Focus mode'],
+        ['Workspace','UI density control'],
+        ['Workspace','Six accent themes'],
+        ['Workspace','Background intensity control'],
+        ['Workspace','Remember last main page'],
+        ['Workspace','Keyboard shortcut cheat sheet'],
+        ['Workspace','Recent activity menu'],
+        ['Workspace','Favorites quick bar'],
+        ['Workspace','Feature spotlight'],
+        ['Workspace','What’s New / 100-feature viewer'],
+        ['Social','Cross-device custom status'],
+        ['Social','Looking For Game status'],
+        ['Social','Status presets'],
+        ['Social','Favorite friends'],
+        ['Social','Private notes for friends'],
+        ['Social','Recent opponents list'],
+        ['Social','Share profile shortcut'],
+        ['Social','My profile quick card'],
+        ['Social','Friend activity summary'],
+        ['Social','Followed streamer list'],
+        ['Social','Privacy-mode shortcut'],
+        ['Social','Saved online/LFG presence display'],
+        ['Messages','Search current DM/group messages'],
+        ['Messages','Unread-only conversation helper'],
+        ['Messages','Per-conversation draft autosave'],
+        ['Messages','Quick emoji bar'],
+        ['Messages','Copy visible message text'],
+        ['Messages','@mention highlight mode'],
+        ['Messages','Mute conversation locally'],
+        ['Messages','Scroll-to-bottom shortcut'],
+        ['Messages','Unread summary card'],
+        ['Groups','Search groups'],
+        ['Groups','Pin favorite groups'],
+        ['Groups','Group-party quick launch helper'],
+        ['Stats','Advanced personal stats dashboard'],
+        ['Stats','Session timer card'],
+        ['Stats','Session match counter'],
+        ['Stats','Level progress bar'],
+        ['Stats','Rating trend sparkline'],
+        ['Stats','Personal-best rating tracker'],
+        ['Stats','Match-history search'],
+        ['Stats','Opponent frequency view'],
+        ['Stats','Average queue-time analytics'],
+        ['Stats','Session summary generator'],
+        ['Stats','Export my account data JSON'],
+        ['Stats','Reset local analytics control'],
+        ['Tournament','Tournament search'],
+        ['Tournament','Public/private filter'],
+        ['Tournament','Region filter'],
+        ['Tournament','Capacity progress meters'],
+        ['Tournament','Registration countdown'],
+        ['Tournament','Local-time schedule display'],
+        ['Tournament','Tournament watchlist'],
+        ['Tournament','Local reminder list'],
+        ['Tournament','Participant search'],
+        ['Tournament','Copy/share tournament summary'],
+        ['Streamer','Streamer dashboard'],
+        ['Streamer','Start tab/screen share'],
+        ['Streamer','Stop screen share'],
+        ['Streamer','Live shared-screen preview'],
+        ['Streamer','Live session timer'],
+        ['Coach','Manual death counter'],
+        ['Coach','Alt+D death hotkey'],
+        ['Coach','Calibrate a death-screen reference'],
+        ['Coach','Automatic death detection (beta)'],
+        ['Coach','Death timestamps + export'],
+        ['Quality','Reduced-motion mode'],
+        ['Quality','High-contrast mode'],
+        ['Quality','Font scaling'],
+        ['Quality','Latency + reconnect diagnostics']
+    ];
+
+    function readState() {
+        try {
+            const parsed = JSON.parse(localStorage.getItem(STORE) || '{}');
+            return {
+                ...DEFAULTS,
+                ...parsed,
+                analytics: { ...DEFAULTS.analytics, ...(parsed.analytics || {}) },
+                coach: { ...DEFAULTS.coach, ...(parsed.coach || {}) }
+            };
+        } catch {
+            return typeof structuredClone === 'function' ? structuredClone(DEFAULTS) : JSON.parse(JSON.stringify(DEFAULTS));
+        }
+    }
+    let state = readState();
+    const saveState = () => {
+        try { localStorage.setItem(STORE, JSON.stringify(state)); } catch {}
+    };
+    const esc = value => String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[ch]));
+    const byId = id => document.getElementById(id);
+    const user = () => (typeof AuthSession !== 'undefined' && AuthSession.getUser ? AuthSession.getUser() : null) || null;
+    const username = () => user()?.username || 'Guest';
+    const nowText = ts => ts ? new Date(ts).toLocaleString() : '—';
+    const downloadJSON = (filename, value) => {
+        const blob = new Blob([typeof value === 'string' ? value : JSON.stringify(value, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1500);
+    };
+    const toast = (message, icon='⚡') => typeof showToast === 'function' ? showToast(message, icon) : console.log(message);
+
+    let queueStartedAt = 0;
+    let queueMode = '1v1';
+    let queueType = state.queueType || 'casual';
+    let queueTimer = null;
+    let queueActive = false;
+    let lastQueueRequest = null;
+    let latestCountsV21 = { queues: {} };
+    let latestOnline = [];
+    let latestDashboard = null;
+    let latestTournaments = [];
+    let latestProfileExtras = { statusText:'', statusPreset:'online', lfg:false, privacyMode:false };
+    let lastRoom = null;
+    let lastPingSent = 0;
+    let latencyMs = null;
+    let shareStream = null;
+    let shareVideo = null;
+    let shareTimer = null;
+    let coachSampleTimer = null;
+    let coachReference = null;
+    let lastDeathDetectedAt = 0;
+
+    function addStyles() {
+        if (byId('v21UltraStyles')) return;
+        const style = document.createElement('style');
+        style.id = 'v21UltraStyles';
+        style.textContent = `
+            :root{--v21-accent:#facc15;--v21-accent2:#fb923c;--v21-scale:1;--v21-bg-strength:1}
+            html{font-size:calc(16px * var(--v21-scale))}
+            body.v21-reduced-motion *,body.v21-reduced-motion *::before,body.v21-reduced-motion *::after{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important;scroll-behavior:auto!important}
+            body.v21-high-contrast{filter:contrast(1.12) saturate(1.08)}
+            body.v21-compact #appHeader{min-height:48px!important}body.v21-compact .sidebar-btn{width:40px!important;height:40px!important;border-radius:12px!important}
+            body.v21-focus #mainSidebar,body.v21-focus aside.flex.flex-col.gap-4{opacity:.15;transition:opacity .2s}body.v21-focus #mainSidebar:hover,body.v21-focus aside.flex.flex-col.gap-4:hover{opacity:1}
+            body.v21-dense .rounded-3xl{border-radius:16px!important}body.v21-dense .p-6{padding:14px!important}body.v21-roomy .p-6{padding:28px!important}
+            .v21-accent-outline{box-shadow:0 0 0 1px color-mix(in srgb,var(--v21-accent) 55%,transparent)}
+            .v21-floating{position:fixed;right:18px;bottom:18px;z-index:90;width:48px;height:48px;border-radius:16px;border:1px solid #ffffff2c;background:linear-gradient(145deg,#193f8a,#102d69);color:white;font-weight:1000;box-shadow:0 12px 40px #0008;cursor:pointer}
+            .v21-modal{position:fixed;inset:0;z-index:115;background:#020617d9;backdrop-filter:blur(8px);display:flex;align-items:center;justify-content:center;padding:16px}.v21-modal.hidden{display:none}
+            .v21-shell{width:min(1180px,96vw);max-height:92vh;background:#081b48;border:1px solid #ffffff25;border-radius:22px;box-shadow:0 30px 90px #000b;overflow:hidden;color:white;display:flex;flex-direction:column}
+            .v21-head{padding:14px 16px;border-bottom:1px solid #ffffff17;background:linear-gradient(90deg,#102c6c,#151e58);display:flex;justify-content:space-between;align-items:center;gap:12px}.v21-title{font-family:'Bungee',sans-serif;color:var(--v21-accent);font-size:18px}.v21-sub{font-size:10px;color:#bfd0f5}
+            .v21-tabs{display:flex;gap:6px;flex-wrap:wrap;padding:10px 12px;border-bottom:1px solid #ffffff12;background:#07163c}.v21-tab{border:1px solid #ffffff20;background:#ffffff0b;color:#dbeafe;padding:7px 10px;border-radius:10px;font-size:10px;font-weight:900;cursor:pointer}.v21-tab.active{background:var(--v21-accent);color:#10214d;border-color:var(--v21-accent)}
+            .v21-body{overflow:auto;padding:14px;min-height:420px}.v21-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px}.v21-card{background:#10275f;border:1px solid #ffffff18;border-radius:15px;padding:12px}.v21-card h3{font-weight:1000;font-size:11px;color:#fff;margin:0 0 7px}.v21-muted{font-size:10px;color:#b8c8ed}.v21-big{font-size:26px;font-weight:1000;color:var(--v21-accent)}
+            .v21-btn{border:1px solid #ffffff25;background:#173a82;color:white;border-radius:10px;padding:8px 10px;font-size:10px;font-weight:1000;cursor:pointer}.v21-btn:hover{filter:brightness(1.15)}.v21-btn.gold{background:var(--v21-accent);color:#10214d}.v21-btn.red{background:#8b1e36}.v21-btn.green{background:#0f766e}.v21-btn.purple{background:#6d28d9}
+            .v21-input,.v21-select{width:100%;background:#071a48;border:1px solid #ffffff24;color:white;border-radius:10px;padding:9px 10px;font-size:11px;outline:none}.v21-input:focus,.v21-select:focus{border-color:var(--v21-accent)}
+            .v21-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.v21-row.spread{justify-content:space-between}.v21-pill{display:inline-flex;align-items:center;gap:5px;border-radius:999px;padding:4px 8px;background:#ffffff10;border:1px solid #ffffff17;font-size:9px;font-weight:900}.v21-progress{height:8px;background:#03102f;border-radius:999px;overflow:hidden}.v21-progress>i{display:block;height:100%;background:linear-gradient(90deg,var(--v21-accent),var(--v21-accent2));border-radius:999px}
+            .v21-list{display:flex;flex-direction:column;gap:6px}.v21-item{padding:8px 9px;border-radius:10px;background:#071a48;border:1px solid #ffffff12;font-size:10px}.v21-feature{display:grid;grid-template-columns:32px 1fr;gap:8px;align-items:start;padding:8px;border-bottom:1px solid #ffffff0f}.v21-num{width:28px;height:28px;border-radius:8px;background:#ffffff10;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:1000;color:var(--v21-accent)}
+            #v21Command{position:fixed;inset:0;z-index:130;background:#020617d9;display:flex;justify-content:center;align-items:flex-start;padding-top:12vh}#v21Command.hidden{display:none}.v21-commandbox{width:min(700px,92vw);background:#071a48;border:1px solid #ffffff2c;border-radius:18px;box-shadow:0 25px 80px #000c;overflow:hidden}.v21-commandbox input{width:100%;background:transparent;color:white;border:0;border-bottom:1px solid #ffffff17;padding:16px;font-size:16px;outline:none}.v21-command-results{max-height:50vh;overflow:auto;padding:8px}.v21-command-item{padding:10px;border-radius:10px;cursor:pointer;font-size:11px}.v21-command-item:hover,.v21-command-item.active{background:#173a82}
+            #v21QueuePill{display:none;align-items:center;gap:6px;padding:6px 9px;border-radius:999px;background:#0b245d;border:1px solid #ffffff22;font-size:9px;font-weight:900;color:#dbeafe}#v21QueuePill.on{display:flex}.v21-x{width:20px;height:20px;border:0;border-radius:999px;background:#7f1d1d;color:white;cursor:pointer;font-weight:1000}
+            #v21JoinModal .v21-shell{width:min(620px,94vw)}.v21-room-link{font-family:ui-monospace,monospace;font-size:9px;overflow-wrap:anywhere;background:#030d27;border-radius:10px;padding:8px;color:#bfdbfe}
+            .v21-spark{width:100%;height:48px}.v21-video{width:100%;max-height:330px;background:#000;border-radius:12px;border:1px solid #ffffff1f}.v21-danger{color:#fda4af}.v21-good{color:#6ee7b7}.v21-warn{color:#fde68a}
+            .v21-highlight-mention{outline:1px solid #facc15!important;background:#facc1514!important}.v21-hidden-code{filter:blur(9px);user-select:none}
+            @media(max-width:700px){.v21-shell{width:100%;max-height:96vh}.v21-tabs{overflow:auto;flex-wrap:nowrap}.v21-tab{white-space:nowrap}.v21-grid{grid-template-columns:1fr}.v21-floating{right:10px;bottom:10px}}
+        `;
+        document.head.appendChild(style);
+    }
+
+    function applyVisualPrefs() {
+        document.body.classList.toggle('v21-reduced-motion', !!state.reducedMotion);
+        document.body.classList.toggle('v21-high-contrast', !!state.highContrast);
+        document.body.classList.toggle('v21-compact', !!state.compact);
+        document.body.classList.toggle('v21-focus', !!state.focus);
+        document.body.classList.toggle('v21-dense', state.density === 'dense');
+        document.body.classList.toggle('v21-roomy', state.density === 'roomy');
+        document.documentElement.style.setProperty('--v21-scale', String(Math.max(.8, Math.min(1.35, Number(state.fontScale || 100)/100))));
+        document.documentElement.style.setProperty('--v21-bg-strength', String(Math.max(.35, Math.min(1.4, Number(state.background || 100)/100))));
+        const themes = {
+            gold:['#facc15','#fb923c'], blue:['#38bdf8','#6366f1'], purple:['#c084fc','#8b5cf6'], green:['#34d399','#14b8a6'], red:['#fb7185','#f97316'], ice:['#e0f2fe','#7dd3fc']
+        };
+        const [a,b] = themes[state.accent] || themes.gold;
+        document.documentElement.style.setProperty('--v21-accent', a);
+        document.documentElement.style.setProperty('--v21-accent2', b);
+    }
+
+    function currentRating() {
+        return Number(user()?.rating1v1 || latestDashboard?.user?.rating1v1 || 1000);
+    }
+
+    function injectEntryPoints() {
+        if (!byId('v21OpenButton')) {
+            const b = document.createElement('button');
+            b.id = 'v21OpenButton'; b.className = 'v21-floating'; b.title = 'Advanced Control Center · Ctrl+K'; b.textContent = '⚡';
+            b.onclick = () => openUltra('home');
+            document.body.appendChild(b);
+        }
+        if (!byId('v21QueuePill')) {
+            const pill = document.createElement('div'); pill.id='v21QueuePill'; pill.innerHTML='<span id="v21QueuePillText">Queue</span><button class="v21-x" title="Cancel search">×</button>';
+            pill.querySelector('button').onclick = () => socket.emit('cancel_matchmaking');
+            const header = document.querySelector('header .flex.items-center') || document.querySelector('header');
+            if (header) header.appendChild(pill); else document.body.appendChild(pill);
+        }
+    }
+
+    function makeModal() {
+        if (byId('v21UltraModal')) return;
+        const modal = document.createElement('div');
+        modal.id='v21UltraModal'; modal.className='v21-modal hidden';
+        modal.innerHTML = `<div class="v21-shell"><div class="v21-head"><div><div class="v21-title">⚡ ARENA ULTRA</div><div class="v21-sub">${VERSION} · advanced control center</div></div><div class="v21-row"><span id="v21LatencyBadge" class="v21-pill">PING —</span><button id="v21Close" class="v21-btn red">✕ CLOSE</button></div></div><div id="v21Tabs" class="v21-tabs"></div><div id="v21Body" class="v21-body"></div></div>`;
+        document.body.appendChild(modal);
+        byId('v21Close').onclick=()=>modal.classList.add('hidden');
+        modal.addEventListener('click',e=>{ if(e.target===modal) modal.classList.add('hidden'); });
+        const tabs = [['home','HOME'],['match','MATCH'],['social','SOCIAL'],['messages','MESSAGES'],['stats','STATS'],['tournaments','TOURNEYS'],['coach','STREAM / COACH'],['settings','SETTINGS'],['new','100 FEATURES']];
+        const host=byId('v21Tabs');
+        tabs.forEach(([id,label])=>{const b=document.createElement('button');b.className='v21-tab';b.dataset.tab=id;b.textContent=label;b.onclick=()=>renderTab(id);host.appendChild(b);});
+    }
+
+    function openUltra(tab='home') {
+        makeModal();
+        byId('v21UltraModal').classList.remove('hidden');
+        socket.emit('v21_get_dashboard');
+        socket.emit('v21_get_profile_extras');
+        socket.emit('get_tournaments');
+        renderTab(tab);
+    }
+    window.openArenaUltra = openUltra;
+
+    function renderTab(tab) {
+        const body=byId('v21Body'); if(!body) return;
+        document.querySelectorAll('#v21Tabs .v21-tab').forEach(x=>x.classList.toggle('active',x.dataset.tab===tab));
+        if(tab==='home') renderHome(body);
+        else if(tab==='match') renderMatch(body);
+        else if(tab==='social') renderSocial(body);
+        else if(tab==='messages') renderMessages(body);
+        else if(tab==='stats') renderStats(body);
+        else if(tab==='tournaments') renderTournaments(body);
+        else if(tab==='coach') renderCoach(body);
+        else if(tab==='settings') renderSettings(body);
+        else renderFeatures(body);
+    }
+
+    function renderHome(body) {
+        const qavg = averageQueueTime();
+        const recent = state.queueHistory.slice(-5).reverse();
+        body.innerHTML=`<div class="v21-grid">
+            <div class="v21-card"><h3>QUICK MATCH</h3><div class="v21-row"><button id="v21QuickCasual" class="v21-btn gold">CASUAL 1v1</button><button id="v21QuickRanked" class="v21-btn purple">RANKED 1v1</button></div><div class="v21-muted mt-2">Region: ${esc(state.region)} · recent-opponent protection active</div></div>
+            <div class="v21-card"><h3>LIVE STATUS</h3><div class="v21-big">${latestOnline.length || latestDashboard?.onlineCount || 0}</div><div class="v21-muted">players visible online</div><div class="v21-row mt-2"><span class="v21-pill">Ping ${latencyMs==null?'—':latencyMs+'ms'}</span><span class="v21-pill">${esc(latestDashboard?.storage||'checking storage')}</span></div></div>
+            <div class="v21-card"><h3>YOUR SESSION</h3><div class="v21-big" id="v21SessionClock">0m</div><div class="v21-muted">${Number(state.analytics.sessionMatches||0)} matches this session · avg queue ${qavg?Math.round(qavg/1000)+'s':'—'}</div></div>
+            <div class="v21-card"><h3>LAST ROOM</h3>${lastRoom?`<div class="v21-muted">${esc(lastRoom.mode||'1v1')} · ${esc(lastRoom.queueType||'casual')} · ${nowText(lastRoom.createdAt)}</div><button id="v21RejoinLast" class="v21-btn green mt-2">REJOIN</button>`:'<div class="v21-muted">No room captured this session.</div>'}</div>
+            <div class="v21-card"><h3>RECENT QUEUES</h3><div class="v21-list">${recent.length?recent.map(item=>`<div class="v21-item">${esc(item.type)} · ${Math.round(item.duration/1000)}s · ${esc(item.result)}</div>`).join(''):'<div class="v21-muted">No queue attempts yet.</div>'}</div></div>
+            <div class="v21-card"><h3>ADVANCED TOOLS</h3><div class="v21-row"><button class="v21-btn" data-open="coach">COACH</button><button class="v21-btn" data-open="stats">STATS</button><button class="v21-btn" data-open="tournaments">TOURNEYS</button><button class="v21-btn" data-open="new">WHAT'S NEW</button></div></div>
+        </div>`;
+        byId('v21QuickCasual')?.addEventListener('click',()=>startQueue('casual'));
+        byId('v21QuickRanked')?.addEventListener('click',()=>startQueue('ranked'));
+        byId('v21RejoinLast')?.addEventListener('click',()=>lastRoom?.smashUrl&&window.open(lastRoom.smashUrl,'_blank','noopener'));
+        body.querySelectorAll('[data-open]').forEach(b=>b.onclick=()=>renderTab(b.dataset.open));
+        updateSessionClock();
+    }
+
+    function renderMatch(body) {
+        const casual=Number(latestCountsV21?.queues?.['1v1:casual:2']||0), ranked=Number(latestCountsV21?.queues?.['1v1:ranked:2']||0);
+        const elapsed=queueStartedAt?Math.max(0,Date.now()-queueStartedAt):0;
+        const range=Math.min(650,90+Math.floor(elapsed/8000)*55);
+        body.innerHTML=`<div class="v21-grid">
+            <div class="v21-card"><h3>1v1 MATCHMAKING</h3><div class="v21-row"><button id="v21Mcas" class="v21-btn gold">CASUAL</button><button id="v21Mrank" class="v21-btn purple">RANKED</button><button id="v21Mcancel" class="v21-btn red">CANCEL</button></div><div class="v21-muted mt-2">Casual ${casual} searching · Ranked ${ranked} searching</div><div class="v21-muted">${queueActive?'Searching '+Math.round(elapsed/1000)+'s · ETA '+estimateWait():'Not searching'}</div></div>
+            <div class="v21-card"><h3>MATCH PREFERENCES</h3><label class="v21-muted">Region preference</label><select id="v21Region" class="v21-select"><option value="auto">Auto / fastest</option><option value="us-east">US East</option><option value="us-central">US Central</option><option value="us-west">US West</option><option value="eu">Europe</option><option value="asia">Asia</option><option value="oce">Oceania</option></select><label class="v21-row mt-2"><input id="v21AutoReq" type="checkbox"> <span class="v21-muted">Auto-requeue on failed room</span></label></div>
+            <div class="v21-card"><h3>RANKED SEARCH</h3><div class="v21-big">±${range}</div><div class="v21-muted">current maximum rating gap after ${Math.round(elapsed/1000)}s. Range widens while you wait.</div></div>
+            <div class="v21-card"><h3>QUEUE HISTORY</h3><div class="v21-list">${state.queueHistory.slice(-10).reverse().map(x=>`<div class="v21-item">${esc(x.type)} · ${Math.round(x.duration/1000)}s · ${esc(x.result)}</div>`).join('')||'<div class="v21-muted">Empty</div>'}</div></div>
+            <div class="v21-card"><h3>NOTIFICATIONS</h3><label class="v21-row"><input id="v21QueueSound" type="checkbox"> <span class="v21-muted">Match-found sound</span></label><label class="v21-row mt-2"><input id="v21Notify" type="checkbox"> <span class="v21-muted">Desktop notification</span></label><button id="v21AskNotify" class="v21-btn mt-2">REQUEST PERMISSION</button></div>
+            <div class="v21-card"><h3>ROOM CREATION</h3><span class="v21-pill">${latestDashboard?.roomBotConfigured?'ROOM BOT CONNECTED':'MANUAL FALLBACK'}</span><div class="v21-muted mt-2">Instant match flow is active. No READY click is required.</div></div>
+        </div>`;
+        const reg=byId('v21Region'); if(reg) reg.value=state.region;
+        byId('v21AutoReq').checked=!!state.autoRequeue;byId('v21QueueSound').checked=!!state.queueSound;byId('v21Notify').checked=!!state.matchNotifications;
+        byId('v21Mcas').onclick=()=>startQueue('casual');byId('v21Mrank').onclick=()=>startQueue('ranked');byId('v21Mcancel').onclick=()=>socket.emit('cancel_matchmaking');
+        byId('v21Region').onchange=e=>{state.region=e.target.value;saveState();};
+        byId('v21AutoReq').onchange=e=>{state.autoRequeue=e.target.checked;saveState();};
+        byId('v21QueueSound').onchange=e=>{state.queueSound=e.target.checked;saveState();};
+        byId('v21Notify').onchange=e=>{state.matchNotifications=e.target.checked;saveState();};
+        byId('v21AskNotify').onclick=async()=>{if('Notification'in window){const p=await Notification.requestPermission();toast('Notification permission: '+p,'🔔');}};
+    }
+
+    function renderSocial(body) {
+        const friends = Array.isArray(latestOnline)?latestOnline.filter(x=>x.username!==username()):[];
+        body.innerHTML=`<div class="v21-grid">
+            <div class="v21-card"><h3>MY STATUS</h3><select id="v21StatusPreset" class="v21-select"><option value="online">Online</option><option value="chill">Chilling</option><option value="ranked">Playing Ranked</option><option value="ffa">Playing FFA</option><option value="tournament">Tournament</option><option value="streaming">Streaming</option><option value="coaching">Coaching</option><option value="away">Away</option></select><input id="v21StatusText" class="v21-input mt-2" maxlength="80" placeholder="Custom status"><label class="v21-row mt-2"><input id="v21Lfg" type="checkbox"> <span class="v21-muted">Looking for game</span></label><label class="v21-row mt-2"><input id="v21Privacy" type="checkbox"> <span class="v21-muted">Hide custom status from others</span></label><button id="v21SaveStatus" class="v21-btn gold mt-2">SAVE STATUS</button></div>
+            <div class="v21-card"><h3>MY PROFILE</h3><div class="v21-big">${esc(username())}</div><div class="v21-muted">Level ${Number(user()?.level||latestDashboard?.user?.level||1)} · 1v1 ${currentRating()} · FFA ${Number(user()?.ratingFFA||latestDashboard?.user?.ratingFFA||1000)}</div><button id="v21ShareProfile" class="v21-btn mt-2">COPY PROFILE SHARE</button></div>
+            <div class="v21-card"><h3>FRIEND ACTIVITY</h3><div class="v21-list">${friends.slice(0,12).map(x=>`<div class="v21-item"><b>${esc(x.username)}</b> ${x.lookingForGame?'<span class="v21-pill">LFG</span>':''} ${x.streamerLive?'<span class="v21-pill">LIVE</span>':''}<div class="v21-muted">${esc(x.customStatus||x.statusPreset||'online')}</div></div>`).join('')||'<div class="v21-muted">No other visible players right now.</div>'}</div></div>
+            <div class="v21-card"><h3>FAVORITE FRIENDS</h3><input id="v21FavFriend" class="v21-input" placeholder="Username"><button id="v21AddFav" class="v21-btn mt-2">ADD FAVORITE</button><div class="v21-list mt-2">${state.favoriteFriends.map(n=>`<div class="v21-item">★ ${esc(n)}</div>`).join('')||'<div class="v21-muted">No favorites yet.</div>'}</div></div>
+            <div class="v21-card"><h3>PRIVATE FRIEND NOTES</h3><input id="v21NoteUser" class="v21-input" placeholder="Username"><textarea id="v21NoteText" class="v21-input mt-2" rows="3" placeholder="Private note stored on this browser"></textarea><button id="v21SaveNote" class="v21-btn mt-2">SAVE NOTE</button></div>
+            <div class="v21-card"><h3>RECENT OPPONENTS</h3><div class="v21-list">${state.recentOpponents.slice(-10).reverse().map(x=>`<div class="v21-item">${esc(x.name)} · ${nowText(x.at)}</div>`).join('')||'<div class="v21-muted">None captured yet.</div>'}</div></div>
+        </div>`;
+        byId('v21StatusPreset').value=latestProfileExtras.statusPreset||'online';byId('v21StatusText').value=latestProfileExtras.statusText||'';byId('v21Lfg').checked=!!latestProfileExtras.lfg;byId('v21Privacy').checked=!!latestProfileExtras.privacyMode;
+        byId('v21SaveStatus').onclick=()=>socket.emit('v21_update_profile_extras',{statusPreset:byId('v21StatusPreset').value,statusText:byId('v21StatusText').value,lfg:byId('v21Lfg').checked,privacyMode:byId('v21Privacy').checked});
+        byId('v21ShareProfile').onclick=async()=>{const txt=`${username()} on Smash Arena · Level ${Number(user()?.level||1)} · 1v1 ${currentRating()} · ${location.origin}`;await navigator.clipboard?.writeText(txt);toast('Profile share copied.','📋');};
+        byId('v21AddFav').onclick=()=>{const n=byId('v21FavFriend').value.trim();if(n&&!state.favoriteFriends.includes(n)){state.favoriteFriends.push(n);state.favoriteFriends=state.favoriteFriends.slice(-20);saveState();renderSocial(body);}};
+        byId('v21SaveNote').onclick=()=>{const n=byId('v21NoteUser').value.trim(),t=byId('v21NoteText').value.trim();if(n){state.friendNotes[n]=t;saveState();toast('Private note saved on this browser.','📝');}};
+    }
+
+    function scanMessageElements() {
+        const roots=[byId('tabDMMessages'),byId('preGameChatMessages'),byId('matchChatMessages')].filter(Boolean);
+        return roots.flatMap(root=>Array.from(root.querySelectorAll('*')).filter(el=>el.children.length===0&&String(el.textContent||'').trim().length>0));
+    }
+    function renderMessages(body) {
+        body.innerHTML=`<div class="v21-grid">
+            <div class="v21-card"><h3>SEARCH CURRENT CHAT</h3><input id="v21MsgSearch" class="v21-input" placeholder="Search visible messages"><div id="v21MsgResults" class="v21-list mt-2"></div></div>
+            <div class="v21-card"><h3>DRAFT AUTOSAVE</h3><div class="v21-muted">Drafts are saved locally for the current DM/chat input as you type.</div><button id="v21RestoreDraft" class="v21-btn mt-2">RESTORE CURRENT DRAFT</button></div>
+            <div class="v21-card"><h3>QUICK EMOJI</h3><div class="v21-row">${['😀','😂','🔥','GG','💀','🏆','👍','❤️'].map(e=>`<button class="v21-btn" data-emoji="${e}">${e}</button>`).join('')}</div></div>
+            <div class="v21-card"><h3>MESSAGE TOOLS</h3><div class="v21-row"><button id="v21CopyChat" class="v21-btn">COPY VISIBLE CHAT</button><button id="v21BottomChat" class="v21-btn">SCROLL TO BOTTOM</button><button id="v21HighlightMe" class="v21-btn">HIGHLIGHT @ME</button></div></div>
+            <div class="v21-card"><h3>MUTED CONVERSATIONS</h3><input id="v21MuteName" class="v21-input" placeholder="Username or group"><button id="v21MuteAdd" class="v21-btn mt-2">MUTE LOCALLY</button><div class="v21-muted mt-2">${state.mutedDMs.map(esc).join(', ')||'None'}</div></div>
+            <div class="v21-card"><h3>GROUPS</h3><input id="v21GroupSearch" class="v21-input" placeholder="Search your groups"><div id="v21GroupList" class="v21-list mt-2">${renderGroupItems('')}</div></div>
+        </div>`;
+        byId('v21MsgSearch').oninput=e=>{const q=e.target.value.toLowerCase().trim();const out=byId('v21MsgResults');if(!q){out.innerHTML='';return;}const hits=scanMessageElements().map(el=>el.textContent.trim()).filter(t=>t.toLowerCase().includes(q)).slice(0,30);out.innerHTML=hits.map(t=>`<div class="v21-item">${esc(t)}</div>`).join('')||'<div class="v21-muted">No visible matches.</div>';};
+        byId('v21RestoreDraft').onclick=()=>restoreDraft();
+        body.querySelectorAll('[data-emoji]').forEach(b=>b.onclick=()=>insertIntoChat(b.dataset.emoji));
+        byId('v21CopyChat').onclick=async()=>{const txt=scanMessageElements().map(el=>el.textContent.trim()).filter(Boolean).join('\n');await navigator.clipboard?.writeText(txt);toast('Visible chat copied.','📋');};
+        byId('v21BottomChat').onclick=()=>{[byId('tabDMMessages'),byId('preGameChatMessages'),byId('matchChatMessages')].filter(Boolean).forEach(el=>el.scrollTop=el.scrollHeight);};
+        byId('v21HighlightMe').onclick=()=>highlightMentions();
+        byId('v21MuteAdd').onclick=()=>{const n=byId('v21MuteName').value.trim();if(n&&!state.mutedDMs.includes(n)){state.mutedDMs.push(n);saveState();renderMessages(body);}};
+        wireGroupTools();
+        byId('v21GroupSearch').oninput=e=>{byId('v21GroupList').innerHTML=renderGroupItems(e.target.value);wireGroupTools();};
+    }
+    function renderGroupItems(q) {
+        const groups=(latestDashboard?.groups||[]).filter(g=>!q||String(g.name||'').toLowerCase().includes(String(q).toLowerCase()));
+        return groups.map(g=>`<div class="v21-item"><div class="v21-row spread"><b>${esc(g.name)}</b><div class="v21-row"><button class="v21-btn" data-pin-group="${esc(g.id)}">${state.pinnedGroups.includes(g.id)?'★':'☆'}</button><button class="v21-btn green" data-party-group="${esc(g.id)}">PARTY</button></div></div><div class="v21-muted">${(g.members||[]).length} members · owner ${esc(g.owner||'')}</div></div>`).join('')||'<div class="v21-muted">No matching groups.</div>';
+    }
+    function wireGroupTools(){
+        document.querySelectorAll('[data-pin-group]').forEach(b=>b.onclick=()=>{const id=b.dataset.pinGroup;state.pinnedGroups=state.pinnedGroups.includes(id)?state.pinnedGroups.filter(x=>x!==id):[...state.pinnedGroups,id];saveState();renderTab('messages');});
+        document.querySelectorAll('[data-party-group]').forEach(b=>b.onclick=()=>{const id=b.dataset.partyGroup;const mode=(prompt('Party mode: 1v1, ffa12, or ffa24','ffa12')||'').toLowerCase();if(!['1v1','ffa12','ffa24'].includes(mode))return;let smashUrl='';if(mode==='1v1')smashUrl=prompt('Paste the Smash Karts 1v1 room link/code:','')||'';socket.emit('create_group_party',{groupId:id,mode,smashUrl});toast('Group party request sent.','👥');});
+    }
+    function activeChatInput() { return byId('activeDMInput')||byId('dmMessageInput')||byId('preGameChatInput')||byId('matchChatInput')||document.querySelector('#messagesTab textarea,#messagesTab input[type="text"]'); }
+    function draftKey(){return activeDMTargetUser?`dm:${activeDMTargetUser}`:'current-chat';}
+    function insertIntoChat(text){const input=activeChatInput();if(!input)return toast('Open a chat first.','💬');input.value=(input.value?input.value+' ':'')+text;input.dispatchEvent(new Event('input',{bubbles:true}));input.focus();}
+    function restoreDraft(){const input=activeChatInput();if(!input)return;input.value=state.drafts[draftKey()]||'';input.dispatchEvent(new Event('input',{bubbles:true}));input.focus();}
+    function highlightMentions(){const me='@'+username().toLowerCase();scanMessageElements().forEach(el=>el.classList.toggle('v21-highlight-mention',el.textContent.toLowerCase().includes(me)));toast('Mention highlighting updated.','@');}
+
+    function renderStats(body) {
+        const u=latestDashboard?.user||user()||{};const lvl=Number(u.level||1),xp=Number(u.xp||0),progress=((xp%250)/250)*100;
+        const matches=latestDashboard?.matches||[];const best=Math.max(currentRating(),...state.analytics.rating1v1.map(Number).filter(Number.isFinite),1000);const avg=averageQueueTime();
+        body.innerHTML=`<div class="v21-grid">
+            <div class="v21-card"><h3>PROGRESSION</h3><div class="v21-big">LEVEL ${lvl}</div><div class="v21-progress mt-2"><i style="width:${Math.max(0,Math.min(100,progress))}%"></i></div><div class="v21-muted mt-2">${xp%250}/250 XP toward next level</div></div>
+            <div class="v21-card"><h3>RATINGS</h3><div class="v21-big">${currentRating()}</div><div class="v21-muted">1v1 rating · personal best tracked ${best}</div><canvas id="v21Spark" class="v21-spark" width="420" height="48"></canvas></div>
+            <div class="v21-card"><h3>SESSION</h3><div class="v21-big" id="v21StatsClock">0m</div><div class="v21-muted">${Number(state.analytics.sessionMatches||0)} match rooms · avg queue ${avg?Math.round(avg/1000)+'s':'—'}</div></div>
+            <div class="v21-card"><h3>MATCH HISTORY</h3><input id="v21HistorySearch" class="v21-input" placeholder="Search opponent / mode"><div id="v21History" class="v21-list mt-2">${renderMatchHistory('')}</div></div>
+            <div class="v21-card"><h3>OPPONENT FREQUENCY</h3><div class="v21-list">${opponentFrequency(matches)}</div></div>
+            <div class="v21-card"><h3>YOUR DATA</h3><div class="v21-row"><button id="v21ExportServer" class="v21-btn gold">EXPORT ACCOUNT DATA</button><button id="v21SessionSummary" class="v21-btn">SESSION SUMMARY</button><button id="v21ResetAnalytics" class="v21-btn red">RESET LOCAL ANALYTICS</button></div></div>
+        </div>`;
+        byId('v21HistorySearch').oninput=e=>byId('v21History').innerHTML=renderMatchHistory(e.target.value);
+        byId('v21ExportServer').onclick=()=>socket.emit('v21_export_my_data');
+        byId('v21SessionSummary').onclick=()=>downloadJSON(`smash-session-${Date.now()}.json`,sessionSummary());
+        byId('v21ResetAnalytics').onclick=()=>{if(confirm('Reset queue/rating/session analytics stored on this browser?')){state.analytics={...DEFAULTS.analytics};state.queueHistory=[];saveState();renderStats(body);}};
+        drawSpark();updateSessionClock();
+    }
+    function renderMatchHistory(q){q=String(q||'').toLowerCase();const arr=(latestDashboard?.matches||[]).filter(m=>!q||JSON.stringify(m).toLowerCase().includes(q)).slice(0,30);return arr.map(m=>`<div class="v21-item"><b>${esc(String(m.mode||'').toUpperCase())}</b> · ${esc(m.queueType||'casual')} · ${nowText(m.createdAt)}<div class="v21-muted">${(m.participants||[]).map(esc).join(' vs ')}</div></div>`).join('')||'<div class="v21-muted">No matching history.</div>';}
+    function opponentFrequency(matches){const counts={};(matches||[]).forEach(m=>(m.participants||[]).forEach(n=>{if(n&&n!==username())counts[n]=(counts[n]||0)+1;}));return Object.entries(counts).sort((a,b)=>b[1]-a[1]).slice(0,12).map(([n,c])=>`<div class="v21-item">${esc(n)} <span class="v21-pill">${c} matches</span></div>`).join('')||'<div class="v21-muted">Not enough match history yet.</div>';}
+    function drawSpark(){const c=byId('v21Spark');if(!c)return;const ctx=c.getContext('2d'),vals=[...state.analytics.rating1v1.map(Number).filter(Number.isFinite),currentRating()].slice(-30);ctx.clearRect(0,0,c.width,c.height);if(vals.length<2)return;const min=Math.min(...vals),max=Math.max(...vals),span=Math.max(1,max-min);ctx.strokeStyle=getComputedStyle(document.documentElement).getPropertyValue('--v21-accent').trim()||'#facc15';ctx.lineWidth=2;ctx.beginPath();vals.forEach((v,i)=>{const x=(i/(vals.length-1))*c.width,y=c.height-4-((v-min)/span)*(c.height-8);i?ctx.lineTo(x,y):ctx.moveTo(x,y);});ctx.stroke();}
+    function sessionSummary(){return{version:VERSION,user:username(),startedAt:new Date(SESSION_STARTED).toISOString(),durationMs:Date.now()-SESSION_STARTED,matches:Number(state.analytics.sessionMatches||0),queueHistory:state.queueHistory.slice(-50),recentOpponents:state.recentOpponents.slice(-25),deaths:state.coach.deaths,clipMarkers:state.coach.clipMarkers};}
+
+    function renderTournaments(body) {
+        body.innerHTML=`<div class="v21-row mb-3"><input id="v21TSearch" class="v21-input" style="flex:1" placeholder="Search tournaments"><select id="v21TPrivacy" class="v21-select" style="width:auto"><option value="all">All access</option><option value="public">Public</option><option value="private">Private</option></select><input id="v21TRegion" class="v21-input" style="width:180px" placeholder="Region filter"></div><div id="v21TournamentCards" class="v21-grid"></div>`;
+        const rerender=()=>{const q=byId('v21TSearch').value.toLowerCase(),priv=byId('v21TPrivacy').value,region=byId('v21TRegion').value.toLowerCase();const list=(latestTournaments||[]).filter(t=>(!q||JSON.stringify(t).toLowerCase().includes(q))&&(priv==='all'||(priv==='public'?t.isPublic:!t.isPublic))&&(!region||JSON.stringify(t.regions||[]).toLowerCase().includes(region)));byId('v21TournamentCards').innerHTML=list.map(t=>tournamentCard(t)).join('')||'<div class="v21-card"><div class="v21-muted">No matching tournaments.</div></div>';wireTournamentButtons();};
+        ['v21TSearch','v21TPrivacy','v21TRegion'].forEach(id=>byId(id).addEventListener(id==='v21TPrivacy'?'change':'input',rerender));rerender();
+    }
+    function tournamentCard(t){const count=(t.participants||[]).length,cap=Number(t.capacity||0),pct=cap?Math.min(100,(count/cap)*100):0;const watched=state.tournamentWatchlist.includes(t.id);const start=Number(t.startAt||t.startTime||0);return`<div class="v21-card"><div class="v21-row spread"><h3>${esc(t.name||'Tournament')}</h3><button class="v21-btn" data-watch="${esc(t.id)}">${watched?'★':'☆'}</button></div><div class="v21-muted">${esc(String(t.mode||'').toUpperCase())} · ${t.isPublic?'PUBLIC':'PRIVATE'} · ${count}/${cap||'?'} players</div><div class="v21-progress mt-2"><i style="width:${pct}%"></i></div><div class="v21-muted mt-2">Regions: ${(t.regions||[]).map(esc).join(', ')||'Any'}<br>Start: ${start?new Date(start).toLocaleString():'TBA'}${start?` · ${countdownText(start)}`:''}</div><div class="v21-row mt-2"><button class="v21-btn" data-share-t="${esc(t.id)}">SHARE</button><button class="v21-btn" data-people-t="${esc(t.id)}">PARTICIPANTS</button><button class="v21-btn" data-remind-t="${esc(t.id)}">REMIND ME</button></div></div>`;}
+    function countdownText(ts){const d=ts-Date.now();if(d<=0)return'started';const days=Math.floor(d/86400000),hrs=Math.floor((d%86400000)/3600000),mins=Math.floor((d%3600000)/60000);return`${days?days+'d ':''}${hrs}h ${mins}m`;}
+    function wireTournamentButtons(){document.querySelectorAll('[data-watch]').forEach(b=>b.onclick=()=>{const id=b.dataset.watch;state.tournamentWatchlist=state.tournamentWatchlist.includes(id)?state.tournamentWatchlist.filter(x=>x!==id):[...state.tournamentWatchlist,id];saveState();renderTab('tournaments');});document.querySelectorAll('[data-share-t]').forEach(b=>b.onclick=async()=>{const t=latestTournaments.find(x=>x.id===b.dataset.shareT);if(!t)return;await navigator.clipboard?.writeText(`${t.name} · ${t.mode} · ${(t.participants||[]).length}/${t.capacity} · ${location.origin}`);toast('Tournament summary copied.','🏆');});document.querySelectorAll('[data-people-t]').forEach(b=>b.onclick=()=>{const t=latestTournaments.find(x=>x.id===b.dataset.peopleT);if(!t)return;const q=prompt('Search participant name (leave blank for all):','')||'';const names=(t.participants||[]).filter(n=>n.toLowerCase().includes(q.toLowerCase()));alert(names.length?names.join('\n'):'No matching participants.');});document.querySelectorAll('[data-remind-t]').forEach(b=>b.onclick=()=>{const id=b.dataset.remindT;if(!state.tournamentReminders.includes(id))state.tournamentReminders.push(id);saveState();toast('Tournament added to local reminders.','⏰');});}
+
+    function renderCoach(body) {
+        const deaths=state.coach.deaths||[],markers=state.coach.clipMarkers||[];
+        body.innerHTML=`<div class="v21-grid">
+            <div class="v21-card" style="grid-column:span 2"><h3>SCREEN SHARE</h3><video id="v21SharePreview" class="v21-video" autoplay muted playsinline></video><div class="v21-row mt-2"><button id="v21ShareStart" class="v21-btn green">START SCREEN SHARE</button><button id="v21ShareStop" class="v21-btn red">STOP</button><span id="v21ShareTime" class="v21-pill">00:00</span></div><div class="v21-muted mt-2">Screen sharing always requires the player's browser permission. Nothing is captured before permission is granted.</div></div>
+            <div class="v21-card"><h3>DEATH TRACKER</h3><div class="v21-big">${deaths.length}</div><div class="v21-row"><button id="v21DeathManual" class="v21-btn">+ DEATH</button><button id="v21CalDeath" class="v21-btn purple">CALIBRATE DEATH SCREEN</button><button id="v21ClearDeaths" class="v21-btn red">CLEAR</button></div><div class="v21-muted mt-2">Alt+D also marks a death. Auto detection compares shared frames to your calibrated death-screen reference.</div></div>
+            <div class="v21-card"><h3>AUTO DETECTOR (BETA)</h3><label class="v21-muted">Similarity threshold</label><input id="v21DeathThreshold" type="range" min="5" max="40" value="${Number(state.coach.threshold||15)}" style="width:100%"><div class="v21-row mt-2"><button id="v21AutoDeathStart" class="v21-btn gold">START DETECTOR</button><button id="v21AutoDeathStop" class="v21-btn">STOP DETECTOR</button></div><div id="v21DeathStatus" class="v21-muted mt-2">${coachReference?'Reference loaded this session.':'Calibrate during a real death screen first.'}</div></div>
+            <div class="v21-card"><h3>CLIP MARKERS</h3><button id="v21ClipMark" class="v21-btn">MARK MOMENT</button><div class="v21-list mt-2">${markers.slice(-8).reverse().map(m=>`<div class="v21-item">${nowText(m.at)} · +${Math.round(m.offsetMs/1000)}s</div>`).join('')||'<div class="v21-muted">No markers.</div>'}</div></div>
+            <div class="v21-card"><h3>DEATH TIMELINE</h3><div class="v21-list">${deaths.slice(-12).reverse().map((d,i)=>`<div class="v21-item">Death ${deaths.length-i} · ${nowText(d.at)} · +${Math.round(d.offsetMs/1000)}s${d.auto?' · AUTO':''}</div>`).join('')||'<div class="v21-muted">No deaths tracked.</div>'}</div><button id="v21ExportCoach" class="v21-btn mt-2">EXPORT SESSION</button></div>
+            <div class="v21-card"><h3>STREAMER SAFETY</h3><label class="v21-row"><input id="v21HideCodes" type="checkbox"> <span class="v21-muted">Blur room codes in Arena Ultra overlays</span></label><div class="v21-muted mt-2">Your existing streamer-safe site setting still controls the main site.</div></div>
+        </div>`;
+        shareVideo=byId('v21SharePreview');if(shareStream)shareVideo.srcObject=shareStream;
+        byId('v21ShareStart').onclick=startShare;byId('v21ShareStop').onclick=stopShare;byId('v21DeathManual').onclick=()=>recordDeath(false);byId('v21CalDeath').onclick=calibrateDeath;byId('v21ClearDeaths').onclick=()=>{state.coach.deaths=[];saveState();renderCoach(body);};
+        byId('v21DeathThreshold').oninput=e=>{state.coach.threshold=Number(e.target.value);saveState();};byId('v21AutoDeathStart').onclick=startDeathDetector;byId('v21AutoDeathStop').onclick=stopDeathDetector;byId('v21ClipMark').onclick=()=>{state.coach.clipMarkers.push({at:Date.now(),offsetMs:Date.now()-SESSION_STARTED});state.coach.clipMarkers=state.coach.clipMarkers.slice(-100);saveState();renderCoach(body);};byId('v21ExportCoach').onclick=()=>downloadJSON(`coach-session-${Date.now()}.json`,sessionSummary());byId('v21HideCodes').checked=!!state.streamerHideCode;document.body.classList.toggle('v21-hide-codes',!!state.streamerHideCode);byId('v21HideCodes').onchange=e=>{state.streamerHideCode=e.target.checked;saveState();document.body.classList.toggle('v21-hide-codes',e.target.checked);};
+    }
+
+    async function startShare(){try{shareStream=await navigator.mediaDevices.getDisplayMedia({video:{frameRate:{ideal:15,max:30}},audio:false});shareVideo=byId('v21SharePreview');if(shareVideo){shareVideo.srcObject=shareStream;await shareVideo.play().catch(()=>{});}const started=Date.now();clearInterval(shareTimer);shareTimer=setInterval(()=>{const el=byId('v21ShareTime');if(el){const sec=Math.floor((Date.now()-started)/1000);el.textContent=`${String(Math.floor(sec/60)).padStart(2,'0')}:${String(sec%60).padStart(2,'0')}`;}},500);shareStream.getVideoTracks()[0]?.addEventListener('ended',stopShare,{once:true});toast('Screen share started.','🖥️');}catch(e){toast('Screen share was not started.','⚠️');}}
+    function stopShare(){stopDeathDetector();clearInterval(shareTimer);if(shareStream){shareStream.getTracks().forEach(t=>t.stop());shareStream=null;}if(shareVideo)shareVideo.srcObject=null;const t=byId('v21ShareTime');if(t)t.textContent='00:00';toast('Screen share stopped.','🛑');}
+    function frameSignature(){if(!shareVideo||!shareVideo.videoWidth)return null;const c=document.createElement('canvas');c.width=64;c.height=36;const ctx=c.getContext('2d',{willReadFrequently:true});ctx.drawImage(shareVideo,0,0,c.width,c.height);const d=ctx.getImageData(0,0,c.width,c.height).data,arr=new Uint8Array(c.width*c.height);for(let i=0,j=0;i<d.length;i+=4,j++)arr[j]=(d[i]*.299+d[i+1]*.587+d[i+2]*.114)|0;return arr;}
+    function calibrateDeath(){const sig=frameSignature();if(!sig)return toast('Start screen share and show the death screen first.','⚠️');coachReference=Array.from(sig);toast('Death-screen reference captured for this session.','🎯');const el=byId('v21DeathStatus');if(el)el.textContent='Reference captured. Start detector after respawning.';}
+    function similarityDistance(a,b){if(!a||!b||a.length!==b.length)return 999;let total=0;for(let i=0;i<a.length;i++)total+=Math.abs(a[i]-b[i]);return total/a.length;}
+    function startDeathDetector(){if(!shareStream)return toast('Start screen share first.','⚠️');if(!coachReference)return toast('Calibrate the death screen first.','🎯');stopDeathDetector();coachSampleTimer=setInterval(()=>{const sig=frameSignature();if(!sig)return;const dist=similarityDistance(sig,coachReference);const el=byId('v21DeathStatus');if(el)el.textContent=`Detector running · difference ${dist.toFixed(1)} · trigger ≤ ${Number(state.coach.threshold||15)}`;if(dist<=Number(state.coach.threshold||15)&&Date.now()-lastDeathDetectedAt>Number(state.coach.cooldownMs||4500)){lastDeathDetectedAt=Date.now();recordDeath(true);}},Math.max(250,Number(state.coach.sampleMs||600)));toast('Automatic death detector started.','👁️');}
+    function stopDeathDetector(){clearInterval(coachSampleTimer);coachSampleTimer=null;const el=byId('v21DeathStatus');if(el)el.textContent='Detector stopped.';}
+    function recordDeath(auto){state.coach.deaths.push({at:Date.now(),offsetMs:Date.now()-SESSION_STARTED,auto:!!auto});state.coach.deaths=state.coach.deaths.slice(-300);saveState();toast(`Death ${state.coach.deaths.length} recorded${auto?' automatically':''}.`,'💀');if(byId('v21UltraModal')&&!byId('v21UltraModal').classList.contains('hidden'))renderTab('coach');}
+
+    function renderSettings(body) {
+        body.innerHTML=`<div class="v21-grid">
+            <div class="v21-card"><h3>APPEARANCE</h3><label class="v21-muted">Accent</label><select id="v21Accent" class="v21-select"><option value="gold">Gold</option><option value="blue">Blue</option><option value="purple">Purple</option><option value="green">Green</option><option value="red">Red</option><option value="ice">Ice</option></select><label class="v21-muted mt-2 block">Density</label><select id="v21Density" class="v21-select"><option value="comfortable">Comfortable</option><option value="dense">Dense</option><option value="roomy">Roomy</option></select><label class="v21-muted mt-2 block">Font scale <span id="v21FontLabel">${state.fontScale}%</span></label><input id="v21Font" type="range" min="80" max="135" value="${state.fontScale}" style="width:100%"></div>
+            <div class="v21-card"><h3>FOCUS & ACCESSIBILITY</h3><label class="v21-row"><input id="v21Compact" type="checkbox"> <span class="v21-muted">Compact mode</span></label><label class="v21-row mt-2"><input id="v21Focus" type="checkbox"> <span class="v21-muted">Focus mode</span></label><label class="v21-row mt-2"><input id="v21Motion" type="checkbox"> <span class="v21-muted">Reduced motion</span></label><label class="v21-row mt-2"><input id="v21Contrast" type="checkbox"> <span class="v21-muted">High contrast</span></label></div>
+            <div class="v21-card"><h3>CONNECTION DIAGNOSTICS</h3><div class="v21-big">${latencyMs==null?'—':latencyMs+'ms'}</div><div class="v21-muted">Socket ${socket.connected?'CONNECTED':'DISCONNECTED'} · ${navigator.onLine?'browser online':'browser offline'}</div><button id="v21PingNow" class="v21-btn mt-2">PING SERVER</button></div>
+            <div class="v21-card"><h3>SECURITY</h3><div class="v21-muted">Sign out your other saved sessions without logging out this browser.</div><button id="v21LogoutOthers" class="v21-btn red mt-2">LOG OUT OTHER DEVICES</button></div>
+            <div class="v21-card"><h3>SHORTCUTS</h3><div class="v21-list"><div class="v21-item">Ctrl+K · command palette</div><div class="v21-item">Esc · close overlays / leave active queue</div><div class="v21-item">Alt+D · mark death</div><div class="v21-item">Alt+M · mark clip moment</div><div class="v21-item">Alt+Q · quick Casual 1v1</div></div></div>
+            <div class="v21-card"><h3>LOCAL SETTINGS</h3><button id="v21ResetPrefs" class="v21-btn red">RESET ULTRA SETTINGS</button><div class="v21-muted mt-2">This does not delete your account, messages, friends, roles, or server data.</div></div>
+        </div>`;
+        byId('v21Accent').value=state.accent;byId('v21Density').value=state.density;byId('v21Compact').checked=state.compact;byId('v21Focus').checked=state.focus;byId('v21Motion').checked=state.reducedMotion;byId('v21Contrast').checked=state.highContrast;
+        byId('v21Accent').onchange=e=>{state.accent=e.target.value;saveState();applyVisualPrefs();renderSettings(body);};byId('v21Density').onchange=e=>{state.density=e.target.value;saveState();applyVisualPrefs();};byId('v21Font').oninput=e=>{state.fontScale=Number(e.target.value);byId('v21FontLabel').textContent=state.fontScale+'%';saveState();applyVisualPrefs();};
+        [['v21Compact','compact'],['v21Focus','focus'],['v21Motion','reducedMotion'],['v21Contrast','highContrast']].forEach(([id,key])=>byId(id).onchange=e=>{state[key]=e.target.checked;saveState();applyVisualPrefs();});
+        byId('v21PingNow').onclick=pingServer;byId('v21LogoutOthers').onclick=()=>{if(confirm('Log out every other saved session for your account?'))socket.emit('v21_logout_other_sessions');};byId('v21ResetPrefs').onclick=()=>{if(confirm('Reset Arena Ultra settings on this browser?')){state=JSON.parse(JSON.stringify(DEFAULTS));saveState();applyVisualPrefs();renderSettings(body);}};
+    }
+
+    function renderFeatures(body) {
+        const groups={};FEATURES.forEach((f,i)=>(groups[f[0]]||=[]).push([i+1,f[1]]));
+        body.innerHTML=`<div class="v21-card mb-3"><div class="v21-big">100</div><div class="v21-muted">new V21 features layered on top of the existing accounts, roles, DMs, groups, tournaments, Spotify, admin tools and matchmaking.</div></div>${Object.entries(groups).map(([g,items])=>`<div class="v21-card mb-3"><h3>${esc(g.toUpperCase())}</h3>${items.map(([n,t])=>`<div class="v21-feature"><div class="v21-num">${n}</div><div class="v21-muted">${esc(t)}</div></div>`).join('')}</div>`).join('')}`;
+    }
+
+    function makeCommandPalette() {
+        if(byId('v21Command'))return;const wrap=document.createElement('div');wrap.id='v21Command';wrap.className='hidden';wrap.innerHTML='<div class="v21-commandbox"><input id="v21CommandInput" placeholder="Search actions…"><div id="v21CommandResults" class="v21-command-results"></div></div>';document.body.appendChild(wrap);wrap.onclick=e=>{if(e.target===wrap)wrap.classList.add('hidden');};byId('v21CommandInput').oninput=renderCommands;
+    }
+    const COMMANDS = [
+        ['Open Arena Ultra',()=>openUltra('home')],['Casual 1v1',()=>startQueue('casual')],['Ranked 1v1',()=>startQueue('ranked')],['Cancel matchmaking',()=>socket.emit('cancel_matchmaking')],['Open Messages',()=>typeof showMessagesTab==='function'&&showMessagesTab()],['Open FFA',()=>typeof openFfaPage==='function'&&openFfaPage()],['Open Music',()=>typeof openMusicPage==='function'&&openMusicPage()],['Open Settings',()=>typeof openSettingsModal==='function'&&openSettingsModal()],['Open Stats',()=>openUltra('stats')],['Open Tournaments',()=>openUltra('tournaments')],['Open Coach',()=>openUltra('coach')],['What’s New',()=>openUltra('new')],['Rejoin last room',()=>lastRoom?.smashUrl&&window.open(lastRoom.smashUrl,'_blank','noopener')],['Toggle Focus Mode',()=>{state.focus=!state.focus;saveState();applyVisualPrefs();}],['Toggle Compact Mode',()=>{state.compact=!state.compact;saveState();applyVisualPrefs();}]
+    ];
+    function openCommand(){makeCommandPalette();byId('v21Command').classList.remove('hidden');const i=byId('v21CommandInput');i.value='';renderCommands();setTimeout(()=>i.focus(),0);}
+    function renderCommands(){const q=String(byId('v21CommandInput')?.value||'').toLowerCase();const list=COMMANDS.filter(([name])=>name.toLowerCase().includes(q));byId('v21CommandResults').innerHTML=list.map((x,i)=>`<div class="v21-command-item" data-cmd="${COMMANDS.indexOf(x)}">${esc(x[0])}</div>`).join('');byId('v21CommandResults').querySelectorAll('[data-cmd]').forEach(el=>el.onclick=()=>{const fn=COMMANDS[Number(el.dataset.cmd)]?.[1];byId('v21Command').classList.add('hidden');fn?.();});}
+
+    function makeJoinModal() {
+        if(byId('v21JoinModal'))return;const m=document.createElement('div');m.id='v21JoinModal';m.className='v21-modal hidden';m.innerHTML='<div class="v21-shell"><div class="v21-head"><div><div class="v21-title">⚔ MATCH READY</div><div id="v21JoinSub" class="v21-sub">Your Smash Karts room is ready.</div></div><button id="v21JoinClose" class="v21-btn red">✕</button></div><div class="v21-body"><div class="v21-card"><div id="v21JoinCountdown" class="v21-big">3</div><div id="v21JoinDetails" class="v21-muted"></div><div id="v21JoinLink" class="v21-room-link mt-3"></div><div class="v21-row mt-3"><button id="v21JoinNow" class="v21-btn gold">JOIN MATCH</button><button id="v21OpenNew" class="v21-btn">OPEN NEW TAB</button><button id="v21CopyLink" class="v21-btn">COPY LINK</button><button id="v21CopyCode" class="v21-btn">COPY CODE</button></div></div></div></div>';document.body.appendChild(m);byId('v21JoinClose').onclick=()=>m.classList.add('hidden');
+    }
+    function showJoinModal(room){if(!room?.smashUrl)return;lastRoom={...room,createdAt:Date.now()};try{localStorage.setItem('smash_v21_last_room',JSON.stringify(lastRoom));}catch{};makeJoinModal();const m=byId('v21JoinModal');m.classList.remove('hidden');const url=room.smashUrl;let u=null;try{u=new URL(url);}catch{}const code=u?.searchParams.get('room')||'unknown';const details=[];if(u)for(const [k,v] of u.searchParams.entries())details.push(`${k}=${v}`);const hide=state.streamerHideCode||false;byId('v21JoinLink').textContent=hide?'ROOM LINK HIDDEN IN STREAMER MODE':url;byId('v21JoinLink').classList.toggle('v21-hidden-code',hide);byId('v21JoinDetails').textContent=`${String(room.mode||'1v1').toUpperCase()} · ${room.queueType||'casual'} · ${room.roomCreationSource==='room_bot'?'Room Bot':'Matched host'} · ${details.join(' · ')}`;byId('v21JoinNow').onclick=()=>window.open(url,'_blank','noopener');byId('v21OpenNew').onclick=()=>window.open(url,'_blank','noopener');byId('v21CopyLink').onclick=async()=>{await navigator.clipboard?.writeText(url);toast('Room link copied.','📋');};byId('v21CopyCode').onclick=async()=>{await navigator.clipboard?.writeText(code);toast('Room code copied.','📋');};let n=3;byId('v21JoinCountdown').textContent=n;const t=setInterval(()=>{n--;const el=byId('v21JoinCountdown');if(el)el.textContent=n>0?n:'GO';if(n<=0)clearInterval(t);},1000);state.analytics.sessionMatches=Number(state.analytics.sessionMatches||0)+1;const opponents=(room.players||[]).map(p=>p.name).filter(n=>n&&n!==username());opponents.forEach(name=>state.recentOpponents.push({name,at:Date.now()}));state.recentOpponents=state.recentOpponents.slice(-40);state.analytics.rating1v1.push(currentRating());state.analytics.rating1v1=state.analytics.rating1v1.slice(-100);saveState();}
+
+    function startQueue(type='casual') {
+        queueMode='1v1';queueType=type;state.queueType=type;saveState();queueStartedAt=Date.now();queueActive=true;lastQueueRequest={mode:'1v1',queueType:type,maxPlayers:2,region:state.region};socket.emit('join_matchmaking_queue',lastQueueRequest);startQueueClock();
+    }
+    function startQueueClock(){clearInterval(queueTimer);queueTimer=setInterval(updateQueueUI,250);updateQueueUI();}
+    function updateQueueUI(){const pill=byId('v21QueuePill');if(!pill)return;if(queueActive){const sec=Math.floor((Date.now()-queueStartedAt)/1000);pill.classList.add('on');byId('v21QueuePillText').textContent=`${queueType.toUpperCase()} · ${sec}s · ${estimateWait()}`;}else pill.classList.remove('on');}
+    function estimateWait(){const count=Number(latestCountsV21?.queues?.[`1v1:${queueType}:2`]||0);if(count>=1)return'~5-15s';const avg=averageQueueTime();if(avg)return`~${Math.max(10,Math.round(avg/1000))}s avg`;return'waiting for opponent';}
+    function averageQueueTime(){const vals=(state.analytics.queueSamples||[]).map(Number).filter(x=>x>0);return vals.length?vals.reduce((a,b)=>a+b,0)/vals.length:0;}
+    function finishQueue(result){if(!queueStartedAt)return;const duration=Date.now()-queueStartedAt;state.queueHistory.push({at:Date.now(),type:`${queueType} ${queueMode}`,duration,result});state.queueHistory=state.queueHistory.slice(-10);state.analytics.queueSamples.push(duration);state.analytics.queueSamples=state.analytics.queueSamples.slice(-100);queueStartedAt=0;queueActive=false;clearInterval(queueTimer);saveState();updateQueueUI();}
+    function playMatchSound(){if(!state.queueSound)return;try{const ctx=new (window.AudioContext||window.webkitAudioContext)();const o=ctx.createOscillator(),g=ctx.createGain();o.frequency.value=740;o.connect(g);g.connect(ctx.destination);g.gain.setValueAtTime(.06,ctx.currentTime);g.gain.exponentialRampToValueAtTime(.001,ctx.currentTime+.28);o.start();o.stop(ctx.currentTime+.3);}catch{}}
+    function notifyMatch(text){if(state.matchNotifications&&'Notification'in window&&Notification.permission==='granted')new Notification('Smash Arena',{body:text||'Match found'});}
+
+    function pingServer(){lastPingSent=performance.now();socket.emit('v21_ping',{clientSentAt:Date.now()});}
+    function updateSessionClock(){const mins=Math.floor((Date.now()-SESSION_STARTED)/60000);['v21SessionClock','v21StatsClock'].forEach(id=>{const e=byId(id);if(e)e.textContent=`${mins}m`;});}
+
+    function wireDraftAutosave(){document.addEventListener('input',e=>{const el=e.target;if(!el||!['activeDMInput','dmMessageInput','preGameChatInput','matchChatInput'].includes(el.id))return;state.drafts[draftKey()]=el.value;saveState();},{passive:true});}
+
+    function patchExistingMatchmakerUI(){
+        const ready=byId('v17ReadyButton'),decline=byId('v17DeclineButton');if(ready)ready.remove();if(decline)decline.remove();
+        const subtitle=byId('v17MatchSubtitle');if(subtitle)subtitle.textContent='Opponent found. Creating the room automatically…';
+        const countdown=byId('v17ReadyCountdown');if(countdown)countdown.textContent='';
+        const title=byId('v17MatchTitle');if(title&&title.textContent==='MATCH FOUND')title.textContent='MATCH FOUND · CREATING ROOM';
+        // Add a true X next to the queue status itself.
+        const status=byId('v17OneStatus');if(status&&!byId('v21InlineCancel')){status.style.position='relative';const x=document.createElement('button');x.id='v21InlineCancel';x.className='v21-x';x.textContent='×';x.title='Cancel search';x.style.marginLeft='8px';x.onclick=e=>{e.stopPropagation();socket.emit('cancel_matchmaking');};status.appendChild(x);}
+        const casual=byId('v17FindCasual1v1');if(casual)casual.onclick=()=>startQueue('casual');const ranked=byId('v17FindRanked1v1');if(ranked)ranked.onclick=()=>startQueue('ranked');
+    }
+
+    // Socket integrations
+    socket.on('matchmaking_counts',data=>{latestCountsV21=data||{queues:{}};updateQueueUI();});
+    socket.on('matchmaking_state',data=>{if(data?.state==='queued'){queueActive=true;if(!queueStartedAt)queueStartedAt=Number(data.joinedAt)||Date.now();queueType=data.queueType||queueType;startQueueClock();setTimeout(patchExistingMatchmakerUI,0);}else if(data?.state==='idle'){finishQueue('cancelled');setTimeout(patchExistingMatchmakerUI,0);}});
+    socket.on('match_found',data=>{playMatchSound();notifyMatch('Opponent found. Creating your private room…');finishQueue('matched');setTimeout(patchExistingMatchmakerUI,0);});
+    socket.on('matchmaking_room_ready',room=>{finishQueue('room ready');showJoinModal(room);});
+    socket.on('matchmaking_match_failed',data=>{finishQueue('failed');if(state.autoRequeue&&!data?.youCancelled&&lastQueueRequest)setTimeout(()=>startQueue(lastQueueRequest.queueType),1200);});
+    socket.on('online_users_update',data=>{latestOnline=data?.users||[];});
+    socket.on('tournament_list',data=>{latestTournaments=Array.isArray(data)?data:(data?.tournaments||[]);});
+    socket.on('v21_dashboard',data=>{latestDashboard=data||null;if(byId('v21UltraModal')&&!byId('v21UltraModal').classList.contains('hidden')){const active=byId('v21Tabs')?.querySelector('.active')?.dataset.tab||'home';renderTab(active);}});
+    socket.on('v21_profile_extras',data=>{latestProfileExtras=data||latestProfileExtras;});
+    socket.on('v21_pong',()=>{latencyMs=Math.max(0,Math.round(performance.now()-lastPingSent));const b=byId('v21LatencyBadge');if(b)b.textContent=`PING ${latencyMs}ms`;});
+    socket.on('v21_security_result',data=>toast(`${Number(data?.removed||0)} other saved session(s) logged out.`,'🔐'));
+    socket.on('v21_my_data_export',data=>{if(data?.json)downloadJSON(data.filename||'smash-arena-my-data.json',data.json);});
+    socket.on('v21_error',data=>toast(data?.message||'Arena Ultra action failed.','⚠️'));
+    socket.on('connect',()=>{pingServer();socket.emit('v21_get_dashboard');socket.emit('v21_get_profile_extras');});
+    socket.on('disconnect',()=>{latencyMs=null;const b=byId('v21LatencyBadge');if(b)b.textContent='OFFLINE';});
+
+    document.addEventListener('keydown',e=>{
+        if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='k'){e.preventDefault();openCommand();return;}
+        if(e.altKey&&e.key.toLowerCase()==='d'){e.preventDefault();recordDeath(false);return;}
+        if(e.altKey&&e.key.toLowerCase()==='m'){e.preventDefault();state.coach.clipMarkers.push({at:Date.now(),offsetMs:Date.now()-SESSION_STARTED});saveState();toast('Clip moment marked.','🎬');return;}
+        if(e.altKey&&e.key.toLowerCase()==='q'){e.preventDefault();startQueue('casual');return;}
+        if(e.key==='Escape'&&queueActive){socket.emit('cancel_matchmaking');}
+    });
+
+    addStyles();applyVisualPrefs();injectEntryPoints();makeModal();makeCommandPalette();makeJoinModal();wireDraftAutosave();
+    try{lastRoom=JSON.parse(localStorage.getItem('smash_v21_last_room')||'null');}catch{}
+    setTimeout(patchExistingMatchmakerUI,100);
+    setInterval(()=>{patchExistingMatchmakerUI();updateSessionClock();pingServer();},5000);
+    socket.emit('v21_get_dashboard');socket.emit('v21_get_profile_extras');socket.emit('get_tournaments');pingServer();
+    if(!state.featureSpotlightSeen){state.featureSpotlightSeen=true;saveState();setTimeout(()=>toast('V21 loaded: 100 new features. Press Ctrl+K or click ⚡.','⚡'),1000);}
 }
