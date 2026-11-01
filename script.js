@@ -1046,32 +1046,74 @@ document.addEventListener("DOMContentLoaded", () => {
     function createHub(){
         if(document.getElementById('khHub')) return document.getElementById('khHub');
         const root=document.createElement('div'); root.id='khHub';
-        root.innerHTML=`<div class="kh-shell">
-            <aside class="kh-left">
-                <div class="kh-card kh-profile" id="khProfileCard"></div>
-                <div class="kh-side-title">HUB</div>
-                <div class="kh-card kh-nav" id="khNav"></div>
-            </aside>
-            <main class="kh-main" id="khMain"></main>
-            <aside class="kh-right">
-                <div class="kh-side-title">TODAY</div>
-                <div class="kh-card kh-profile" id="khToday"></div>
-                <div class="kh-side-title">QUICK</div>
-                <div class="kh-card kh-nav" id="khQuickSide"></div>
-                <div class="kh-side-title">STATUS</div>
-                <div class="kh-card kh-profile" id="khStatus"></div>
-            </aside>
+        root.innerHTML=`<div class="kh-app">
+            <header class="kh-launcher-top">
+                <div class="kh-brand-lockup">
+                    <div class="kh-brand-mark">K</div>
+                    <div>
+                        <div class="kh-brand-title">KART HUB</div>
+                        <div class="kh-brand-sub">SMASH KARTS LAUNCHER · GRIND · COMPETE</div>
+                    </div>
+                </div>
+                <div class="kh-top-actions">
+                    <button onclick="window.kartHub.show('arena')">⚔ 1v1 ARENA</button>
+                    <button onclick="window.kartHub.openCreate()">＋ CREATE</button>
+                    <button onclick="window.kartHub.openJoin()">↪ JOIN</button>
+                    <button onclick="window.kartHub.command()">⌨ COMMANDS</button>
+                    <button onclick="window.kartHub.show('settings')">⚙ SETTINGS</button>
+                </div>
+            </header>
+
+            <div class="kh-stage">
+                <aside class="kh-left">
+                    <div class="kh-card kh-profile" id="khProfileCard"></div>
+                    <div class="kh-side-title">TODAY</div>
+                    <div class="kh-card kh-profile kh-compact-card" id="khToday"></div>
+                    <div class="kh-side-title">GRIND SNAPSHOT</div>
+                    <div class="kh-card kh-grind-snapshot">
+                        <button onclick="window.kartHub.show('grind')">🔥 OPEN GRIND LAB</button>
+                        <button onclick="window.kartHub.show('stats')">📊 VIEW STATS</button>
+                        <button onclick="window.kartHub.show('coach')">🎯 COACH MODE</button>
+                    </div>
+                </aside>
+
+                <main class="kh-main" id="khMain"></main>
+
+                <aside class="kh-right">
+                    <div class="kh-card kh-launcher-widget">
+                        <div class="kh-widget-title">QUICK LAUNCH</div>
+                        <div id="khQuickSide" class="kh-launcher-actions"></div>
+                    </div>
+                    <div class="kh-card kh-launcher-widget">
+                        <div class="kh-widget-title">STATUS</div>
+                        <div id="khStatus"></div>
+                    </div>
+                    <div class="kh-card kh-launcher-widget kh-1v1-widget">
+                        <div class="kh-widget-kicker">COMPETITIVE</div>
+                        <div class="kh-widget-big">1v1</div>
+                        <p>Ranked and Casual live in their own arena.</p>
+                        <button onclick="window.kartHub.show('arena')">ENTER 1v1 ARENA</button>
+                    </div>
+                </aside>
+            </div>
+
+            <nav class="kh-bottom-nav" id="khNav"></nav>
         </div>`;
         document.body.appendChild(root); hubRoot=root;
         const nav=root.querySelector('#khNav');
-        navItems.forEach(([id,icon,label])=>{ const b=document.createElement('button'); b.dataset.view=id; b.innerHTML=`${icon} ${label}`; b.onclick=()=>showView(id); nav.appendChild(b); });
+        navItems.forEach(([id,icon,label])=>{
+            const b=document.createElement('button');
+            b.dataset.view=id;
+            b.innerHTML=`<span>${icon}</span><small>${label}</small>`;
+            b.onclick=()=>showView(id);
+            nav.appendChild(b);
+        });
         root.querySelector('#khQuickSide').innerHTML=`
-            <button onclick="window.kartHub.playSK()">▶ PLAY SMASH KARTS</button>
+            <button class="primary" onclick="window.kartHub.playSK()">▶ PLAY SMASH KARTS</button>
             <button onclick="window.kartHub.show('arena')">⚔ 1v1 MATCHMAKING</button>
             <button onclick="window.kartHub.openCreate()">＋ CREATE LOBBY</button>
             <button onclick="window.kartHub.openJoin()">↪ JOIN / FIND GAME</button>
-            <button onclick="window.kartHub.show('grind')">🔥 START GRIND</button>
-            <button onclick="window.kartHub.command()">⌨ COMMAND PALETTE</button>`;
+            <button onclick="window.kartHub.show('grind')">🔥 START GRIND</button>`;
         createCommandPalette(); createHubReturnButton(); applyVisualSettings(); refreshChrome(); showView('home');
         return root;
     }
@@ -1088,21 +1130,63 @@ document.addEventListener("DOMContentLoaded", () => {
         hubRoot.querySelectorAll('#khNav button').forEach(b=>b.classList.toggle('active',b.dataset.view===currentView));
     }
 
-    function panel(title, copy, body){ return `<section class="kh-card kh-panel"><div class="kh-panel-head"><div><div class="kh-panel-title">${title}</div><div class="kh-panel-copy">${copy}</div></div><span class="kh-pill yellow">${featureCatalog.length} HUB TOOLS</span></div>${body}</section>`; }
-    function showView(view){ currentView=view; if(!hubRoot)createHub(); hubRoot.classList.remove('kh-hidden'); refreshChrome(); const main=hubRoot.querySelector('#khMain'); if(!main)return;
-        if(view==='home') renderHome(main); else if(view==='arena') renderArena(main); else if(view==='grind') renderGrind(main); else if(view==='stats') renderStats(main); else if(view==='coach') renderCoach(main); else if(view==='stream') renderStream(main); else if(view==='social') renderSocial(main); else if(view==='tourney') renderTourney(main); else if(view==='features') renderFeatures(main); else renderSettings(main);
-        refreshChrome();
+    function panel(title, copy, body){
+        return `<section class="kh-card kh-panel kh-panel-shell">
+            <div class="kh-panel-head">
+                <div>
+                    <div class="kh-panel-title">${title}</div>
+                    <div class="kh-panel-copy">${copy}</div>
+                </div>
+                <span class="kh-pill yellow">${featureCatalog.length} HUB TOOLS</span>
+            </div>
+            <div class="kh-panel-scroll">${body}</div>
+        </section>`;
     }
     function hideHub(){ hubRoot?.classList.add('kh-hidden'); }
     function showHub(){ if(!hubRoot)createHub(); hubRoot.classList.remove('kh-hidden'); showView(currentView||'home'); }
 
     function renderHome(main){
-        main.innerHTML=`<div class="kh-center-home"><div class="kh-logo"><span class="a">KART</span><br><span class="b">HUB</span></div><div class="kh-tagline">PLAY · GRIND · COMPETE · CREATE</div><button class="kh-play" id="khPlay">▶ PLAY SK</button><div class="kh-quick"><button data-q="arena">⚔ 1v1 ARENA</button><button data-q="create">＋ CREATE</button><button data-q="join">↪ JOIN</button><button data-q="grind">🔥 GRIND</button></div><div class="kh-status-row"><span class="kh-pill green">Launcher Ready</span><span class="kh-pill">Ctrl+K Commands</span><span class="kh-pill">Adjustable Game Bar</span><span class="kh-pill">Coach / Stream Share</span></div></div>`;
+        main.innerHTML=`<div class="kh-home">
+            <div class="kh-home-brand">
+                <div class="kh-logo"><span class="a">KART</span><br><span class="b">HUB</span></div>
+                <div class="kh-tagline">YOUR SMASH KARTS LAUNCHER</div>
+            </div>
+
+            <div class="kh-kart-stage">
+                <div class="kh-kart-glow"></div>
+                <div class="kh-kart-emoji">🏎️</div>
+                <div class="kh-kart-caption">READY TO RACE</div>
+            </div>
+
+            <div class="kh-launch-cluster">
+                <button class="kh-play" id="khPlay"><span class="kh-play-icon">▶</span><span>PLAY</span></button>
+                <div class="kh-create-join">
+                    <button data-q="create">＋ CREATE</button>
+                    <button data-q="join">↪ JOIN</button>
+                </div>
+            </div>
+
+            <div class="kh-home-modes">
+                <button data-q="arena" class="arena">
+                    <b>⚔ 1v1 ARENA</b>
+                    <span>Casual · Ranked · Custom</span>
+                </button>
+                <button data-q="grind" class="grind">
+                    <b>🔥 GRIND LAB</b>
+                    <span>Drills · Reps · Goals · Session stats</span>
+                </button>
+                <button data-q="tourney" class="tourney">
+                    <b>🏆 TOURNAMENTS</b>
+                    <span>Events · Check-in · Brackets</span>
+                </button>
+            </div>
+        </div>`;
         main.querySelector('#khPlay').onclick=playSK;
         main.querySelector('[data-q="arena"]').onclick=()=>showView('arena');
         main.querySelector('[data-q="create"]').onclick=openCreate;
         main.querySelector('[data-q="join"]').onclick=openJoin;
         main.querySelector('[data-q="grind"]').onclick=()=>showView('grind');
+        main.querySelector('[data-q="tourney"]').onclick=()=>showView('tourney');
     }
 
     function renderArena(main){
