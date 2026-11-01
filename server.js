@@ -45,12 +45,13 @@ app.get('/script.js', (req, res) => {
         'Expires': '0'
     });
 
+    // V24: serve exactly one frontend controller. Older injected frontend
+    // installers remain in this file for backend compatibility/reference,
+    // but are intentionally NOT appended to script.js anymore. This prevents
+    // multiple UI generations from overriding each other's buttons and DOM.
     res.type('application/javascript').send(
         fs.readFileSync(path.join(__dirname, filename), 'utf8') +
-        '\nwindow.__SPOTIFY_CLIENT_ID__ = ' + JSON.stringify(String(process.env.SPOTIFY_CLIENT_ID || '').trim()) + ';' +
-        '\n;(' + installMegaArena.toString() + ')();' +
-        '\n;(' + installV12Platform.toString() + ')();' +
-        '\n;(' + installV17Matchmaker.toString() + ')();'
+        '\nwindow.__SPOTIFY_CLIENT_ID__ = ' + JSON.stringify(String(process.env.SPOTIFY_CLIENT_ID || '').trim()) + ';'
     );
 });
 
