@@ -1,6 +1,46 @@
-const socket = io();
+// Keep the UI alive even if Socket.IO fails to load on the first request.
+// Online features will reconnect normally when served through the Node/Render server,
+// while local/static previews no longer crash every button on line 1.
+function createOfflineSocketFallback() {
+    const handlers = Object.create(null);
+
+    return {
+        id: 'offline-preview',
+        connected: false,
+
+        on(event, handler) {
+            (handlers[event] ||= []).push(handler);
+            return this;
+        },
+
+        off(event, handler) {
+            if (!handlers[event]) return this;
+
+            handlers[event] =
+                handlers[event].filter(fn => fn !== handler);
+
+            return this;
+        },
+
+        emit() {
+            return this;
+        },
+
+        io: {
+            on() {
+                return this;
+            }
+        }
+    };
+}
+
+const socket =
+    typeof window.io === 'function'
+        ? window.io()
+        : createOfflineSocketFallback();
+
 let currentMode = '1v1';
-let currentGameplayMode = 'popup'; // Default mode
+let currentGameplayMode = 'popup';
 let activeRoomData = null;
 let chatInactivityTimer = null;
 let activeDMTargetUser = null;
@@ -18,6 +58,7 @@ function updateGameplayMode(mode) {
 
 function escapeHTML(str) {
     if (!str) return '';
+
     return String(str)
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
@@ -27,944 +68,2945 @@ function escapeHTML(str) {
 }
 
 function showToast(message, icon = '🔔') {
-    const container = document.getElementById('toastContainer');
+    const container =
+        document.getElementById('toastContainer');
+
     if (!container) return;
-    const toast = document.createElement('div');
+
+    const toast =
+        document.createElement('div');
+
     toast.className = 'toast-msg';
-    toast.innerHTML = `<span>${icon}</span> <span>${escapeHTML(message)}</span>`;
+
+    toast.innerHTML =
+        `<span>${icon}</span>
+         <span>${escapeHTML(message)}</span>`;
+
     container.appendChild(toast);
 
     setTimeout(() => {
         toast.style.opacity = '0';
-        toast.style.transform = 'translateY(-20px)';
-        setTimeout(() => toast.remove(), 300);
+        toast.style.transform =
+            'translateY(-20px)';
+
+        setTimeout(
+            () => toast.remove(),
+            300
+        );
     }, 3505);
 }
 
 function incrementUnreadBadge() {
     unreadMessageCount++;
-    const badge = document.getElementById('messagesBadge');
+
+    const badge =
+        document.getElementById(
+            'messagesBadge'
+        );
+
     if (!badge) return;
-    badge.innerText = unreadMessageCount;
+
+    badge.innerText =
+        unreadMessageCount;
+
     badge.classList.remove('hidden');
 }
 
 function clearUnreadBadge() {
     unreadMessageCount = 0;
-    const badge = document.getElementById('messagesBadge');
+
+    const badge =
+        document.getElementById(
+            'messagesBadge'
+        );
+
     if (!badge) return;
+
     badge.innerText = '0';
     badge.classList.add('hidden');
 }
 
 function openSettingsModal() {
-    document.getElementById('settingsModal').classList.remove('hidden');
+    document
+        .getElementById('settingsModal')
+        ?.classList.remove('hidden');
 }
 
 function closeSettingsModal() {
-    document.getElementById('settingsModal').classList.add('hidden');
+    document
+        .getElementById('settingsModal')
+        ?.classList.add('hidden');
 }
 
 function toggleOnlineStatus(isOnline) {
-    socket.emit('toggle_online_status', isOnline);
-    showToast(isOnline ? "You are now VISIBLE online." : "You are now HIDDEN (Invisible).", isOnline ? "🟢" : "👻");
+    socket.emit(
+        'toggle_online_status',
+        isOnline
+    );
+
+    showToast(
+        isOnline
+            ? 'You are now VISIBLE online.'
+            : 'You are now HIDDEN (Invisible).',
+        isOnline ? '🟢' : '👻'
+    );
 }
 
-/* ================== MEMORY FUNCTIONS ================== */
+/* ================================
+   FRIEND MEMORY
+================================ */
+
 function getLocalFriends(username) {
-    return JSON.parse(localStorage.getItem(`friends_${username}`)) || [];
+    try {
+        return (
+            JSON.parse(
+                localStorage.getItem(
+                    `friends_${username}`
+                )
+            ) || []
+        );
+    } catch {
+        return [];
+    }
 }
 
-function saveLocalFriends(username, friendsArray) {
-    localStorage.setItem(`friends_${username}`, JSON.stringify(friendsArray));
+function saveLocalFriends(
+    username,
+    friendsArray
+) {
+    localStorage.setItem(
+        `friends_${username}`,
+        JSON.stringify(friendsArray)
+    );
 }
 
-function isUserFriend(targetUsername) {
-    const currentUser = AuthSession.getUser();
+function isUserFriend(
+    targetUsername
+) {
+    const currentUser =
+        AuthSession.getUser();
+
     if (!currentUser) return false;
-    
-    let localFriends = getLocalFriends(currentUser.username);
-    if (localFriends.includes(targetUsername)) return true;
 
-    const myUserObj = onlineUsersCache.find(u => u.username === currentUser.username);
-    if (myUserObj && myUserObj.friends && myUserObj.friends.includes(targetUsername)) {
-        localFriends.push(targetUsername);
-        saveLocalFriends(currentUser.username, localFriends);
+    let localFriends =
+        getLocalFriends(
+            currentUser.username
+        );
+
+    if (
+        localFriends.includes(
+            targetUsername
+        )
+    ) {
         return true;
     }
+
+    const myUserObj =
+        onlineUsersCache.find(
+            u =>
+                u.username ===
+                currentUser.username
+        );
+
+    if (
+        myUserObj &&
+        myUserObj.friends &&
+        myUserObj.friends.includes(
+            targetUsername
+        )
+    ) {
+        localFriends.push(
+            targetUsername
+        );
+
+        saveLocalFriends(
+            currentUser.username,
+            localFriends
+        );
+
+        return true;
+    }
+
     return false;
 }
 
-function renderLeaderboard(topPlayers) {
-    const list = document.getElementById('leaderboardList');
+/* ================================
+   LEADERBOARD
+================================ */
+
+function renderLeaderboard(
+    topPlayers
+) {
+    const list =
+        document.getElementById(
+            'leaderboardList'
+        );
+
     if (!list) return;
-    list.innerHTML = topPlayers.length === 0 ? `<p class="text-xs text-blue-200">No matches recorded yet.</p>` : '';
-    topPlayers.forEach((p, idx) => {
-        const item = document.createElement('div');
-        item.className = 'flex justify-between items-center bg-blue-900/60 border border-white/10 p-3 rounded-2xl';
-        item.innerHTML = `
-            <div class="flex items-center gap-3">
-                <span class="font-bungee text-sm ${idx===0 ? 'text-yellow-300' : 'text-white'}">#${idx + 1}</span>
-                <span class="font-bold text-xs text-white">👤 ${escapeHTML(p.username)}</span>
-            </div>
-            <span class="font-black text-xs text-yellow-300">${p.matches} Games Played</span>
-        `;
-        list.appendChild(item);
-    });
+
+    list.innerHTML =
+        topPlayers.length === 0
+            ? `<p class="text-xs text-blue-200">
+                 No matches recorded yet.
+               </p>`
+            : '';
+
+    topPlayers.forEach(
+        (p, idx) => {
+            const item =
+                document.createElement(
+                    'div'
+                );
+
+            item.className =
+                'flex justify-between items-center bg-blue-900/60 border border-white/10 p-3 rounded-2xl';
+
+            item.innerHTML = `
+                <div class="flex items-center gap-3">
+                    <span class="font-bungee text-sm ${
+                        idx === 0
+                            ? 'text-yellow-300'
+                            : 'text-white'
+                    }">
+                        #${idx + 1}
+                    </span>
+
+                    <span class="font-bold text-xs text-white">
+                        👤 ${escapeHTML(
+                            p.username
+                        )}
+                    </span>
+                </div>
+
+                <span class="font-black text-xs text-yellow-300">
+                    ${p.matches} Games Played
+                </span>
+            `;
+
+            list.appendChild(item);
+        }
+    );
 }
-/* ======================================================= */
+
+/* ================================
+   AUTH
+================================ */
 
 const AuthSession = {
-    INACTIVITY_LIMIT_MS: 30 * 60 * 1000,
-    WARNING_WINDOW_MS: 60 * 1000,
+    INACTIVITY_LIMIT_MS:
+        30 * 60 * 1000,
+
+    WARNING_WINDOW_MS:
+        60 * 1000,
+
     THROTTLE_MS: 5000,
+
     lastActivity: Date.now(),
+
     isWarningShown: false,
 
     getRegisteredUsers() {
         try {
-            return JSON.parse(localStorage.getItem("registered_users")) || [];
-        } catch(e) {
+            return (
+                JSON.parse(
+                    localStorage.getItem(
+                        'registered_users'
+                    )
+                ) || []
+            );
+        } catch {
             return [];
         }
     },
 
     saveRegisteredUser(userObj) {
-        const users = this.getRegisteredUsers();
+        const users =
+            this.getRegisteredUsers();
+
         users.push(userObj);
-        localStorage.setItem("registered_users", JSON.stringify(users));
+
+        localStorage.setItem(
+            'registered_users',
+            JSON.stringify(users)
+        );
     },
 
     findUser(email, password) {
-        const users = this.getRegisteredUsers();
-        return users.find(u => u.email.toLowerCase() === email.toLowerCase() && u.password === password);
+        const users =
+            this.getRegisteredUsers();
+
+        return users.find(
+            u =>
+                u.email.toLowerCase() ===
+                    email.toLowerCase() &&
+                u.password === password
+        );
     },
 
     userExists(email) {
-        const users = this.getRegisteredUsers();
-        return users.some(u => u.email.toLowerCase() === email.toLowerCase());
+        return this
+            .getRegisteredUsers()
+            .some(
+                u =>
+                    u.email.toLowerCase() ===
+                    email.toLowerCase()
+            );
     },
 
     login(email, username) {
-        const cleanUser = (username && username.trim() !== '') ? username.trim() : "Player";
-        const session = { email, username: cleanUser, token: "token_" + Date.now() };
-        localStorage.setItem("user_session", JSON.stringify(session));
-        document.getElementById("authModal").classList.add("hidden");
+        const cleanUser =
+            username &&
+            username.trim() !== ''
+                ? username.trim()
+                : 'Player';
+
+        const session = {
+            email,
+            username: cleanUser,
+            token:
+                'token_' +
+                Date.now()
+        };
+
+        localStorage.setItem(
+            'user_session',
+            JSON.stringify(session)
+        );
+
+        document
+            .getElementById(
+                'authModal'
+            )
+            ?.classList.add(
+                'hidden'
+            );
+
         this.startTracker();
+
         updateUserUI();
-        
-        renderLeaderboard(JSON.parse(localStorage.getItem('saved_leaderboard')) || []);
+
+        renderLeaderboard(
+            JSON.parse(
+                localStorage.getItem(
+                    'saved_leaderboard'
+                )
+            ) || []
+        );
+
         updateFriendsTabList();
-        
-        showToast(`Welcome back, ${cleanUser}!`, "🎮");
+
+        showToast(
+            `Welcome back, ${cleanUser}!`,
+            '🎮'
+        );
     },
 
     getUser() {
-        const sessionStr = localStorage.getItem("user_session");
-        if (!sessionStr) return null;
+        const sessionStr =
+            localStorage.getItem(
+                'user_session'
+            );
+
+        if (!sessionStr) {
+            return null;
+        }
+
         try {
-            return JSON.parse(sessionStr);
-        } catch(e) {
+            return JSON.parse(
+                sessionStr
+            );
+        } catch {
             return null;
         }
     },
 
     isLoggedIn() {
-        return this.getUser() !== null;
+        return (
+            this.getUser() !== null
+        );
     },
 
     logout() {
-        localStorage.removeItem("user_session");
+        localStorage.removeItem(
+            'user_session'
+        );
+
         window.location.reload();
     },
 
     startTracker() {
-        this.lastActivity = Date.now();
+        this.lastActivity =
+            Date.now();
     },
 
     handleActivity() {
-        if (this.isWarningShown) return;
+        if (
+            this.isWarningShown
+        ) {
+            return;
+        }
+
         const now = Date.now();
-        if (now - this.lastActivity > this.THROTTLE_MS) {
-            this.lastActivity = now;
+
+        if (
+            now -
+                this.lastActivity >
+            this.THROTTLE_MS
+        ) {
+            this.lastActivity =
+                now;
         }
     },
 
     resetInactivity() {
-        this.lastActivity = Date.now();
+        this.lastActivity =
+            Date.now();
+
         this.hideWarning();
     },
 
     checkInactivity() {
-        if (!this.isLoggedIn()) return;
-        const timeIdle = Date.now() - this.lastActivity;
-        const timeRemaining = this.INACTIVITY_LIMIT_MS - timeIdle;
+        if (
+            !this.isLoggedIn()
+        ) {
+            return;
+        }
 
-        if (timeRemaining <= 0) {
+        const timeIdle =
+            Date.now() -
+            this.lastActivity;
+
+        const timeRemaining =
+            this.INACTIVITY_LIMIT_MS -
+            timeIdle;
+
+        if (
+            timeRemaining <= 0
+        ) {
             this.logout();
-        } else if (timeRemaining <= this.WARNING_WINDOW_MS) {
-            this.showWarning(Math.ceil(timeRemaining / 1000));
-        } else {
-            if (this.isWarningShown) this.hideWarning();
+        } else if (
+            timeRemaining <=
+            this.WARNING_WINDOW_MS
+        ) {
+            this.showWarning(
+                Math.ceil(
+                    timeRemaining /
+                        1000
+                )
+            );
+        } else if (
+            this.isWarningShown
+        ) {
+            this.hideWarning();
         }
     },
 
     showWarning(secondsLeft) {
-        this.isWarningShown = true;
-        document.getElementById("inactivityModal").classList.remove("hidden");
-        document.getElementById("countdownTimer").textContent = secondsLeft;
+        this.isWarningShown =
+            true;
+
+        document
+            .getElementById(
+                'inactivityModal'
+            )
+            ?.classList.remove(
+                'hidden'
+            );
+
+        const countdown =
+            document.getElementById(
+                'countdownTimer'
+            );
+
+        if (countdown) {
+            countdown.textContent =
+                secondsLeft;
+        }
     },
 
     hideWarning() {
-        this.isWarningShown = false;
-        document.getElementById("inactivityModal").classList.add("hidden");
+        this.isWarningShown =
+            false;
+
+        document
+            .getElementById(
+                'inactivityModal'
+            )
+            ?.classList.add(
+                'hidden'
+            );
     }
 };
 
 function toggleAuthTab(type) {
-    const loginForm = document.getElementById("loginForm");
-    const regForm = document.getElementById("registerForm");
-    const tabLogin = document.getElementById("tabLoginBtn");
-    const tabReg = document.getElementById("tabRegisterBtn");
+    const loginForm =
+        document.getElementById(
+            'loginForm'
+        );
 
-    if (type === 'login') {
-        loginForm.classList.remove("hidden");
-        regForm.classList.add("hidden");
-        tabLogin.className = "font-bungee text-lg text-yellow-300 border-b-2 border-yellow-300 pb-1";
-        tabReg.className = "font-bungee text-lg text-white/50 pb-1 hover:text-white";
+    const regForm =
+        document.getElementById(
+            'registerForm'
+        );
+
+    const tabLogin =
+        document.getElementById(
+            'tabLoginBtn'
+        );
+
+    const tabReg =
+        document.getElementById(
+            'tabRegisterBtn'
+        );
+
+    if (
+        !loginForm ||
+        !regForm
+    ) {
+        return;
+    }
+
+    if (
+        type === 'login'
+    ) {
+        loginForm.classList.remove(
+            'hidden'
+        );
+
+        regForm.classList.add(
+            'hidden'
+        );
+
+        if (tabLogin) {
+            tabLogin.className =
+                'font-bungee text-lg text-yellow-300 border-b-2 border-yellow-300 pb-1';
+        }
+
+        if (tabReg) {
+            tabReg.className =
+                'font-bungee text-lg text-white/50 pb-1 hover:text-white';
+        }
     } else {
-        loginForm.classList.add("hidden");
-        regForm.classList.remove("hidden");
-        tabReg.className = "font-bungee text-lg text-yellow-300 border-b-2 border-yellow-300 pb-1";
-        tabLogin.className = "font-bungee text-lg text-white/50 pb-1 hover:text-white";
+        loginForm.classList.add(
+            'hidden'
+        );
+
+        regForm.classList.remove(
+            'hidden'
+        );
+
+        if (tabReg) {
+            tabReg.className =
+                'font-bungee text-lg text-yellow-300 border-b-2 border-yellow-300 pb-1';
+        }
+
+        if (tabLogin) {
+            tabLogin.className =
+                'font-bungee text-lg text-white/50 pb-1 hover:text-white';
+        }
     }
 }
 
-function handleAuthSubmit(e, type) {
+function handleAuthSubmit(
+    e,
+    type
+) {
     e.preventDefault();
-    if (type === 'register') {
-        const username = document.getElementById('regUsername').value.trim();
-        const email = document.getElementById('regEmail').value.trim();
-        const password = document.getElementById('regPassword').value.trim();
 
-        if (AuthSession.userExists(email)) {
-            showToast("An account with this email already exists! Please log in.", "⚠️");
-            toggleAuthTab('login');
+    if (
+        type === 'register'
+    ) {
+        const username =
+            document
+                .getElementById(
+                    'regUsername'
+                )
+                ?.value.trim() ||
+            '';
+
+        const email =
+            document
+                .getElementById(
+                    'regEmail'
+                )
+                ?.value.trim() ||
+            '';
+
+        const password =
+            document
+                .getElementById(
+                    'regPassword'
+                )
+                ?.value.trim() ||
+            '';
+
+        if (
+            AuthSession.userExists(
+                email
+            )
+        ) {
+            showToast(
+                'An account with this email already exists! Please log in.',
+                '⚠️'
+            );
+
+            toggleAuthTab(
+                'login'
+            );
+
             return;
         }
 
-        AuthSession.saveRegisteredUser({ username, email, password });
-        showToast("Account successfully created! Please log in.", "🎉");
-        toggleAuthTab('login');
-        document.getElementById('regUsername').value = '';
-        document.getElementById('regEmail').value = '';
-        document.getElementById('regPassword').value = '';
+        AuthSession.saveRegisteredUser(
+            {
+                username,
+                email,
+                password
+            }
+        );
+
+        showToast(
+            'Account successfully created! Please log in.',
+            '🎉'
+        );
+
+        toggleAuthTab(
+            'login'
+        );
     } else {
-        const email = document.getElementById('loginEmail').value.trim();
-        const password = document.getElementById('loginPassword').value.trim();
+        const email =
+            document
+                .getElementById(
+                    'loginEmail'
+                )
+                ?.value.trim() ||
+            '';
 
-        const foundUser = AuthSession.findUser(email, password);
+        const password =
+            document
+                .getElementById(
+                    'loginPassword'
+                )
+                ?.value.trim() ||
+            '';
+
+        const foundUser =
+            AuthSession.findUser(
+                email,
+                password
+            );
+
         if (!foundUser) {
-            showToast("Account not found! Please sign up first.", "❌");
+            showToast(
+                'Account not found! Please sign up first.',
+                '❌'
+            );
+
             return;
         }
 
-        AuthSession.login(foundUser.email, foundUser.username);
+        AuthSession.login(
+            foundUser.email,
+            foundUser.username
+        );
     }
 }
 
 function promptEditUsername() {
-    const user = AuthSession.getUser();
-    document.getElementById("newUsernameInput").value = user ? user.username : "";
-    document.getElementById("editUsernameModal").classList.remove("hidden");
+    const user =
+        AuthSession.getUser();
+
+    const input =
+        document.getElementById(
+            'newUsernameInput'
+        );
+
+    if (input) {
+        input.value =
+            user
+                ? user.username
+                : '';
+    }
+
+    document
+        .getElementById(
+            'editUsernameModal'
+        )
+        ?.classList.remove(
+            'hidden'
+        );
 }
 
 function closeEditUsernameModal() {
-    document.getElementById("editUsernameModal").classList.add("hidden");
+    document
+        .getElementById(
+            'editUsernameModal'
+        )
+        ?.classList.add(
+            'hidden'
+        );
 }
 
 function saveNewUsername() {
-    const newUname = document.getElementById("newUsernameInput").value;
-    const user = AuthSession.getUser();
-    if (newUname && newUname.trim() !== '') {
-        AuthSession.login(user ? user.email : 'player@example.com', newUname.trim());
+    const newUname =
+        document
+            .getElementById(
+                'newUsernameInput'
+            )
+            ?.value ||
+        '';
+
+    const user =
+        AuthSession.getUser();
+
+    if (
+        newUname.trim() !== ''
+    ) {
+        AuthSession.login(
+            user
+                ? user.email
+                : 'player@example.com',
+            newUname.trim()
+        );
+
         closeEditUsernameModal();
     }
 }
 
 function updateUserUI() {
-    const user = AuthSession.getUser();
+    const user =
+        AuthSession.getUser();
+
+    const tag =
+        document.getElementById(
+            'userDisplayTag'
+        );
+
     if (user) {
-        document.getElementById("userDisplayTag").innerText = user.username;
-        socket.emit("set_user_session", user);
+        if (tag) {
+            tag.innerText =
+                user.username;
+        }
+
+        socket.emit(
+            'set_user_session',
+            user
+        );
+    } else if (tag) {
+        tag.innerText = 'Guest';
     }
 }
 
+/* ================================
+   ONLINE USERS
+================================ */
+
 function openOnlineModal() {
-    if (!AuthSession.isLoggedIn()) {
-        showToast("Please log in to view online players!", "⚠️");
+    if (
+        !AuthSession.isLoggedIn()
+    ) {
+        showToast(
+            'Please log in to view online players!',
+            '⚠️'
+        );
+
         return;
     }
-    document.getElementById('onlineUsersModal').classList.remove('hidden');
+
+    document
+        .getElementById(
+            'onlineUsersModal'
+        )
+        ?.classList.remove(
+            'hidden'
+        );
 }
 
 function closeOnlineModal() {
-    document.getElementById('onlineUsersModal').classList.add('hidden');
+    document
+        .getElementById(
+            'onlineUsersModal'
+        )
+        ?.classList.add(
+            'hidden'
+        );
 }
 
-socket.on('online_users_update', ({ count, users }) => {
-    onlineUsersCache = users;
-    document.getElementById('onlineCountBadge').innerText = `${count} Online`;
-    renderOnlineUsersList(users);
-    updateFriendsTabList();
-});
+socket.on(
+    'online_users_update',
+    ({ count, users }) => {
+        onlineUsersCache =
+            users || [];
 
-function renderOnlineUsersList(users) {
-    const container = document.getElementById('onlineUsersList');
+        const badge =
+            document.getElementById(
+                'onlineCountBadge'
+            );
+
+        if (badge) {
+            badge.innerText =
+                `${count} Online`;
+        }
+
+        renderOnlineUsersList(
+            users || []
+        );
+
+        updateFriendsTabList();
+    }
+);
+
+function renderOnlineUsersList(
+    users
+) {
+    const container =
+        document.getElementById(
+            'onlineUsersList'
+        );
+
     if (!container) return;
+
     container.innerHTML = '';
 
-    const currentUser = AuthSession.getUser();
-    const myUsername = currentUser ? currentUser.username : '';
+    const currentUser =
+        AuthSession.getUser();
+
+    const myUsername =
+        currentUser
+            ? currentUser.username
+            : '';
 
     users.forEach(u => {
-        if (u.id === socket.id || u.username === myUsername) return;
+        if (
+            u.id === socket.id ||
+            u.username ===
+                myUsername
+        ) {
+            return;
+        }
 
-        const isFriend = isUserFriend(u.username);
-        const row = document.createElement('div');
-        row.className = 'flex justify-between items-center bg-blue-950/80 p-3 rounded-2xl border border-white/10';
-        
+        const isFriend =
+            isUserFriend(
+                u.username
+            );
+
+        const row =
+            document.createElement(
+                'div'
+            );
+
+        row.className =
+            'flex justify-between items-center bg-blue-950/80 p-3 rounded-2xl border border-white/10';
+
         row.innerHTML = `
-            <span class="font-bold text-xs text-white">👤 ${escapeHTML(u.username)}</span>
+            <span class="font-bold text-xs text-white">
+                👤 ${escapeHTML(
+                    u.username
+                )}
+            </span>
+
             <div class="flex gap-2">
-                ${isFriend 
-                    ? `<button onclick="openTabDMWith('${escapeHTML(u.username)}')" class="bg-blue-600 hover:bg-blue-500 text-white text-[10px] font-bold px-2.5 py-1.5 rounded-lg">💬 Message</button>`
-                    : `<button onclick="sendFriendRequest('${u.id}', '${escapeHTML(u.username)}')" class="bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold px-2.5 py-1.5 rounded-lg">➕ Add Friend</button>`
+                ${
+                    isFriend
+                        ? `<button
+                               onclick="openTabDMWith('${escapeHTML(
+                                   u.username
+                               )}')"
+                               class="bg-blue-600 hover:bg-blue-500 text-white text-[10px] font-bold px-2.5 py-1.5 rounded-lg">
+                               💬 Message
+                           </button>`
+                        : `<button
+                               onclick="sendFriendRequest('${u.id}', '${escapeHTML(
+                                   u.username
+                               )}')"
+                               class="bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold px-2.5 py-1.5 rounded-lg">
+                               ➕ Add Friend
+                           </button>`
                 }
             </div>
         `;
-        container.appendChild(row);
+
+        container.appendChild(
+            row
+        );
     });
 }
 
-function sendFriendRequest(targetSocketId, username) {
-    socket.emit('send_friend_request', { targetSocketId });
-    showToast(`Friend request sent to ${username}!`, "➕");
+function sendFriendRequest(
+    targetSocketId,
+    username
+) {
+    socket.emit(
+        'send_friend_request',
+        {
+            targetSocketId
+        }
+    );
+
+    showToast(
+        `Friend request sent to ${username}!`,
+        '➕'
+    );
 }
 
-socket.on('receive_friend_request', (data) => {
-    incrementUnreadBadge();
-    showToast(`New Friend Request from ${data.fromUsername}! Check Messages tab.`, "👋");
-});
-
-socket.on('friend_requests_update', (requests) => {
-    pendingFriendRequests = requests;
-    if (requests && requests.length > 0) {
+socket.on(
+    'receive_friend_request',
+    data => {
         incrementUnreadBadge();
-    }
-    updateFriendsTabList();
-});
 
-function acceptFriendRequestByName(username) {
-    socket.emit('accept_friend_request', { challengerUsername: username });
-    showToast(`Accepted friend request from ${username}!`, "🤝");
-    
-    const user = AuthSession.getUser();
+        showToast(
+            `New Friend Request from ${data.fromUsername}! Check Messages tab.`,
+            '👋'
+        );
+    }
+);
+
+socket.on(
+    'friend_requests_update',
+    requests => {
+        pendingFriendRequests =
+            requests || [];
+
+        if (
+            pendingFriendRequests.length >
+            0
+        ) {
+            incrementUnreadBadge();
+        }
+
+        updateFriendsTabList();
+    }
+);
+
+function acceptFriendRequestByName(
+    username
+) {
+    socket.emit(
+        'accept_friend_request',
+        {
+            challengerUsername:
+                username
+        }
+    );
+
+    showToast(
+        `Accepted friend request from ${username}!`,
+        '🤝'
+    );
+
+    const user =
+        AuthSession.getUser();
+
     if (user) {
-        let friends = getLocalFriends(user.username);
-        if (!friends.includes(username)) {
-            friends.push(username);
-            saveLocalFriends(user.username, friends);
+        let friends =
+            getLocalFriends(
+                user.username
+            );
+
+        if (
+            !friends.includes(
+                username
+            )
+        ) {
+            friends.push(
+                username
+            );
+
+            saveLocalFriends(
+                user.username,
+                friends
+            );
         }
     }
+
     updateFriendsTabList();
 }
 
-function declineFriendRequestByName(username) {
-    socket.emit('decline_friend_request', { challengerUsername: username });
-    showToast(`Declined friend request from ${username}.`, "✕");
+function declineFriendRequestByName(
+    username
+) {
+    socket.emit(
+        'decline_friend_request',
+        {
+            challengerUsername:
+                username
+        }
+    );
+
+    showToast(
+        `Declined friend request from ${username}.`,
+        '✕'
+    );
 }
 
-socket.on('friend_request_accepted', (data) => {
-    showToast(`You and ${data.username} are now friends!`, "🤝");
-    const user = AuthSession.getUser();
-    if (user) {
-        let friends = getLocalFriends(user.username);
-        if (!friends.includes(data.username)) {
-            friends.push(data.username);
-            saveLocalFriends(user.username, friends);
-        }
-    }
-    updateFriendsTabList();
-});
+socket.on(
+    'friend_request_accepted',
+    data => {
+        showToast(
+            `You and ${data.username} are now friends!`,
+            '🤝'
+        );
 
-function initiateFriend1v1(friendUsername) {
-    friendChallengeTargetUser = friendUsername;
-    document.getElementById('friendChallengeHeader').innerText = `⚔️ CREATE 1v1 ROOM LINK FOR ${friendUsername.toUpperCase()}`;
-    document.getElementById('friendChallengeIframe').src = "https://smashkarts.io";
-    document.getElementById('friendChallengeCodeInput').value = '';
-    document.getElementById('friendChallengeModal').classList.remove('hidden');
+        const user =
+            AuthSession.getUser();
+
+        if (user) {
+            let friends =
+                getLocalFriends(
+                    user.username
+                );
+
+            if (
+                !friends.includes(
+                    data.username
+                )
+            ) {
+                friends.push(
+                    data.username
+                );
+
+                saveLocalFriends(
+                    user.username,
+                    friends
+                );
+            }
+        }
+
+        updateFriendsTabList();
+    }
+);
+
+/* ================================
+   FRIEND CHALLENGES
+================================ */
+
+function initiateFriend1v1(
+    friendUsername
+) {
+    friendChallengeTargetUser =
+        friendUsername;
+
+    const header =
+        document.getElementById(
+            'friendChallengeHeader'
+        );
+
+    if (header) {
+        header.innerText =
+            `⚔️ CREATE 1v1 ROOM LINK FOR ${friendUsername.toUpperCase()}`;
+    }
+
+    const iframe =
+        document.getElementById(
+            'friendChallengeIframe'
+        );
+
+    if (iframe) {
+        iframe.src =
+            'https://smashkarts.io';
+    }
+
+    const input =
+        document.getElementById(
+            'friendChallengeCodeInput'
+        );
+
+    if (input) {
+        input.value = '';
+    }
+
+    document
+        .getElementById(
+            'friendChallengeModal'
+        )
+        ?.classList.remove(
+            'hidden'
+        );
 }
 
 function closeFriendChallengeModal() {
-    document.getElementById('friendChallengeIframe').src = "";
-    document.getElementById('friendChallengeModal').classList.add('hidden');
-    friendChallengeTargetUser = null;
+    const iframe =
+        document.getElementById(
+            'friendChallengeIframe'
+        );
+
+    if (iframe) {
+        iframe.src = '';
+    }
+
+    document
+        .getElementById(
+            'friendChallengeModal'
+        )
+        ?.classList.add(
+            'hidden'
+        );
+
+    friendChallengeTargetUser =
+        null;
 }
 
 function sendFriendChallengeWithCode() {
-    let codeInput = document.getElementById('friendChallengeCodeInput').value.trim();
-    codeInput = extractSmashUrlClient(codeInput);
+    const input =
+        document.getElementById(
+            'friendChallengeCodeInput'
+        );
+
+    let codeInput =
+        input
+            ? input.value.trim()
+            : '';
+
+    codeInput =
+        extractSmashUrlClient(
+            codeInput
+        );
 
     if (!codeInput) {
-        showToast("Error: You must paste a valid Smash Karts room link or code!", "⚠️");
+        showToast(
+            'Error: You must paste a valid Smash Karts room link or code!',
+            '⚠️'
+        );
+
         return;
     }
 
-    const user = AuthSession.getUser();
-    const targetUserObj = onlineUsersCache.find(u => u.username === friendChallengeTargetUser);
+    const user =
+        AuthSession.getUser();
+
+    const targetUserObj =
+        onlineUsersCache.find(
+            u =>
+                u.username ===
+                friendChallengeTargetUser
+        );
 
     if (!targetUserObj) {
-        showToast(`${friendChallengeTargetUser} is not currently online!`, "⚠️");
+        showToast(
+            `${friendChallengeTargetUser} is not currently online!`,
+            '⚠️'
+        );
+
         closeFriendChallengeModal();
+
         return;
     }
 
-    socket.emit('send_match_challenge', {
-        targetSocketId: targetUserObj.id,
-        targetUsername: friendChallengeTargetUser,
-        fromUsername: user ? user.username : 'Player',
-        mode: '1v1',
-        smashUrl: codeInput
-    });
+    socket.emit(
+        'send_match_challenge',
+        {
+            targetSocketId:
+                targetUserObj.id,
 
-    showToast(`1v1 match challenge sent to ${friendChallengeTargetUser}!`, "⚔️");
+            targetUsername:
+                friendChallengeTargetUser,
+
+            fromUsername:
+                user
+                    ? user.username
+                    : 'Player',
+
+            mode: '1v1',
+
+            smashUrl:
+                codeInput
+        }
+    );
+
+    showToast(
+        `1v1 match challenge sent to ${friendChallengeTargetUser}!`,
+        '⚔️'
+    );
+
     closeFriendChallengeModal();
 }
 
-socket.on('receive_match_challenge', (data) => {
-    pendingChallengeData = data;
-    document.getElementById('challengeText').innerText = `${data.fromUsername} challenged you to a 1v1 match!`;
-    document.getElementById('challengeModal').classList.remove('hidden');
-});
+socket.on(
+    'receive_match_challenge',
+    data => {
+        pendingChallengeData =
+            data;
+
+        const text =
+            document.getElementById(
+                'challengeText'
+            );
+
+        if (text) {
+            text.innerText =
+                `${data.fromUsername} challenged you to a 1v1 match!`;
+        }
+
+        document
+            .getElementById(
+                'challengeModal'
+            )
+            ?.classList.remove(
+                'hidden'
+            );
+    }
+);
 
 function acceptChallenge() {
     if (pendingChallengeData) {
-        const user = AuthSession.getUser();
-        socket.emit('accept_match_challenge', {
-            challengerSocketId: pendingChallengeData.challengerSocketId,
-            targetUsername: user ? user.username : 'Player',
-            smashUrl: pendingChallengeData.smashUrl
-        });
+        const user =
+            AuthSession.getUser();
+
+        socket.emit(
+            'accept_match_challenge',
+            {
+                challengerSocketId:
+                    pendingChallengeData.challengerSocketId,
+
+                targetUsername:
+                    user
+                        ? user.username
+                        : 'Player',
+
+                smashUrl:
+                    pendingChallengeData.smashUrl
+            }
+        );
     }
-    document.getElementById('challengeModal').classList.add('hidden');
+
+    document
+        .getElementById(
+            'challengeModal'
+        )
+        ?.classList.add(
+            'hidden'
+        );
 }
 
 function declineChallenge() {
-    pendingChallengeData = null;
-    document.getElementById('challengeModal').classList.add('hidden');
-    showToast("Challenge declined.", "✕");
+    pendingChallengeData =
+        null;
+
+    document
+        .getElementById(
+            'challengeModal'
+        )
+        ?.classList.add(
+            'hidden'
+        );
+
+    showToast(
+        'Challenge declined.',
+        '✕'
+    );
 }
 
-socket.on('challenge_game_start', (room) => {
-    activeRoomData = room;
-    enterGameFromLobby();
-});
+socket.on(
+    'challenge_game_start',
+    room => {
+        activeRoomData =
+            room;
+
+        enterGameFromLobby();
+    }
+);
+
+/* ================================
+   MESSAGES
+================================ */
 
 function showMessagesTab() {
-    showTab('messagesTab');
+    showTab(
+        'messagesTab'
+    );
+
     clearUnreadBadge();
+
     updateFriendsTabList();
 }
 
 function updateFriendsTabList() {
-    const container = document.getElementById('friendsTabList');
+    const container =
+        document.getElementById(
+            'friendsTabList'
+        );
+
     if (!container) return;
+
     container.innerHTML = '';
-    
-    const currentUser = AuthSession.getUser();
-    if (!currentUser) return;
 
-    let friendNames = getLocalFriends(currentUser.username);
-    
-    const myUserObj = onlineUsersCache.find(u => u.username === currentUser.username);
-    if (myUserObj && myUserObj.friends) {
-        myUserObj.friends.forEach(f => {
-            if (!friendNames.includes(f)) friendNames.push(f);
-        });
-        saveLocalFriends(currentUser.username, friendNames);
-    }
+    const currentUser =
+        AuthSession.getUser();
 
-    if (pendingFriendRequests && pendingFriendRequests.length > 0) {
-        const pendingHeader = document.createElement('div');
-        pendingHeader.className = 'font-bungee text-[10px] text-yellow-300 mb-1 mt-1';
-        pendingHeader.innerText = 'PENDING REQUESTS';
-        container.appendChild(pendingHeader);
+    if (!currentUser) {
+        container.innerHTML =
+            `<p class="text-xs text-blue-200">
+                Log in to use friends and messages.
+             </p>`;
 
-        pendingFriendRequests.forEach(reqName => {
-            const reqRow = document.createElement('div');
-            reqRow.className = 'bg-yellow-500/20 border border-yellow-400/50 p-2 rounded-xl flex items-center justify-between mb-2';
-            reqRow.innerHTML = `
-                <span class="font-bold text-xs text-white">👤 ${escapeHTML(reqName)}</span>
-                <div class="flex gap-1">
-                    <button onclick="acceptFriendRequestByName('${escapeHTML(reqName)}')" class="bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold px-2.5 py-1 rounded-lg">✔ Accept</button>
-                    <button onclick="declineFriendRequestByName('${escapeHTML(reqName)}')" class="bg-red-600 hover:bg-red-500 text-white text-[10px] font-bold px-2.5 py-1 rounded-lg">✕</button>
-                </div>
-            `;
-            container.appendChild(reqRow);
-        });
-    }
-
-    const friendsHeader = document.createElement('div');
-    friendsHeader.className = 'font-bungee text-[10px] text-yellow-300 mb-1 mt-2';
-    friendsHeader.innerText = 'YOUR FRIENDS';
-    container.appendChild(friendsHeader);
-
-    if (friendNames.length === 0) {
-        const emptyMsg = document.createElement('p');
-        emptyMsg.className = 'text-xs text-blue-200 mt-1';
-        emptyMsg.innerText = 'No friends added yet. Open "Online Players" to add friends!';
-        container.appendChild(emptyMsg);
         return;
     }
 
-    friendNames.forEach(name => {
-        const targetOnlineObj = onlineUsersCache.find(u => u.username === name);
-        const isOnline = !!targetOnlineObj;
+    let friendNames =
+        getLocalFriends(
+            currentUser.username
+        );
 
-        const wrapper = document.createElement('div');
-        wrapper.className = `p-2 rounded-xl flex flex-col gap-1 transition-all mb-1.5 ${activeDMTargetUser === name ? 'bg-yellow-400/30 border border-yellow-400' : 'bg-blue-950/60 hover:bg-blue-800/60'}`;
-        
-        wrapper.innerHTML = `
-            <div class="flex items-center justify-between">
-                <span class="font-bold text-xs text-white">👤 ${escapeHTML(name)}</span>
-                <span class="w-2 h-2 rounded-full ${isOnline ? 'bg-emerald-400' : 'bg-gray-500'}" title="${isOnline ? 'Online' : 'Offline'}"></span>
-            </div>
-            <div class="flex gap-1 mt-1">
-                <button onclick="openTabDMWith('${escapeHTML(name)}')" class="bg-blue-600 hover:bg-blue-500 text-white text-[10px] font-bold px-2 py-1 rounded-lg flex-1">💬 DM</button>
-                ${isOnline 
-                    ? `<button onclick="initiateFriend1v1('${escapeHTML(name)}')" class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 text-[10px] font-black px-2 py-1 rounded-lg uppercase flex-1">⚔️ 1v1</button>`
-                    : `<button disabled class="bg-gray-600 text-gray-400 text-[10px] font-bold px-2 py-1 rounded-lg flex-1 cursor-not-allowed">Offline</button>`
+    const myUserObj =
+        onlineUsersCache.find(
+            u =>
+                u.username ===
+                currentUser.username
+        );
+
+    if (
+        myUserObj &&
+        myUserObj.friends
+    ) {
+        myUserObj.friends.forEach(
+            friend => {
+                if (
+                    !friendNames.includes(
+                        friend
+                    )
+                ) {
+                    friendNames.push(
+                        friend
+                    );
                 }
-            </div>
-        `;
-        container.appendChild(wrapper);
-    });
+            }
+        );
+
+        saveLocalFriends(
+            currentUser.username,
+            friendNames
+        );
+    }
+
+    if (
+        pendingFriendRequests &&
+        pendingFriendRequests.length >
+            0
+    ) {
+        const header =
+            document.createElement(
+                'div'
+            );
+
+        header.className =
+            'font-bungee text-[10px] text-yellow-300 mb-1 mt-1';
+
+        header.innerText =
+            'PENDING REQUESTS';
+
+        container.appendChild(
+            header
+        );
+
+        pendingFriendRequests.forEach(
+            reqName => {
+                const row =
+                    document.createElement(
+                        'div'
+                    );
+
+                row.className =
+                    'bg-yellow-500/20 border border-yellow-400/50 p-2 rounded-xl flex items-center justify-between mb-2';
+
+                row.innerHTML = `
+                    <span class="font-bold text-xs text-white">
+                        👤 ${escapeHTML(
+                            reqName
+                        )}
+                    </span>
+
+                    <div class="flex gap-1">
+                        <button
+                            onclick="acceptFriendRequestByName('${escapeHTML(
+                                reqName
+                            )}')"
+                            class="bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold px-2.5 py-1 rounded-lg">
+                            ✔ Accept
+                        </button>
+
+                        <button
+                            onclick="declineFriendRequestByName('${escapeHTML(
+                                reqName
+                            )}')"
+                            class="bg-red-600 hover:bg-red-500 text-white text-[10px] font-bold px-2.5 py-1 rounded-lg">
+                            ✕
+                        </button>
+                    </div>
+                `;
+
+                container.appendChild(
+                    row
+                );
+            }
+        );
+    }
+
+    const friendsHeader =
+        document.createElement(
+            'div'
+        );
+
+    friendsHeader.className =
+        'font-bungee text-[10px] text-yellow-300 mb-1 mt-2';
+
+    friendsHeader.innerText =
+        'YOUR FRIENDS';
+
+    container.appendChild(
+        friendsHeader
+    );
+
+    if (
+        friendNames.length === 0
+    ) {
+        const emptyMsg =
+            document.createElement(
+                'p'
+            );
+
+        emptyMsg.className =
+            'text-xs text-blue-200 mt-1';
+
+        emptyMsg.innerText =
+            'No friends added yet. Open Online Players to add friends!';
+
+        container.appendChild(
+            emptyMsg
+        );
+
+        return;
+    }
+
+    friendNames.forEach(
+        name => {
+            const targetOnlineObj =
+                onlineUsersCache.find(
+                    u =>
+                        u.username ===
+                        name
+                );
+
+            const isOnline =
+                !!targetOnlineObj;
+
+            const wrapper =
+                document.createElement(
+                    'div'
+                );
+
+            wrapper.className =
+                `p-2 rounded-xl flex flex-col gap-1 transition-all mb-1.5 ${
+                    activeDMTargetUser ===
+                    name
+                        ? 'bg-yellow-400/30 border border-yellow-400'
+                        : 'bg-blue-950/60 hover:bg-blue-800/60'
+                }`;
+
+            wrapper.innerHTML = `
+                <div class="flex items-center justify-between">
+                    <span class="font-bold text-xs text-white">
+                        👤 ${escapeHTML(
+                            name
+                        )}
+                    </span>
+
+                    <span
+                        class="w-2 h-2 rounded-full ${
+                            isOnline
+                                ? 'bg-emerald-400'
+                                : 'bg-gray-500'
+                        }">
+                    </span>
+                </div>
+
+                <div class="flex gap-1 mt-1">
+                    <button
+                        onclick="openTabDMWith('${escapeHTML(
+                            name
+                        )}')"
+                        class="bg-blue-600 hover:bg-blue-500 text-white text-[10px] font-bold px-2 py-1 rounded-lg flex-1">
+                        💬 DM
+                    </button>
+
+                    ${
+                        isOnline
+                            ? `<button
+                                   onclick="initiateFriend1v1('${escapeHTML(
+                                       name
+                                   )}')"
+                                   class="bg-yellow-400 hover:bg-yellow-300 text-blue-950 text-[10px] font-black px-2 py-1 rounded-lg uppercase flex-1">
+                                   ⚔️ 1v1
+                               </button>`
+                            : `<button
+                                   disabled
+                                   class="bg-gray-600 text-gray-400 text-[10px] font-bold px-2 py-1 rounded-lg flex-1 cursor-not-allowed">
+                                   Offline
+                               </button>`
+                    }
+                </div>
+            `;
+
+            container.appendChild(
+                wrapper
+            );
+        }
+    );
 }
 
 function openTabDMWith(username) {
-    activeDMTargetUser = username;
+    activeDMTargetUser =
+        username;
+
     showMessagesTab();
+
     clearUnreadBadge();
-    document.getElementById('activeDMChatHeader').innerText = `💬 MESSAGE WITH ${username.toUpperCase()}`;
-    socket.emit('get_dm_history', { targetUsername: username });
+
+    const header =
+        document.getElementById(
+            'activeDMChatHeader'
+        );
+
+    if (header) {
+        header.innerText =
+            `💬 MESSAGE WITH ${username.toUpperCase()}`;
+    }
+
+    socket.emit(
+        'get_dm_history',
+        {
+            targetUsername:
+                username
+        }
+    );
 }
 
 function sendTabDM() {
-    const input = document.getElementById('tabDMInput');
-    const user = AuthSession.getUser();
-    if (input.value.trim() && activeDMTargetUser) {
-        socket.emit('send_direct_message', {
-            targetUsername: activeDMTargetUser,
-            message: input.value.trim(),
-            senderUsername: user ? user.username : 'Player'
-        });
+    const input =
+        document.getElementById(
+            'tabDMInput'
+        );
+
+    const user =
+        AuthSession.getUser();
+
+    if (
+        input &&
+        input.value.trim() &&
+        activeDMTargetUser
+    ) {
+        socket.emit(
+            'send_direct_message',
+            {
+                targetUsername:
+                    activeDMTargetUser,
+
+                message:
+                    input.value.trim(),
+
+                senderUsername:
+                    user
+                        ? user.username
+                        : 'Player'
+            }
+        );
+
         input.value = '';
     }
 }
 
-socket.on('dm_error', (data) => {
-    showToast(data.message, "⚠️");
-});
-
-socket.on('receive_direct_message', (data) => {
-    incrementUnreadBadge();
-    showToast(`New message from ${data.senderUsername}`, "💬");
-    if (activeDMTargetUser === data.senderUsername) {
-        renderDMMessages(data.history);
+socket.on(
+    'dm_error',
+    data => {
+        showToast(
+            data.message,
+            '⚠️'
+        );
     }
-});
+);
 
-socket.on('dm_sent_success', (data) => {
-    renderDMMessages(data.history);
-});
+socket.on(
+    'receive_direct_message',
+    data => {
+        incrementUnreadBadge();
 
-socket.on('load_dm_history', (data) => {
-    renderDMMessages(data.history);
-});
+        showToast(
+            `New message from ${data.senderUsername}`,
+            '💬'
+        );
+
+        if (
+            activeDMTargetUser ===
+            data.senderUsername
+        ) {
+            renderDMMessages(
+                data.history
+            );
+        }
+    }
+);
+
+socket.on(
+    'dm_sent_success',
+    data => {
+        renderDMMessages(
+            data.history
+        );
+    }
+);
+
+socket.on(
+    'load_dm_history',
+    data => {
+        renderDMMessages(
+            data.history
+        );
+    }
+);
 
 function renderDMMessages(history) {
-    const container = document.getElementById('tabDMMessages');
-    if (!container) return;
-    container.innerHTML = '';
-    const user = AuthSession.getUser();
-    const myUname = user ? user.username : 'Player';
+    const container =
+        document.getElementById(
+            'tabDMMessages'
+        );
 
-    const capped = history.slice(-10);
+    if (!container) return;
+
+    container.innerHTML = '';
+
+    const user =
+        AuthSession.getUser();
+
+    const myUname =
+        user
+            ? user.username
+            : 'Player';
+
+    const capped =
+        (history || []).slice(-10);
+
     capped.forEach(msg => {
-        const isMe = msg.senderUsername === myUname;
-        const div = document.createElement('div');
-        div.className = isMe ? 'text-right' : 'text-left';
-        div.innerHTML = `<span class="${isMe ? 'bg-yellow-400 text-blue-950' : 'bg-blue-800 text-white'} font-bold px-2.5 py-1 rounded-xl inline-block text-[11px] mb-1">${isMe ? 'Me' : escapeHTML(msg.senderUsername)}: ${escapeHTML(msg.message)}</span>`;
-        container.appendChild(div);
+        const isMe =
+            msg.senderUsername ===
+            myUname;
+
+        const div =
+            document.createElement(
+                'div'
+            );
+
+        div.className =
+            isMe
+                ? 'text-right'
+                : 'text-left';
+
+        div.innerHTML = `
+            <span class="${
+                isMe
+                    ? 'bg-yellow-400 text-blue-950'
+                    : 'bg-blue-800 text-white'
+            } font-bold px-2.5 py-1 rounded-xl inline-block text-[11px] mb-1">
+                ${
+                    isMe
+                        ? 'Me'
+                        : escapeHTML(
+                              msg.senderUsername
+                          )
+                }:
+                ${escapeHTML(
+                    msg.message
+                )}
+            </span>
+        `;
+
+        container.appendChild(
+            div
+        );
     });
-    container.scrollTop = container.scrollHeight;
+
+    container.scrollTop =
+        container.scrollHeight;
 }
 
-socket.on('leaderboard_update', (topPlayers) => {
-    localStorage.setItem('saved_leaderboard', JSON.stringify(topPlayers));
-    renderLeaderboard(topPlayers);
-});
+socket.on(
+    'leaderboard_update',
+    topPlayers => {
+        localStorage.setItem(
+            'saved_leaderboard',
+            JSON.stringify(
+                topPlayers
+            )
+        );
+
+        renderLeaderboard(
+            topPlayers
+        );
+    }
+);
+
+/* ================================
+   GAME CHAT
+================================ */
 
 function triggerChatActivityTimer() {
-    const overlay = document.getElementById('chatOverlay');
+    const overlay =
+        document.getElementById(
+            'chatOverlay'
+        );
+
     if (!overlay) return;
-    overlay.classList.remove('hidden-overlay');
-    clearTimeout(chatInactivityTimer);
-    chatInactivityTimer = setTimeout(() => {
-        overlay.classList.add('hidden-overlay');
-        const label = document.getElementById('toggleChatBtnLabel');
-        if (label) label.innerText = 'Show Chat';
-    }, 5005);
+
+    overlay.classList.remove(
+        'hidden-overlay'
+    );
+
+    clearTimeout(
+        chatInactivityTimer
+    );
+
+    chatInactivityTimer =
+        setTimeout(() => {
+            overlay.classList.add(
+                'hidden-overlay'
+            );
+
+            const label =
+                document.getElementById(
+                    'toggleChatBtnLabel'
+                );
+
+            if (label) {
+                label.innerText =
+                    'Show Chat';
+            }
+        }, 5005);
 }
 
 function toggleOverlayChat() {
-    const overlay = document.getElementById('chatOverlay');
-    const label = document.getElementById('toggleChatBtnLabel');
+    const overlay =
+        document.getElementById(
+            'chatOverlay'
+        );
+
+    const label =
+        document.getElementById(
+            'toggleChatBtnLabel'
+        );
+
     if (!overlay) return;
-    if (overlay.classList.contains('hidden-overlay')) {
-        overlay.classList.remove('hidden-overlay');
-        if (label) label.innerText = 'Hide Chat';
+
+    if (
+        overlay.classList.contains(
+            'hidden-overlay'
+        )
+    ) {
+        overlay.classList.remove(
+            'hidden-overlay'
+        );
+
+        if (label) {
+            label.innerText =
+                'Hide Chat';
+        }
+
         triggerChatActivityTimer();
     } else {
-        overlay.classList.add('hidden-overlay');
-        if (label) label.innerText = 'Show Chat';
-        clearTimeout(chatInactivityTimer);
+        overlay.classList.add(
+            'hidden-overlay'
+        );
+
+        if (label) {
+            label.innerText =
+                'Show Chat';
+        }
+
+        clearTimeout(
+            chatInactivityTimer
+        );
     }
 }
 
-document.getElementById('matchChatInput')?.addEventListener('input', triggerChatActivityTimer);
+document
+    .getElementById(
+        'matchChatInput'
+    )
+    ?.addEventListener(
+        'input',
+        triggerChatActivityTimer
+    );
 
 function toggleGameTopBar() {
-    const topBar = document.getElementById('gameTopBar');
-    const icon = document.getElementById('topBarTabIcon');
+    const topBar =
+        document.getElementById(
+            'gameTopBar'
+        );
+
+    const icon =
+        document.getElementById(
+            'topBarTabIcon'
+        );
+
     if (!topBar) return;
 
-    if (topBar.classList.contains('translate-y-0')) {
-        topBar.classList.remove('translate-y-0');
-        if (icon) icon.innerText = '▼';
+    if (
+        topBar.classList.contains(
+            'translate-y-0'
+        )
+    ) {
+        topBar.classList.remove(
+            'translate-y-0'
+        );
+
+        if (icon) {
+            icon.innerText = '▼';
+        }
     } else {
-        topBar.classList.add('translate-y-0');
-        if (icon) icon.innerText = '▲';
+        topBar.classList.add(
+            'translate-y-0'
+        );
+
+        if (icon) {
+            icon.innerText = '▲';
+        }
     }
 }
 
+/* ================================
+   SMASH KARTS ROOM PARSER
+================================ */
+
 function openMakeCodeModal() {
-    document.getElementById('makeCodeIframe').src = "https://smashkarts.io";
-    document.getElementById('makeCodeModal').classList.remove('hidden');
+    const iframe =
+        document.getElementById(
+            'makeCodeIframe'
+        );
+
+    if (iframe) {
+        iframe.src =
+            'https://smashkarts.io';
+    }
+
+    document
+        .getElementById(
+            'makeCodeModal'
+        )
+        ?.classList.remove(
+            'hidden'
+        );
 }
 
 function closeMakeCodeModal() {
-    document.getElementById('makeCodeIframe').src = "";
-    document.getElementById('makeCodeModal').classList.add('hidden');
+    const iframe =
+        document.getElementById(
+            'makeCodeIframe'
+        );
+
+    if (iframe) {
+        iframe.src = '';
+    }
+
+    document
+        .getElementById(
+            'makeCodeModal'
+        )
+        ?.classList.add(
+            'hidden'
+        );
 }
 
-function extractSmashUrlClient(rawInput) {
-    if (!rawInput) return "";
-    let text = String(rawInput).trim();
-    
-    if (text.includes('ttps://')) {
-        text = text.replace('ttps://', 'https://');
+function extractSmashUrlClient(
+    rawInput
+) {
+    if (!rawInput) return '';
+
+    let text =
+        String(rawInput).trim();
+
+    if (
+        text.includes(
+            'ttps://'
+        )
+    ) {
+        text =
+            text.replace(
+                'ttps://',
+                'https://'
+            );
     }
 
-    text = text.replace(/['"]+/g, '');
+    text =
+        text.replace(
+            /['"]+/g,
+            ''
+        );
 
-    const linkMatch = text.match(/https?:\/\/(www\.)?smashkarts\.io(\/link\/)?\?[^\s]+/i);
+    const linkMatch =
+        text.match(
+            /https?:\/\/(www\.)?smashkarts\.io(\/link\/)?\?[^\s]+/i
+        );
+
     if (linkMatch) {
-        let matchedUrl = linkMatch[0];
-        if (!matchedUrl.includes('/link/')) {
-            matchedUrl = matchedUrl.replace('smashkarts.io/?', 'smashkarts.io/link/?');
+        let matchedUrl =
+            linkMatch[0];
+
+        if (
+            !matchedUrl.includes(
+                '/link/'
+            )
+        ) {
+            matchedUrl =
+                matchedUrl.replace(
+                    'smashkarts.io/?',
+                    'smashkarts.io/link/?'
+                );
         }
+
         return matchedUrl;
     }
-    
-    const roomMatch = text.match(/Room:\s*([A-Za-z0-9]+)/i) || text.match(/room=([A-Za-z0-9]+)/i);
+
+    const roomMatch =
+        text.match(
+            /Room:\s*([A-Za-z0-9]+)/i
+        ) ||
+        text.match(
+            /room=([A-Za-z0-9]+)/i
+        );
+
     if (roomMatch) {
-        return `https://smashkarts.io/link/?room=${encodeURIComponent(roomMatch[1])}`;
+        return (
+            'https://smashkarts.io/link/?room=' +
+            encodeURIComponent(
+                roomMatch[1]
+            )
+        );
     }
 
-    if (text.length > 0 && !text.includes(' ') && !text.includes('\n') && !text.includes('/')) {
-        return `https://smashkarts.io/link/?room=${encodeURIComponent(text)}`;
+    if (
+        text.length > 0 &&
+        !text.includes(' ') &&
+        !text.includes('\n') &&
+        !text.includes('/')
+    ) {
+        return (
+            'https://smashkarts.io/link/?room=' +
+            encodeURIComponent(
+                text
+            )
+        );
     }
 
-    return "";
+    return '';
 }
 
 function copyAndPlay() {
-    const codeInput = document.getElementById('copyCodeInput').value.trim();
-    const cleanLink = extractSmashUrlClient(codeInput);
-    
+    const input =
+        document.getElementById(
+            'copyCodeInput'
+        );
+
+    const codeInput =
+        input
+            ? input.value.trim()
+            : '';
+
+    const cleanLink =
+        extractSmashUrlClient(
+            codeInput
+        );
+
     if (!cleanLink) {
-        showToast("Error: You must paste the Smash Karts room link or code first!", "⚠️");
+        showToast(
+            'Error: You must paste the Smash Karts room link or code first!',
+            '⚠️'
+        );
+
         return;
     }
-    
-    document.getElementById('smashUrl').value = cleanLink;
+
+    const smashUrlInput =
+        document.getElementById(
+            'smashUrl'
+        );
+
+    if (smashUrlInput) {
+        smashUrlInput.value =
+            cleanLink;
+    }
+
     closeMakeCodeModal();
+
     createLobby();
 }
 
+/* ================================
+   NAVIGATION
+================================ */
+
 function switchMatchMode(mode) {
     currentMode = mode;
+
     showTab('setupTab');
-    document.getElementById('btnNav1v1').classList.toggle('active', mode === '1v1');
-    document.getElementById('btnNav2v2').classList.toggle('active', mode === '2v2');
-    document.getElementById('arenaTitle').innerText = `${mode.toUpperCase()} MATCHMAKING`;
-    document.getElementById('arenaSubtitle').innerText = `Start or join a ${mode} match`;
+
+    document
+        .getElementById(
+            'btnNav1v1'
+        )
+        ?.classList.toggle(
+            'active',
+            mode === '1v1'
+        );
+
+    document
+        .getElementById(
+            'btnNav2v2'
+        )
+        ?.classList.toggle(
+            'active',
+            mode === '2v2'
+        );
+
+    const title =
+        document.getElementById(
+            'arenaTitle'
+        );
+
+    if (title) {
+        title.innerText =
+            `${mode.toUpperCase()} MATCHMAKING`;
+    }
+
+    const subtitle =
+        document.getElementById(
+            'arenaSubtitle'
+        );
+
+    if (subtitle) {
+        subtitle.innerText =
+            `Start or join a ${mode} match`;
+    }
 }
 
 function showTab(tabId) {
-    document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
-    document.querySelectorAll('.sidebar-btn').forEach(btn => btn.classList.remove('active'));
-    
-    if (tabId === 'leaderboardTab') document.getElementById('btnNavLeaderboard').classList.add('active');
-    if (tabId === 'messagesTab') document.getElementById('btnNavMessages').classList.add('active');
-    if (tabId === 'setupTab') {
-        document.getElementById(currentMode === '2v2' ? 'btnNav2v2' : 'btnNav1v1').classList.add('active');
+    document
+        .querySelectorAll(
+            '.tab-content'
+        )
+        .forEach(el =>
+            el.classList.add(
+                'hidden'
+            )
+        );
+
+    document
+        .querySelectorAll(
+            '.sidebar-btn'
+        )
+        .forEach(btn =>
+            btn.classList.remove(
+                'active'
+            )
+        );
+
+    if (
+        tabId ===
+        'leaderboardTab'
+    ) {
+        document
+            .getElementById(
+                'btnNavLeaderboard'
+            )
+            ?.classList.add(
+                'active'
+            );
     }
-    
-    document.getElementById(tabId).classList.remove('hidden');
+
+    if (
+        tabId ===
+        'messagesTab'
+    ) {
+        document
+            .getElementById(
+                'btnNavMessages'
+            )
+            ?.classList.add(
+                'active'
+            );
+    }
+
+    if (
+        tabId === 'setupTab'
+    ) {
+        document
+            .getElementById(
+                currentMode ===
+                    '2v2'
+                    ? 'btnNav2v2'
+                    : 'btnNav1v1'
+            )
+            ?.classList.add(
+                'active'
+            );
+    }
+
+    document
+        .getElementById(tabId)
+        ?.classList.remove(
+            'hidden'
+        );
 }
 
+/* ================================
+   LOBBIES
+================================ */
+
 function createLobby() {
-    const user = AuthSession.getUser();
-    const playerName = user ? user.username : "Player";
-    
-    let smashUrlInput = document.getElementById('smashUrl').value.trim();
-    smashUrlInput = extractSmashUrlClient(smashUrlInput);
+    const user =
+        AuthSession.getUser();
+
+    const playerName =
+        user
+            ? user.username
+            : 'Player';
+
+    const input =
+        document.getElementById(
+            'smashUrl'
+        );
+
+    let smashUrlInput =
+        input
+            ? input.value.trim()
+            : '';
+
+    smashUrlInput =
+        extractSmashUrlClient(
+            smashUrlInput
+        );
 
     if (!smashUrlInput) {
-        showToast("Error: A valid Smash Karts room link or code is required!", "⚠️");
+        showToast(
+            'Error: A valid Smash Karts room link or code is required!',
+            '⚠️'
+        );
+
         return;
     }
 
-    const winCondition = document.getElementById('winCondition').value;
-    socket.emit('create_room', { playerName, smashUrl: smashUrlInput, winCondition, mode: currentMode });
+    const winCondition =
+        document.getElementById(
+            'winCondition'
+        )?.value ||
+        'First to 3';
+
+    socket.emit(
+        'create_room',
+        {
+            playerName,
+            smashUrl:
+                smashUrlInput,
+            winCondition,
+            mode: currentMode
+        }
+    );
 }
 
-socket.on('room_error', (data) => {
-    showToast(data.message, "❌");
-});
+socket.on(
+    'room_error',
+    data => {
+        showToast(
+            data.message,
+            '❌'
+        );
+    }
+);
 
-socket.on('room_created', (room) => openPreGameLobby(room));
+socket.on(
+    'room_created',
+    room => {
+        openPreGameLobby(
+            room
+        );
+    }
+);
 
 function openPreGameLobby(room) {
-    activeRoomData = room;
+    activeRoomData =
+        room;
+
     closeFindGameModal();
-    document.getElementById('preGameLobbyModal').classList.remove('hidden');
-    updatePreGameLobbyUI(room);
+
+    document
+        .getElementById(
+            'preGameLobbyModal'
+        )
+        ?.classList.remove(
+            'hidden'
+        );
+
+    updatePreGameLobbyUI(
+        room
+    );
 }
 
-function updatePreGameLobbyUI(room) {
-    const playerList = document.getElementById('preGamePlayerList');
+function updatePreGameLobbyUI(
+    room
+) {
+    const playerList =
+        document.getElementById(
+            'preGamePlayerList'
+        );
+
     if (!playerList) return;
+
     playerList.innerHTML = '';
-    room.players.forEach((p, idx) => {
-        const item = document.createElement('div');
-        item.className = 'bg-blue-900/60 p-2 rounded-xl border border-white/10 flex justify-between';
-        item.innerHTML = `<span class="font-bold text-white">👤 ${escapeHTML(p.name)}</span><span class="text-yellow-300 font-bold text-[10px]">Slot ${idx+1}</span>`;
-        playerList.appendChild(item);
-    });
+
+    (room.players || []).forEach(
+        (p, idx) => {
+            const item =
+                document.createElement(
+                    'div'
+                );
+
+            item.className =
+                'bg-blue-900/60 p-2 rounded-xl border border-white/10 flex justify-between';
+
+            item.innerHTML = `
+                <span class="font-bold text-white">
+                    👤 ${escapeHTML(
+                        p.name
+                    )}
+                </span>
+
+                <span class="text-yellow-300 font-bold text-[10px]">
+                    Slot ${idx + 1}
+                </span>
+            `;
+
+            playerList.appendChild(
+                item
+            );
+        }
+    );
 }
 
 function closePreGameLobbyModal() {
-    document.getElementById('preGameLobbyModal').classList.add('hidden');
+    document
+        .getElementById(
+            'preGameLobbyModal'
+        )
+        ?.classList.add(
+            'hidden'
+        );
 }
 
 function enterGameFromLobby() {
-    if (!activeRoomData || !activeRoomData.smashUrl) {
-        showToast("Error: No valid Smash Karts launch room URL found!", "⚠️");
+    if (
+        !activeRoomData ||
+        !activeRoomData.smashUrl
+    ) {
+        showToast(
+            'Error: No valid Smash Karts launch room URL found!',
+            '⚠️'
+        );
+
         return;
     }
-    
+
     closePreGameLobbyModal();
 
-    const user = AuthSession.getUser();
+    const user =
+        AuthSession.getUser();
+
     if (user) {
-        socket.emit('record_match_played', user.username);
-        
-        let localLeaderboard = JSON.parse(localStorage.getItem('saved_leaderboard')) || [];
-        let pIndex = localLeaderboard.findIndex(p => p.username === user.username);
-        if (pIndex >= 0) {
-            localLeaderboard[pIndex].matches = (localLeaderboard[pIndex].matches || 0) + 1;
+        socket.emit(
+            'record_match_played',
+            user.username
+        );
+
+        let localLeaderboard =
+            JSON.parse(
+                localStorage.getItem(
+                    'saved_leaderboard'
+                )
+            ) || [];
+
+        const index =
+            localLeaderboard.findIndex(
+                p =>
+                    p.username ===
+                    user.username
+            );
+
+        if (index >= 0) {
+            localLeaderboard[index].matches =
+                (localLeaderboard[index]
+                    .matches || 0) + 1;
         } else {
-            localLeaderboard.push({ username: user.username, matches: 1 });
+            localLeaderboard.push({
+                username:
+                    user.username,
+                matches: 1
+            });
         }
-        localLeaderboard.sort((a, b) => b.matches - a.matches);
-        localStorage.setItem('saved_leaderboard', JSON.stringify(localLeaderboard));
-        renderLeaderboard(localLeaderboard);
+
+        localLeaderboard.sort(
+            (a, b) =>
+                b.matches -
+                a.matches
+        );
+
+        localStorage.setItem(
+            'saved_leaderboard',
+            JSON.stringify(
+                localLeaderboard
+            )
+        );
+
+        renderLeaderboard(
+            localLeaderboard
+        );
     }
 
-    const gameScreen = document.getElementById('gameScreen');
-    const smashFrame = document.getElementById('smashFrame');
-    const gameRoomCodeDisplay = document.getElementById('gameRoomCodeDisplay');
-    
-    let roomCode = "us643345";
-    if (activeRoomData && activeRoomData.smashUrl) {
-        const match = activeRoomData.smashUrl.match(/room=([A-Za-z0-9]+)/i);
-        if (match) roomCode = match[1];
+    const gameScreen =
+        document.getElementById(
+            'gameScreen'
+        );
+
+    const smashFrame =
+        document.getElementById(
+            'smashFrame'
+        );
+
+    const gameRoomCodeDisplay =
+        document.getElementById(
+            'gameRoomCodeDisplay'
+        );
+
+    let roomCode =
+        '------';
+
+    const match =
+        activeRoomData.smashUrl.match(
+            /room=([A-Za-z0-9]+)/i
+        );
+
+    if (match) {
+        roomCode =
+            match[1];
     }
 
-    currentRoomCode = roomCode;
-    if (gameRoomCodeDisplay) {
-        gameRoomCodeDisplay.innerText = roomCode;
+    currentRoomCode =
+        roomCode;
+
+    if (
+        gameRoomCodeDisplay
+    ) {
+        gameRoomCodeDisplay.innerText =
+            roomCode;
     }
 
-    let popupMsgDiv = document.getElementById('popupMessageOverlay');
-    if (!popupMsgDiv && gameScreen) {
-        popupMsgDiv = document.createElement('div');
-        popupMsgDiv.id = 'popupMessageOverlay';
-        popupMsgDiv.className = 'absolute inset-0 flex items-center justify-center pointer-events-none z-10';
-        gameScreen.appendChild(popupMsgDiv);
+    let popupMsgDiv =
+        document.getElementById(
+            'popupMessageOverlay'
+        );
+
+    if (
+        !popupMsgDiv &&
+        gameScreen
+    ) {
+        popupMsgDiv =
+            document.createElement(
+                'div'
+            );
+
+        popupMsgDiv.id =
+            'popupMessageOverlay';
+
+        popupMsgDiv.className =
+            'absolute inset-0 flex items-center justify-center pointer-events-none z-10';
+
+        gameScreen.appendChild(
+            popupMsgDiv
+        );
     }
 
-    if (currentGameplayMode === 'popup') {
-        window.open(activeRoomData.smashUrl, '_blank', 'width=1000,height=700');
-        if (smashFrame) smashFrame.classList.add('hidden');
+    if (
+        currentGameplayMode ===
+        'popup'
+    ) {
+        window.open(
+            activeRoomData.smashUrl,
+            '_blank'
+        );
+
+        if (smashFrame) {
+            smashFrame.classList.add(
+                'hidden'
+            );
+        }
+
         if (popupMsgDiv) {
-            popupMsgDiv.innerHTML = `<div class="bg-blue-950/90 border border-yellow-400/50 px-5 py-2.5 rounded-xl shadow-xl text-yellow-300 font-bungee text-xs tracking-wide">JOIN POP UP TAB :)</div>`;
-            popupMsgDiv.classList.remove('hidden');
+            popupMsgDiv.innerHTML = `
+                <div class="bg-blue-950/90 border border-yellow-400/50 px-5 py-2.5 rounded-xl shadow-xl text-yellow-300 font-bungee text-xs tracking-wide">
+                    GAME OPENED IN NEW TAB
+                </div>
+            `;
+
+            popupMsgDiv.classList.remove(
+                'hidden'
+            );
         }
     } else {
-        if (popupMsgDiv) popupMsgDiv.classList.add('hidden');
+        if (popupMsgDiv) {
+            popupMsgDiv.classList.add(
+                'hidden'
+            );
+        }
+
         if (smashFrame) {
-            smashFrame.classList.remove('hidden');
-            smashFrame.src = activeRoomData.smashUrl || "https://smashkarts.io";
+            smashFrame.classList.remove(
+                'hidden'
+            );
+
+            smashFrame.src =
+                activeRoomData.smashUrl;
         }
     }
-    
-    gameScreen.classList.remove('game-fade-exit', 'hidden');
-    const badge = document.getElementById('gameModeBadge');
-    if (badge) badge.innerText = activeRoomData.mode;
+
+    if (gameScreen) {
+        gameScreen.classList.remove(
+            'game-fade-exit',
+            'hidden'
+        );
+    }
+
+    const badge =
+        document.getElementById(
+            'gameModeBadge'
+        );
+
+    if (badge) {
+        badge.innerText =
+            activeRoomData.mode ||
+            '1v1';
+    }
+
     triggerChatActivityTimer();
 }
 
-function copyActiveRoomCode(code) {
-    const codeToCopy = code || currentRoomCode;
-    if (navigator.clipboard && codeToCopy) {
-        navigator.clipboard.writeText(codeToCopy).then(() => {
-            showToast(`Room code (${codeToCopy}) copied to clipboard!`, "📋");
-        }).catch(() => {
-            showToast("Failed to copy code.", "❌");
-        });
+function copyActiveRoomCode(
+    code
+) {
+    const codeToCopy =
+        code ||
+        currentRoomCode;
+
+    if (
+        !navigator.clipboard ||
+        !codeToCopy
+    ) {
+        return;
     }
+
+    navigator.clipboard
+        .writeText(
+            codeToCopy
+        )
+        .then(() => {
+            showToast(
+                `Room code (${codeToCopy}) copied to clipboard!`,
+                '📋'
+            );
+        })
+        .catch(() => {
+            showToast(
+                'Failed to copy code.',
+                '❌'
+            );
+        });
 }
 
 function leaveEmbeddedGame() {
     if (activeRoomData) {
-        socket.emit('leave_match', { roomId: activeRoomData.roomId });
+        socket.emit(
+            'leave_match',
+            {
+                roomId:
+                    activeRoomData.roomId
+            }
+        );
     }
 
-    const gameScreen = document.getElementById('gameScreen');
-    const smashFrame = document.getElementById('smashFrame');
+    const gameScreen =
+        document.getElementById(
+            'gameScreen'
+        );
+
+    const smashFrame =
+        document.getElementById(
+            'smashFrame'
+        );
+
     if (smashFrame) {
         smashFrame.src = '';
     }
 
-    const popupMsgDiv = document.getElementById('popupMessageOverlay');
-    if (popupMsgDiv) popupMsgDiv.classList.add('hidden');
+    const popupMsgDiv =
+        document.getElementById(
+            'popupMessageOverlay'
+        );
 
-    const topBar = document.getElementById('gameTopBar');
-    if (topBar) topBar.classList.remove('translate-y-0');
+    if (popupMsgDiv) {
+        popupMsgDiv.classList.add(
+            'hidden'
+        );
+    }
 
-    gameScreen.classList.add('game-fade-exit');
+    const topBar =
+        document.getElementById(
+            'gameTopBar'
+        );
+
+    if (topBar) {
+        topBar.classList.remove(
+            'translate-y-0'
+        );
+    }
+
+    if (gameScreen) {
+        gameScreen.classList.add(
+            'game-fade-exit'
+        );
+    }
 
     setTimeout(() => {
-        gameScreen.classList.add('hidden');
-        document.getElementById('mainDashboard').classList.remove('hidden');
-        activeRoomData = null;
-        
-        const smashUrlInput = document.getElementById('smashUrl');
-        if (smashUrlInput) smashUrlInput.value = '';
+        gameScreen?.classList.add(
+            'hidden'
+        );
+
+        document
+            .getElementById(
+                'mainDashboard'
+            )
+            ?.classList.remove(
+                'hidden'
+            );
+
+        activeRoomData =
+            null;
+
+        const smashUrlInput =
+            document.getElementById(
+                'smashUrl'
+            );
+
+        if (smashUrlInput) {
+            smashUrlInput.value =
+                '';
+        }
     }, 355);
 }
 
 function sendPreGameChatMessage() {
-    const input = document.getElementById('preGameChatInput');
-    const user = AuthSession.getUser();
-    if (input.value.trim() && activeRoomData) {
-        socket.emit('send_match_chat', { roomId: activeRoomData.roomId, message: input.value.trim(), senderName: user ? user.username : 'Player' });
+    const input =
+        document.getElementById(
+            'preGameChatInput'
+        );
+
+    const user =
+        AuthSession.getUser();
+
+    if (
+        input &&
+        input.value.trim() &&
+        activeRoomData
+    ) {
+        socket.emit(
+            'send_match_chat',
+            {
+                roomId:
+                    activeRoomData.roomId,
+
+                message:
+                    input.value.trim(),
+
+                senderName:
+                    user
+                        ? user.username
+                        : 'Player'
+            }
+        );
+
         input.value = '';
     }
 }
 
 function sendMatchChatMessage() {
-    const input = document.getElementById('matchChatInput');
-    const user = AuthSession.getUser();
-    if (input.value.trim() && activeRoomData) {
-        socket.emit('send_match_chat', { roomId: activeRoomData.roomId, message: input.value.trim(), senderName: user ? user.username : 'Player' });
+    const input =
+        document.getElementById(
+            'matchChatInput'
+        );
+
+    const user =
+        AuthSession.getUser();
+
+    if (
+        input &&
+        input.value.trim() &&
+        activeRoomData
+    ) {
+        socket.emit(
+            'send_match_chat',
+            {
+                roomId:
+                    activeRoomData.roomId,
+
+                message:
+                    input.value.trim(),
+
+                senderName:
+                    user
+                        ? user.username
+                        : 'Player'
+            }
+        );
+
         input.value = '';
+
         triggerChatActivityTimer();
     }
 }
 
-socket.on('receive_match_chat', (data) => {
-    const msg = `<div class="bg-blue-950/80 p-1.5 rounded-xl border border-white/10"><strong class="text-yellow-300">${escapeHTML(data.senderName)}:</strong> ${escapeHTML(data.message)}</div>`;
-    
-    const matchChat = document.getElementById('matchChatMessages');
-    const preGameChat = document.getElementById('preGameChatMessages');
+socket.on(
+    'receive_match_chat',
+    data => {
+        const msg = `
+            <div class="bg-blue-950/80 p-1.5 rounded-xl border border-white/10">
+                <strong class="text-yellow-300">
+                    ${escapeHTML(
+                        data.senderName
+                    )}:
+                </strong>
 
-    if (matchChat) matchChat.innerHTML += msg;
-    if (preGameChat) preGameChat.innerHTML += msg;
+                ${escapeHTML(
+                    data.message
+                )}
+            </div>
+        `;
 
-    if (matchChat) {
-        while (matchChat.children.length > 10) matchChat.removeChild(matchChat.firstChild);
-        matchChat.scrollTop = matchChat.scrollHeight;
+        const matchChat =
+            document.getElementById(
+                'matchChatMessages'
+            );
+
+        const preGameChat =
+            document.getElementById(
+                'preGameChatMessages'
+            );
+
+        if (matchChat) {
+            matchChat.innerHTML +=
+                msg;
+        }
+
+        if (preGameChat) {
+            preGameChat.innerHTML +=
+                msg;
+        }
+
+        if (matchChat) {
+            while (
+                matchChat.children
+                    .length > 10
+            ) {
+                matchChat.removeChild(
+                    matchChat.firstChild
+                );
+            }
+
+            matchChat.scrollTop =
+                matchChat.scrollHeight;
+        }
+
+        if (preGameChat) {
+            while (
+                preGameChat.children
+                    .length > 10
+            ) {
+                preGameChat.removeChild(
+                    preGameChat.firstChild
+                );
+            }
+
+            preGameChat.scrollTop =
+                preGameChat.scrollHeight;
+        }
     }
-    if (preGameChat) {
-        while (preGameChat.children.length > 10) preGameChat.removeChild(preGameChat.firstChild);
-        preGameChat.scrollTop = preGameChat.scrollHeight;
-    }
-});
+);
+
+/* ================================
+   PUBLIC ROOMS
+================================ */
 
 function openFindGameModal() {
-    document.getElementById('findGameModal').classList.remove('hidden');
-    socket.emit('get_public_rooms');
+    document
+        .getElementById(
+            'findGameModal'
+        )
+        ?.classList.remove(
+            'hidden'
+        );
+
+    socket.emit(
+        'get_public_rooms'
+    );
 }
 
 function closeFindGameModal() {
-    document.getElementById('findGameModal').classList.add('hidden');
+    document
+        .getElementById(
+            'findGameModal'
+        )
+        ?.classList.add(
+            'hidden'
+        );
 }
 
-socket.on('public_rooms_update', (rooms) => {
-    publicRoomsCache = rooms;
-    const container = document.getElementById('publicRoomsList');
-    if (!container) return;
-    container.innerHTML = rooms.length === 0 ? `<p class="text-center text-xs text-blue-200">No rooms active.</p>` : '';
-    
-    rooms.forEach(room => {
-        const row = document.createElement('div');
-        row.className = 'flex justify-between items-center bg-blue-950/80 p-3 rounded-2xl';
-        row.innerHTML = `
-            <div>
-                <p class="text-xs text-white font-bold">${escapeHTML(room.hostName)} (${escapeHTML(room.mode)})</p>
-                <p class="text-[10px] text-blue-200">${escapeHTML(room.winCondition)}</p>
-            </div>
-            <button onclick="joinPublicRoomById('${room.roomId}')" class="bg-emerald-500 hover:bg-emerald-400 text-white font-black px-3 py-1.5 rounded-xl text-xs uppercase">Join</button>
-        `;
-        container.appendChild(row);
+function joinPublicRoomById(
+    roomId
+) {
+    socket.emit(
+        'join_public_room',
+        {
+            roomId
+        }
+    );
+}
+
+socket.on(
+    'public_rooms_update',
+    rooms => {
+        publicRoomsCache =
+            rooms || [];
+
+        const container =
+            document.getElementById(
+                'publicRoomsList'
+            );
+
+        if (!container) return;
+
+        container.innerHTML =
+            publicRoomsCache.length ===
+            0
+                ? `<p class="text-center text-xs text-blue-200">
+                       No rooms active.
+                   </p>`
+                : '';
+
+        publicRoomsCache.forEach(
+            room => {
+                const row =
+                    document.createElement(
+                        'div'
+                    );
+
+                row.className =
+                    'flex justify-between items-center bg-blue-950/80 p-3 rounded-2xl';
+
+                row.innerHTML = `
+                    <div>
+                        <p class="text-xs text-white font-bold">
+                            ${escapeHTML(
+                                room.hostName
+                            )}
+                            (${escapeHTML(
+                                room.mode
+                            )})
+                        </p>
+
+                        <p class="text-[10px] text-blue-200">
+                            ${escapeHTML(
+                                room.winCondition
+                            )}
+                        </p>
+                    </div>
+
+                    <button
+                        onclick="joinPublicRoomById('${room.roomId}')"
+                        class="bg-emerald-500 hover:bg-emerald-400 text-white font-black px-3 py-1.5 rounded-xl text-xs uppercase">
+                        Join
+                    </button>
+                `;
+
+                container.appendChild(
+                    row
+                );
+            }
+        );
+    }
+);
+
+/* ================================
+   SAFE MODAL CLEANUP
+================================ */
+
+function forceHideInactiveModals() {
+    const ids = [
+        'authModal',
+        'settingsModal',
+        'inactivityModal',
+        'editUsernameModal',
+        'onlineUsersModal',
+        'friendChallengeModal',
+        'challengeModal',
+        'preGameLobbyModal',
+        'makeCodeModal',
+        'findGameModal'
+    ];
+
+    ids.forEach(id => {
+        const el =
+            document.getElementById(
+                id
+            );
+
+        if (
+            el &&
+            !el.dataset.forceVisible
+        ) {
+            el.classList.add(
+                'hidden'
+            );
+        }
     });
+}
+
+/* ================================
+   STARTUP
+================================ */
+
+document.addEventListener(
+    'DOMContentLoaded',
+    () => {
+        // Prevent invisible fullscreen overlays
+        // from trapping every click.
+        forceHideInactiveModals();
+
+        if (
+            AuthSession.isLoggedIn()
+        ) {
+            AuthSession.startTracker();
+
+            updateUserUI();
+
+            renderLeaderboard(
+                JSON.parse(
+                    localStorage.getItem(
+                        'saved_leaderboard'
+                    )
+                ) || []
+            );
+
+            updateFriendsTabList();
+        } else {
+            // Guest mode is allowed.
+            document
+                .getElementById(
+                    'authModal'
+                )
+                ?.classList.add(
+                    'hidden'
+                );
+
+            updateUserUI();
+        }
+
+        // Make sure the main dashboard
+        // remains interactive.
+        document
+            .getElementById(
+                'mainDashboard'
+            )
+            ?.classList.remove(
+                'hidden'
+            );
+
+        document.body.style.pointerEvents =
+            'auto';
+    }
+);
+
+/* ================================
+   ACTIVITY TRACKING
+================================ */
+
+[
+    'click',
+    'keydown',
+    'mousemove',
+    'touchstart'
+].forEach(eventName => {
+    window.addEventListener(
+        eventName,
+        () =>
+            AuthSession.handleActivity(),
+        {
+            passive: true
+        }
+    );
 });
 
-document.addEventListener("DOMContentLoaded", () => {
-    if (AuthSession.isLoggedIn()) {
-        document.getElementById("authModal").classList.add("hidden");
-        AuthSession.startTracker();
-        updateUserUI();
-        
-        renderLeaderboard(JSON.parse(localStorage.getItem('saved_leaderboard')) || []);
-        updateFriendsTabList();
-    } else {
-        document.getElementById("authModal").classList.remove("hidden");
-    }
+setInterval(
+    () =>
+        AuthSession.checkInactivity(),
+    1000
+);
+
+/* ================================
+   GLOBAL EXPORTS
+   Keeps inline HTML onclick buttons
+   working reliably.
+================================ */
+
+Object.assign(window, {
+    openSettingsModal,
+    closeSettingsModal,
+    toggleOnlineStatus,
+    toggleAuthTab,
+    handleAuthSubmit,
+    promptEditUsername,
+    closeEditUsernameModal,
+    saveNewUsername,
+    openOnlineModal,
+    closeOnlineModal,
+    sendFriendRequest,
+    acceptFriendRequestByName,
+    declineFriendRequestByName,
+    initiateFriend1v1,
+    closeFriendChallengeModal,
+    sendFriendChallengeWithCode,
+    acceptChallenge,
+    declineChallenge,
+    showMessagesTab,
+    openTabDMWith,
+    sendTabDM,
+    toggleOverlayChat,
+    toggleGameTopBar,
+    openMakeCodeModal,
+    closeMakeCodeModal,
+    copyAndPlay,
+    switchMatchMode,
+    showTab,
+    createLobby,
+    openPreGameLobby,
+    closePreGameLobbyModal,
+    enterGameFromLobby,
+    copyActiveRoomCode,
+    leaveEmbeddedGame,
+    sendPreGameChatMessage,
+    sendMatchChatMessage,
+    openFindGameModal,
+    closeFindGameModal,
+    joinPublicRoomById,
+    updateGameplayMode
 });
