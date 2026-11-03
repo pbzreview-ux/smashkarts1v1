@@ -4,6 +4,7 @@ const { Server } = require('socket.io');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
+const zlib = require('zlib');
 
 const app = express();
 const server = http.createServer(app);
@@ -47,7 +48,9 @@ app.get('/script.js', (req, res) => {
     res.type('application/javascript').send(
         fs.readFileSync(path.join(__dirname, filename), 'utf8') +
         '\nwindow.__SPOTIFY_CLIENT_ID__ = ' + JSON.stringify(String(process.env.SPOTIFY_CLIENT_ID || '').trim()) + ';' +
-        '\n;(' + installMegaArena.toString() + ')();'
+        '\n;(' + installMegaArena.toString() + ')();' +
+        '\n;(' + installV12Platform.toString() + ')();' +
+        '\n;(' + installV17Matchmaker.toString() + ')();'
     );
 });
 
@@ -64,35 +67,248 @@ app.use(express.static(__dirname));
 // =========================================================
 // PERSISTED DATA
 // =========================================================
+// V16: Free persistent cloud storage through Upstash Redis REST.
+// No extra npm package is required; Node's built-in fetch talks directly to
+// Upstash. Put UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN in Render.
+//
+// The existing platform still works with its in-memory objects, while the
+// complete state is compressed and saved remotely. This keeps accounts, login
+// sessions, PFPs, settings, roles, friends, DMs, groups, tournaments, ratings,
+// reports, bans and audit history through Render restarts/redeploys.
 const connectedPlayers = {};
 const activeRoomsMap = new Map();
-const dataDirectory = path.resolve(process.env.SMASH_DATA_DIR || path.join(__dirname, 'data'));
+const automaticDataDirectory = fs.existsSync('/var/data') ? '/var/data' : path.join(__dirname, 'data');
+const dataDirectory = path.resolve(process.env.SMASH_DATA_DIR || automaticDataDirectory);
 fs.mkdirSync(dataDirectory, { recursive: true });
 const dataFile = path.join(dataDirectory, 'history.json');
 
-const saved = fs.existsSync(dataFile)
-    ? JSON.parse(fs.readFileSync(dataFile, 'utf8'))
-    : { profiles: {}, stats: {}, directMessages: {}, matches: {} };
+const UPSTASH_REDIS_REST_URL = String(process.env.UPSTASH_REDIS_REST_URL || '').trim().replace(/\/$/, '');
+const UPSTASH_REDIS_REST_TOKEN = String(process.env.UPSTASH_REDIS_REST_TOKEN || '').trim();
+const UPSTASH_STATE_KEY = String(process.env.UPSTASH_STATE_KEY || 'smashkarts1v1s:platform-state:v1').trim();
 
-saved.profiles ||= {};
-saved.stats ||= {};
-saved.directMessages ||= {};
-saved.matches ||= {};
+function emptySavedState() {
+    return { profiles: {}, stats: {}, directMessages: {}, matches: {}, accounts: {}, sessions: {}, groups: {}, tournaments: {}, reports: [], auditLog: [] };
+}
 
+function normalizeSavedState(value) {
+    const state = value && typeof value === 'object' ? value : emptySavedState();
+    state.profiles ||= {};
+    state.stats ||= {};
+    state.directMessages ||= {};
+    state.matches ||= {};
+    state.accounts ||= {};
+    state.sessions ||= {};
+    state.groups ||= {};
+    state.tournaments ||= {};
+    if (!Array.isArray(state.reports)) state.reports = [];
+    if (!Array.isArray(state.auditLog)) state.auditLog = [];
+    return state;
+}
+
+function loadLocalState() {
+    try {
+        if (!fs.existsSync(dataFile)) return emptySavedState();
+        return normalizeSavedState(JSON.parse(fs.readFileSync(dataFile, 'utf8')));
+    } catch (error) {
+        console.error('[DATA] Could not read local history.json:', error.message);
+        return emptySavedState();
+    }
+}
+
+const saved = loadLocalState();
 const profiles = Object.assign(Object.create(null), saved.profiles);
 const playerStats = Object.assign(Object.create(null), saved.stats);
 const directMessageStore = Object.assign(Object.create(null), saved.directMessages);
 const matchHistory = Object.assign(Object.create(null), saved.matches);
+const accounts = Object.assign(Object.create(null), saved.accounts);
+const authSessionStore = Object.assign(Object.create(null), saved.sessions);
+const groupStore = Object.assign(Object.create(null), saved.groups);
+const tournamentStore = Object.assign(Object.create(null), saved.tournaments);
+const reportStore = saved.reports;
+const auditLog = saved.auditLog;
 
-function saveHistory() {
-    const temp = dataFile + '.tmp';
-    fs.writeFileSync(temp, JSON.stringify({
+let cloudStorageReady = false;
+let cloudSaveTimer = null;
+let cloudSaveInFlight = false;
+let cloudSaveAgain = false;
+let latestCloudSnapshot = null;
+let lastCloudSaveAt = 0;
+let lastCloudError = '';
+
+function stateSnapshot() {
+    return {
         profiles,
         stats: playerStats,
         directMessages: directMessageStore,
-        matches: matchHistory
-    }), { mode: 0o600 });
-    fs.renameSync(temp, dataFile);
+        matches: matchHistory,
+        accounts,
+        sessions: authSessionStore,
+        groups: groupStore,
+        tournaments: tournamentStore,
+        reports: reportStore,
+        auditLog
+    };
+}
+
+function replaceObjectContents(target, source) {
+    for (const key of Object.keys(target)) delete target[key];
+    Object.assign(target, source || {});
+}
+
+function applySavedState(value) {
+    const next = normalizeSavedState(value);
+    replaceObjectContents(profiles, next.profiles);
+    replaceObjectContents(playerStats, next.stats);
+    replaceObjectContents(directMessageStore, next.directMessages);
+    replaceObjectContents(matchHistory, next.matches);
+    replaceObjectContents(accounts, next.accounts);
+    replaceObjectContents(authSessionStore, next.sessions);
+    replaceObjectContents(groupStore, next.groups);
+    replaceObjectContents(tournamentStore, next.tournaments);
+    reportStore.splice(0, reportStore.length, ...next.reports);
+    auditLog.splice(0, auditLog.length, ...next.auditLog);
+}
+
+function saveLocalBackup(snapshot) {
+    try {
+        const temp = dataFile + '.tmp';
+        fs.writeFileSync(temp, JSON.stringify(snapshot), { mode: 0o600 });
+        fs.renameSync(temp, dataFile);
+    } catch (error) {
+        console.error('[DATA] Local backup failed:', error.message);
+    }
+}
+
+function encodeCloudState(snapshot) {
+    const json = JSON.stringify(snapshot);
+    return 'gz:' + zlib.gzipSync(Buffer.from(json, 'utf8'), { level: 6 }).toString('base64');
+}
+
+function decodeCloudState(value) {
+    if (typeof value !== 'string' || !value) return null;
+    if (value.startsWith('gz:')) {
+        const json = zlib.gunzipSync(Buffer.from(value.slice(3), 'base64')).toString('utf8');
+        return JSON.parse(json);
+    }
+    return JSON.parse(value);
+}
+
+async function upstashCommand(command) {
+    if (!UPSTASH_REDIS_REST_URL || !UPSTASH_REDIS_REST_TOKEN) throw new Error('Upstash credentials are missing');
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+    try {
+        const response = await fetch(UPSTASH_REDIS_REST_URL, {
+            method: 'POST',
+            headers: {
+                Authorization: `Bearer ${UPSTASH_REDIS_REST_TOKEN}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(command),
+            signal: controller.signal
+        });
+        if (!response.ok) throw new Error(`Upstash HTTP ${response.status}`);
+        const payload = await response.json();
+        if (payload && payload.error) throw new Error(payload.error);
+        return payload ? payload.result : null;
+    } finally {
+        clearTimeout(timeout);
+    }
+}
+
+async function flushCloudSave() {
+    if (!cloudStorageReady || cloudSaveInFlight || !latestCloudSnapshot) return;
+    cloudSaveInFlight = true;
+    const snapshot = latestCloudSnapshot;
+    latestCloudSnapshot = null;
+    cloudSaveAgain = false;
+    try {
+        const encoded = encodeCloudState(snapshot);
+        await upstashCommand(['SET', UPSTASH_STATE_KEY, encoded]);
+        lastCloudSaveAt = Date.now();
+        lastCloudError = '';
+    } catch (error) {
+        lastCloudError = String(error?.message || error);
+        console.error('[DATA] Upstash save failed:', lastCloudError);
+        latestCloudSnapshot = stateSnapshot();
+        cloudSaveAgain = true;
+    } finally {
+        cloudSaveInFlight = false;
+        if (cloudSaveAgain || latestCloudSnapshot) {
+            clearTimeout(cloudSaveTimer);
+            cloudSaveTimer = setTimeout(() => flushCloudSave(), 1000);
+        }
+    }
+}
+
+function saveHistory() {
+    const snapshot = stateSnapshot();
+    // Local copy helps development and gives us a temporary fallback if the
+    // cloud API has a short outage. The cloud copy is the permanent source.
+    saveLocalBackup(snapshot);
+    if (!cloudStorageReady) return;
+    latestCloudSnapshot = snapshot;
+    cloudSaveAgain = true;
+    clearTimeout(cloudSaveTimer);
+    cloudSaveTimer = setTimeout(() => flushCloudSave(), 350);
+}
+
+async function initializeCloudStorage() {
+    if (!UPSTASH_REDIS_REST_URL || !UPSTASH_REDIS_REST_TOKEN) {
+        console.warn('[DATA] Upstash is not configured. Using local history.json only.');
+        console.warn('[DATA] Add UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN in Render for permanent storage.');
+        return;
+    }
+
+    try {
+        const remoteValue = await upstashCommand(['GET', UPSTASH_STATE_KEY]);
+        if (remoteValue) {
+            applySavedState(decodeCloudState(remoteValue));
+            console.log('[DATA] Loaded permanent platform state from Upstash.');
+        } else {
+            await upstashCommand(['SET', UPSTASH_STATE_KEY, encodeCloudState(stateSnapshot())]);
+            console.log('[DATA] Upstash was empty; imported the current local platform state.');
+        }
+        cloudStorageReady = true;
+        lastCloudSaveAt = Date.now();
+        console.log('[DATA] Upstash persistent storage is ACTIVE.');
+    } catch (error) {
+        cloudStorageReady = false;
+        lastCloudError = String(error?.message || error);
+        console.error('[DATA] Could not connect to Upstash:', lastCloudError);
+        console.error('[DATA] Site will continue using local history.json until Upstash is fixed.');
+    }
+}
+
+async function flushPersistenceBeforeExit() {
+    clearTimeout(cloudSaveTimer);
+    if (!cloudStorageReady) return;
+    latestCloudSnapshot = stateSnapshot();
+    cloudSaveAgain = true;
+    const started = Date.now();
+    while (cloudSaveInFlight && Date.now() - started < 2500) {
+        await new Promise(resolve => setTimeout(resolve, 25));
+    }
+    await flushCloudSave();
+}
+
+function defaultSavedSettings() {
+    return {
+        gameplayMode: 'popup',
+        queueType: 'casual',
+        streamerHideCode: false,
+        streamerSafeNotifications: false
+    };
+}
+
+function normalizeSavedSettings(settings) {
+    const value = settings && typeof settings === 'object' ? settings : {};
+    return {
+        gameplayMode: value.gameplayMode === 'embed' ? 'embed' : 'popup',
+        queueType: value.queueType === 'ranked' ? 'ranked' : 'casual',
+        streamerHideCode: !!value.streamerHideCode,
+        streamerSafeNotifications: !!value.streamerSafeNotifications
+    };
 }
 
 function profileFor(username) {
@@ -100,14 +316,18 @@ function profileFor(username) {
         profiles[username] = {
             friends: [],
             requests: [],
+            archivedDMs: [],
             isOnline: true,
             avatar: '',
+            settings: defaultSavedSettings(),
             createdAt: Date.now()
         };
     }
     profiles[username].friends ||= [];
     profiles[username].requests ||= [];
+    profiles[username].archivedDMs ||= [];
     if (typeof profiles[username].avatar !== 'string') profiles[username].avatar = '';
+    profiles[username].settings = normalizeSavedSettings(profiles[username].settings);
     return profiles[username];
 }
 
@@ -127,7 +347,8 @@ function syncFriends(username) {
         player.friendRequests = new Set(profile.requests || []);
         io.to(player.id).emit('saved_friends', {
             friends: profile.friends || [],
-            requests: profile.requests || []
+            requests: profile.requests || [],
+            archivedDMs: profile.archivedDMs || []
         });
     }
 }
@@ -233,8 +454,17 @@ function moderateText(text) {
     return String(text).slice(0, 400);
 }
 
+function legacyDMKey(a, b) {
+    return JSON.stringify([String(a || ''), String(b || '')].sort());
+}
+
+function dmIdentityKey(username) {
+    const account = accountByUsername(username);
+    return account?.id ? `acct:${account.id}` : `name:${normalizeUsernameKey(username)}`;
+}
+
 function getDMKey(a, b) {
-    return JSON.stringify([a, b].sort());
+    return JSON.stringify([dmIdentityKey(a), dmIdentityKey(b)].sort());
 }
 
 function findSocketByUsername(username) {
@@ -308,6 +538,7 @@ function roomSummary(room) {
         hostSocketId: room.hostSocketId,
         winCondition: room.winCondition,
         mode: room.mode,
+        queueType: room.queueType || 'casual',
         maxPlayers: room.maxPlayers,
         players: room.players,
         isPublic: room.isPublic !== false,
@@ -412,6 +643,8 @@ function joinRoom(socket, room, player, eventName = 'room_created') {
             name: player.username,
             isGuest: !!player.isGuest,
             avatar: player.avatar || '',
+            roles: publicRoles(player.roles),
+            level: player.level || 1,
             ready: false,
             team: null,
             joinedAt: Date.now()
@@ -434,567 +667,334 @@ function joinRoom(socket, room, player, eventName = 'room_created') {
     return true;
 }
 
+
 // =========================================================
-// SOCKET SERVER
+// V12 SECURE ACCOUNTS / OWNER / ROLES
 // =========================================================
-io.on('connection', socket => {
-    connectedPlayers[socket.id] = {
-        id: socket.id,
-        username: randomGuestName(),
-        email: null,
-        isAuthenticated: false,
-        isGuest: true,
-        isOnline: true,
-        avatar: '',
-        friends: new Set(),
-        friendRequests: new Set()
+const OWNER_EMAIL = String(process.env.OWNER_EMAIL || '').trim().toLowerCase();
+const OWNER_SETUP_KEY = String(process.env.OWNER_SETUP_KEY || '').trim();
+const RESERVED_OWNER_USERNAME = 'PRIME';
+const SESSION_TTL_MS = 5 * 365 * 24 * 60 * 60 * 1000; // 5-year sliding session: normal updates should not log people out
+
+function normalizeEmail(email) {
+    return String(email || '').trim().toLowerCase();
+}
+
+function normalizeUsernameKey(username) {
+    return String(username || '').trim().toLowerCase();
+}
+
+function isReservedOwnerName(username) {
+    return normalizeUsernameKey(username) === RESERVED_OWNER_USERNAME.toLowerCase();
+}
+
+function validUsername(username) {
+    return /^[A-Za-z0-9_]{3,20}$/.test(String(username || '').trim());
+}
+
+function defaultRoles() {
+    return { owner: false, moderator: false, streamer: false, tourneyHost: false };
+}
+
+function normalizeRoles(roles) {
+    return {
+        owner: !!roles?.owner,
+        moderator: !!roles?.moderator,
+        streamer: !!roles?.streamer,
+        tourneyHost: !!roles?.tourneyHost
     };
+}
 
-    socket.on('set_user_session', userData => {
-        const player = connectedPlayers[socket.id];
-        if (!player) return;
+function ensureAccountShape(account) {
+    if (!account) return null;
+    account.id ||= crypto.randomUUID();
+    account.usernameHistory = Array.isArray(account.usernameHistory) ? account.usernameHistory : [];
+    account.roles = normalizeRoles(account.roles);
+    account.xp = Number.isFinite(account.xp) ? account.xp : 0;
+    account.level = Math.max(1, Math.min(200, Number.isFinite(account.level) ? account.level : 1));
+    account.rating1v1 = Number.isFinite(account.rating1v1) ? account.rating1v1 : 1000;
+    account.ratingFFA = Number.isFinite(account.ratingFFA) ? account.ratingFFA : 1000;
+    account.warnings = Number.isFinite(account.warnings) ? account.warnings : 0;
+    account.mutedUntil = account.mutedUntil ?? null;
+    account.bannedUntil = account.bannedUntil ?? null;
+    account.banReason = String(account.banReason || '');
+    account.streamerLive = !!account.streamerLive;
+    account.createdAt ||= Date.now();
+    account.lastLoginAt ||= null;
+    return account;
+}
 
-        const isGuest = !!(userData && userData.isGuest);
-        const username = sanitizeUsername(
-            userData && userData.username ? userData.username : randomGuestName()
-        );
+let accountShapeMigrationChanged = false;
+for (const account of Object.values(accounts)) {
+    const beforeId = account?.id;
+    ensureAccountShape(account);
+    if (!beforeId && account?.id) accountShapeMigrationChanged = true;
+}
 
-        player.username = username;
-        player.email = isGuest ? null : (userData.email || null);
-        player.isGuest = isGuest;
-        player.isAuthenticated = !isGuest;
-        player.isOnline = true;
+function accountByEmail(email) {
+    return ensureAccountShape(accounts[normalizeEmail(email)] || null);
+}
 
-        if (isGuest) {
-            player.avatar = '';
-            player.friends = new Set();
-            player.friendRequests = new Set();
-            socket.emit('saved_friends', { friends: [], requests: [] });
-            socket.emit('saved_profile', { avatar: '' });
-        } else {
-            const profile = profileFor(username);
-            player.avatar = profile.avatar || '';
-            player.friends = new Set(profile.friends || []);
-            player.friendRequests = new Set(profile.requests || []);
-            player.isOnline = profile.isOnline !== false;
-            socket.emit('saved_friends', {
-                friends: profile.friends || [],
-                requests: profile.requests || []
-            });
-            socket.emit('friend_requests_update', Array.from(player.friendRequests));
-            socket.emit('saved_profile', { avatar: player.avatar || '' });
-            if (!playerStats[username]) playerStats[username] = 0;
-            saveHistory();
-        }
+function accountByUsername(username) {
+    const key = normalizeUsernameKey(username);
+    return Object.values(accounts).map(ensureAccountShape).find(account => normalizeUsernameKey(account.username) === key) || null;
+}
 
-        // Keep the name fresh inside any live room after guest rename / login.
-        for (const room of activeRoomsMap.values()) {
-            const member = room.players.find(p => p.id === socket.id);
-            if (!member) continue;
-            member.name = username;
-            member.isGuest = isGuest;
-            member.avatar = player.avatar || '';
-            if (room.hostSocketId === socket.id) room.hostName = username;
-            io.to(room.roomId).emit('saved_room_update', room);
-        }
+function migrateDirectMessagesToStableAccountIds() {
+    const rebuilt = Object.create(null);
+    let changed = false;
 
-        socket.emit('session_mode', {
-            username,
-            isGuest,
-            savesStats: !isGuest
-        });
+    for (const [key, messages] of Object.entries(directMessageStore)) {
+        let parts = null;
+        try { parts = JSON.parse(key); } catch {}
+        let targetKey = key;
 
-        broadcastOnlineUsers();
-        broadcastLeaderboard();
-        broadcastPublicRooms();
-    });
-
-    socket.on('toggle_online_status', isOnline => {
-        const player = connectedPlayers[socket.id];
-        if (!player) return;
-        player.isOnline = !!isOnline;
-        savePlayer(player);
-        if (!player.isGuest) saveHistory();
-        broadcastOnlineUsers();
-    });
-
-    // ---------------- PROFILE PICTURE (ACCOUNT ONLY) ----------------
-    socket.on('update_profile_picture', ({ dataUrl }) => {
-        const player = connectedPlayers[socket.id];
-        if (!player || player.isGuest) {
-            return socket.emit('account_required', {
-                message: 'Log in to save a profile picture.'
-            });
-        }
-
-        const value = typeof dataUrl === 'string' ? dataUrl : '';
-        if (value) {
-            const valid = /^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(value);
-            if (!valid || value.length > 450000) {
-                return socket.emit('profile_picture_error', {
-                    message: 'Use a JPG, PNG, or WebP image under 8 MB.'
-                });
+        if (Array.isArray(parts) && parts.length === 2 && !parts.every(part => String(part).startsWith('acct:') || String(part).startsWith('name:'))) {
+            const left = accountByUsername(parts[0]);
+            const right = accountByUsername(parts[1]);
+            if (left && right) {
+                targetKey = JSON.stringify([`acct:${left.id}`, `acct:${right.id}`].sort());
+                if (targetKey !== key) changed = true;
             }
         }
 
-        const profile = profileFor(player.username);
-        profile.avatar = value;
-        player.avatar = value;
+        rebuilt[targetKey] ||= [];
+        rebuilt[targetKey].push(...(Array.isArray(messages) ? messages : []));
+    }
 
-        for (const room of activeRoomsMap.values()) {
-            const member = room.players.find(p => p.id === socket.id);
-            if (!member) continue;
-            member.avatar = value;
-            io.to(room.roomId).emit('saved_room_update', room);
-        }
+    if (changed) {
+        for (const key of Object.keys(directMessageStore)) delete directMessageStore[key];
+        Object.assign(directMessageStore, rebuilt);
+    }
 
+    if (changed || accountShapeMigrationChanged) saveHistory();
+}
+migrateDirectMessagesToStableAccountIds();
+
+function publicRoles(roles) {
+    return normalizeRoles(roles);
+}
+
+function publicAccountState(account) {
+    account = ensureAccountShape(account);
+    if (!account) return null;
+    return {
+        id: account.id,
+        username: account.username,
+        email: account.email,
+        roles: publicRoles(account.roles),
+        level: account.level,
+        xp: account.xp,
+        rating1v1: account.rating1v1,
+        ratingFFA: account.ratingFFA,
+        warnings: account.warnings,
+        mutedUntil: account.mutedUntil,
+        bannedUntil: account.bannedUntil,
+        banReason: account.banReason,
+        streamerLive: !!account.streamerLive,
+        createdAt: account.createdAt
+    };
+}
+
+function publicProfileState(username, viewer = null) {
+    const account = accountByUsername(username);
+    if (!account) return null;
+    const profile = profileFor(account.username);
+    const onlinePlayer = findSocketByUsername(account.username);
+    const activeRoom = Array.from(activeRoomsMap.values()).find(room => room.players.some(p => p.name === account.username));
+    return {
+        username: account.username,
+        avatar: profile.avatar || '',
+        roles: publicRoles(account.roles),
+        level: account.level,
+        rating1v1: account.rating1v1,
+        ratingFFA: account.ratingFFA,
+        matches: playerStats[account.username] || 0,
+        friendsCount: (profile.friends || []).length,
+        online: !!onlinePlayer && onlinePlayer.isOnline !== false,
+        playing: activeRoom ? String(activeRoom.mode || '').toUpperCase() : '',
+        streamerLive: !!account.streamerLive,
+        canSeeMusic: !!viewer && !viewer.isGuest && usersAreFriends(viewer.username, account.username)
+    };
+}
+
+function passwordHash(password, salt) {
+    return crypto.scryptSync(String(password), salt, 64).toString('hex');
+}
+
+function passwordMatches(account, password) {
+    if (!account?.passwordHash || !account?.passwordSalt) return false;
+    const actual = Buffer.from(passwordHash(password, account.passwordSalt), 'hex');
+    const expected = Buffer.from(account.passwordHash, 'hex');
+    return actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
+}
+
+function hashSessionToken(token) {
+    return crypto.createHash('sha256').update(String(token || '')).digest('hex');
+}
+
+function issueSessionToken(email) {
+    const raw = crypto.randomBytes(32).toString('hex');
+    authSessionStore[hashSessionToken(raw)] = {
+        email: normalizeEmail(email),
+        expiresAt: Date.now() + SESSION_TTL_MS
+    };
+    saveHistory();
+    return raw;
+}
+
+function accountFromToken(token) {
+    const hash = hashSessionToken(token);
+    const record = authSessionStore[hash];
+    if (!record) return null;
+    if (!record.expiresAt || record.expiresAt < Date.now()) {
+        delete authSessionStore[hash];
         saveHistory();
-        socket.emit('profile_picture_updated', { avatar: value });
-        broadcastOnlineUsers();
-    });
-
-    // ---------------- FRIENDS (ACCOUNT ONLY) ----------------
-    socket.on('send_friend_request', ({ targetSocketId }) => {
-        const sender = connectedPlayers[socket.id];
-        const target = connectedPlayers[targetSocketId];
-        if (!sender || !target) return;
-        if (sender.isGuest || target.isGuest) {
-            return socket.emit('account_required', {
-                message: 'Log in to use friends and direct messages.'
-            });
-        }
-        if (sender.username === target.username || usersAreFriends(sender.username, target.username)) return;
-
-        target.friendRequests.add(sender.username);
-        savePlayer(target);
+        return null;
+    }
+    const account = accountByEmail(record.email);
+    if (!account) {
+        delete authSessionStore[hash];
         saveHistory();
-        syncFriends(target.username);
+        return null;
+    }
+    // Sliding expiration: normal site updates/redeploys should not log a player
+    // out as long as the persisted session store is still present.
+    record.expiresAt = Date.now() + SESSION_TTL_MS;
+    saveHistory();
+    return { account, hash };
+}
 
-        io.to(targetSocketId).emit('receive_friend_request', {
-            fromSocketId: socket.id,
-            fromUsername: sender.username
-        });
-        io.to(targetSocketId).emit('friend_requests_update', Array.from(target.friendRequests));
-    });
-
-    socket.on('decline_friend_request', ({ challengerUsername }) => {
-        const user = connectedPlayers[socket.id];
-        if (!user || user.isGuest) return;
-        user.friendRequests.delete(challengerUsername);
-        savePlayer(user);
+function revokeSessionToken(token) {
+    const hash = hashSessionToken(token);
+    if (authSessionStore[hash]) {
+        delete authSessionStore[hash];
         saveHistory();
-        syncFriends(user.username);
-        socket.emit('friend_requests_update', Array.from(user.friendRequests));
+    }
+}
+
+function banIsActive(account) {
+    if (!account?.bannedUntil) return false;
+    return account.bannedUntil === -1 || account.bannedUntil > Date.now();
+}
+
+function muteIsActive(account) {
+    if (!account?.mutedUntil) return false;
+    return account.mutedUntil === -1 || account.mutedUntil > Date.now();
+}
+
+function isOwnerPlayer(player) {
+    return !!player?.roles?.owner;
+}
+
+function isModeratorPlayer(player) {
+    return !!player && (player.roles?.owner || player.roles?.moderator);
+}
+
+function canHostTournament(player) {
+    return !!player && (player.roles?.owner || player.roles?.tourneyHost);
+}
+
+function roleBadges(roles) {
+    const r = normalizeRoles(roles);
+    const badges = [];
+    if (r.owner) badges.push('DEV');
+    if (r.moderator) badges.push('MOD');
+    if (r.streamer) badges.push('STREAMER');
+    if (r.tourneyHost) badges.push('TOURNEY HOST');
+    return badges;
+}
+
+function logAudit(actor, action, target = '', details = '') {
+    auditLog.unshift({
+        id: crypto.randomUUID(),
+        actor: actor?.username || 'SYSTEM',
+        action: String(action || ''),
+        target: String(target || ''),
+        details: String(details || '').slice(0, 600),
+        timestamp: Date.now()
     });
+    if (auditLog.length > 1000) auditLog.length = 1000;
+    saveHistory();
+}
 
-    socket.on('accept_friend_request', ({ challengerUsername }) => {
-        const user = connectedPlayers[socket.id];
-        if (!user || user.isGuest || !user.friendRequests.has(challengerUsername)) return;
+function syncAccountProgress(account) {
+    account = ensureAccountShape(account);
+    account.level = Math.max(1, Math.min(200, 1 + Math.floor(account.xp / 250)));
+    return account;
+}
 
-        user.friends.add(challengerUsername);
-        user.friendRequests.delete(challengerUsername);
+function attachAuthenticatedPlayer(socket, account, token = null, resumed = false) {
+    account = ensureAccountShape(account);
+    const player = connectedPlayers[socket.id];
+    if (!player || !account) return;
 
-        savePlayer(user);
-        ensureMutualFriendship(user.username, challengerUsername);
-        saveHistory();
+    const profile = profileFor(account.username);
+    player.username = account.username;
+    player.email = account.email;
+    player.accountEmail = account.email;
+    player.isGuest = false;
+    player.isAuthenticated = true;
+    player.isOnline = profile.isOnline !== false;
+    player.avatar = profile.avatar || '';
+    player.friends = new Set(profile.friends || []);
+    player.friendRequests = new Set(profile.requests || []);
+    player.roles = publicRoles(account.roles);
+    player.level = account.level;
+    player.rating1v1 = account.rating1v1;
+    player.ratingFFA = account.ratingFFA;
+    player.sessionTokenHash = token ? hashSessionToken(token) : null;
 
-        const challenger = findSocketByUsername(challengerUsername);
-        if (challenger) {
-            challenger.friends.add(user.username);
-            io.to(challenger.id).emit('friend_request_accepted', { username: user.username });
-        }
+    account.lastLoginAt = Date.now();
 
-        socket.emit('friend_requests_update', Array.from(user.friendRequests));
-        socket.emit('friend_request_accepted', { username: challengerUsername });
-        broadcastOnlineUsers();
-    });
-
-    // ---------------- DIRECT MESSAGES (ACCOUNT ONLY) ----------------
-    socket.on('send_direct_message', ({ targetUsername, message }) => {
-        const sender = connectedPlayers[socket.id];
-        if (!sender || sender.isGuest || !message || !message.trim()) {
-            if (sender && sender.isGuest) {
-                socket.emit('account_required', { message: 'Log in to save and use direct messages.' });
-            }
-            return;
-        }
-
-        const targetName = sanitizeUsername(targetUsername);
-        if (!usersAreFriends(sender.username, targetName)) {
-            return socket.emit('dm_error', { message: 'You can only message users on your friends list.' });
-        }
-
-        const key = getDMKey(sender.username, targetName);
-        directMessageStore[key] ||= [];
-        const msg = {
-            senderUsername: sender.username,
-            message: moderateText(message.trim()),
-            timestamp: Date.now()
-        };
-        directMessageStore[key].push(msg);
-        if (directMessageStore[key].length > 500) directMessageStore[key].shift();
-        saveHistory();
-
-        const target = findSocketByUsername(targetName);
-        if (target) {
-            io.to(target.id).emit('receive_direct_message', {
-                senderSocketId: socket.id,
-                senderUsername: sender.username,
-                message: msg.message,
-                history: directMessageStore[key]
-            });
-        }
-
-        socket.emit('dm_sent_success', {
-            targetUsername: targetName,
-            history: directMessageStore[key]
-        });
-    });
-
-    socket.on('get_dm_history', ({ targetUsername }) => {
-        const sender = connectedPlayers[socket.id];
-        if (!sender || sender.isGuest) return;
-        const targetName = sanitizeUsername(targetUsername);
-        if (!usersAreFriends(sender.username, targetName)) {
-            return socket.emit('dm_error', { message: 'You can only message users on your friends list.' });
-        }
-        const key = getDMKey(sender.username, targetName);
-        socket.emit('load_dm_history', {
-            targetUsername: targetName,
-            history: directMessageStore[key] || []
-        });
-    });
-
-    // ---------------- STATS ----------------
-    socket.on('record_match_played', () => {
-        const player = connectedPlayers[socket.id];
-        if (!player || player.isGuest) {
-            socket.emit('guest_match_recorded', { saved: false });
-            return;
-        }
-        playerStats[player.username] = (playerStats[player.username] || 0) + 1;
-        saveHistory();
-        broadcastLeaderboard();
-        socket.emit('account_match_recorded', {
-            saved: true,
-            matches: playerStats[player.username]
-        });
-    });
-
-    // ---------------- FRIEND CHALLENGES ----------------
-    socket.on('send_match_challenge', ({ targetSocketId, targetUsername, fromUsername, mode, smashUrl }) => {
-        const sender = connectedPlayers[socket.id];
-        const target = targetSocketId ? connectedPlayers[targetSocketId] : findSocketByUsername(targetUsername);
-        if (!sender || !target) return;
-        if (sender.isGuest) {
-            return socket.emit('account_required', { message: 'Log in to challenge friends directly.' });
-        }
-        if (!usersAreFriends(sender.username, target.username)) return;
-
-        const cleanUrl = extractSmashUrl(smashUrl);
-        if (!cleanUrl) return socket.emit('room_error', { message: 'A valid Smash Karts room link or code is required.' });
-
-        io.to(target.id).emit('receive_match_challenge', {
-            challengerSocketId: socket.id,
-            fromUsername: sanitizeUsername(fromUsername || sender.username),
-            mode: mode || '1v1',
-            smashUrl: cleanUrl
-        });
-    });
-
-    socket.on('accept_match_challenge', ({ challengerSocketId, targetUsername, smashUrl }) => {
-        const cleanUrl = extractSmashUrl(smashUrl);
-        const challenger = connectedPlayers[challengerSocketId];
-        const player = connectedPlayers[socket.id];
-        if (!cleanUrl || !challenger || !player) {
-            return socket.emit('room_error', { message: 'That challenge is no longer valid.' });
-        }
-
-        const challengerSocket = io.sockets.sockets.get(challengerSocketId);
-        leaveAllRoomsExcept(socket);
-        if (challengerSocket) leaveAllRoomsExcept(challengerSocket);
-
-        const roomId = crypto.randomUUID();
-        const room = {
-            roomId,
-            hostName: challenger.username,
-            hostSocketId: challengerSocketId,
-            smashUrl: cleanUrl,
-            winCondition: 'First to 3',
-            mode: '1v1',
-            maxPlayers: 2,
-            isPublic: false,
-            createdAt: Date.now(),
-            players: [
-                { id: challengerSocketId, name: challenger.username, isGuest: challenger.isGuest, avatar: challenger.avatar || '', ready: false, team: null, joinedAt: Date.now() },
-                { id: socket.id, name: sanitizeUsername(targetUsername || player.username), isGuest: player.isGuest, avatar: player.avatar || '', ready: false, team: null, joinedAt: Date.now() }
-            ],
-            messages: []
-        };
-
-        activeRoomsMap.set(roomId, room);
-        addRoomHistory(room);
-        addParticipantToHistory(room, challenger);
-        addParticipantToHistory(room, player);
-        saveHistory();
-
-        socket.join(roomId);
-        if (challengerSocket) challengerSocket.join(roomId);
-        io.to(roomId).emit('challenge_game_start', room);
-    });
-
-    // ---------------- NORMAL 1V1 ----------------
-    socket.on('create_room', data => {
-        const player = connectedPlayers[socket.id];
-        if (!player) return;
-        const cleanUrl = extractSmashUrl(data && data.smashUrl);
-        if (!cleanUrl) {
-            return socket.emit('room_error', { message: 'A valid Smash Karts room link or code is required.' });
-        }
-
-        leaveAllRoomsExcept(socket);
-        const mode = '1v1';
-        const roomId = crypto.randomUUID();
-        const room = {
-            roomId,
-            hostName: player.username,
-            hostSocketId: socket.id,
-            smashUrl: cleanUrl,
-            winCondition: escapeHTML(data.winCondition || 'First to 3'),
-            mode,
-            maxPlayers: 2,
-            isPublic: data.isPublic !== false,
-            createdAt: Date.now(),
-            players: [],
-            messages: []
-        };
-
-        activeRoomsMap.set(roomId, room);
-        addRoomHistory(room);
-        joinRoom(socket, room, player, 'room_created');
-    });
-
-    // ---------------- FFA ----------------
-    socket.on('play_ffa', () => {
-        const player = connectedPlayers[socket.id];
-        if (!player) return;
-        const room = Array.from(activeRoomsMap.values()).find(
-            r => r.mode === 'ffa' && r.isPublic !== false && r.players.length < r.maxPlayers
-        );
-        if (!room) {
-            return socket.emit('ffa_no_lobby', {
-                message: 'No FFA lobby is open yet. Click CREATE LOBBY to make one.'
-            });
-        }
-        joinRoom(socket, room, player, 'ffa_lobby_ready');
-    });
-
-    socket.on('create_ffa_lobby', options => {
-        const player = connectedPlayers[socket.id];
-        if (!player) return;
-        leaveAllRoomsExcept(socket);
-
-        const requestedPlayers = Number(options && options.maxPlayers) || 12;
-        const maxPlayers = requestedPlayers === 24 ? 24 : 12;
-        const roomId = crypto.randomUUID();
-        const room = {
-            roomId,
-            hostName: player.username,
-            hostSocketId: socket.id,
-            smashUrl: 'https://smashkarts.io',
-            winCondition: 'Free for all',
-            mode: 'ffa',
-            maxPlayers,
-            isPublic: !(options && options.isPublic === false),
-            createdAt: Date.now(),
-            players: [],
-            messages: []
-        };
-
-        activeRoomsMap.set(roomId, room);
-        addRoomHistory(room);
-        joinRoom(socket, room, player, 'ffa_lobby_ready');
-    });
-
-    socket.on('get_public_rooms', broadcastPublicRooms);
-
-    socket.on('join_public_room', ({ roomId }) => {
-        const player = connectedPlayers[socket.id];
-        const room = activeRoomsMap.get(roomId);
-        if (!player || !room || room.isPublic === false) {
-            return socket.emit('room_error', { message: 'That lobby is no longer available.' });
-        }
-        joinRoom(socket, room, player, room.mode === 'ffa' ? 'ffa_lobby_ready' : 'room_created');
-    });
-
-    socket.on('rejoin_room', ({ roomId }) => {
-        const player = connectedPlayers[socket.id];
-        const room = activeRoomsMap.get(roomId);
-        if (!player || !room) {
-            return socket.emit('room_error', { message: 'That lobby no longer exists.' });
-        }
-        joinRoom(socket, room, player, room.mode === 'ffa' ? 'ffa_lobby_ready' : 'room_created');
-    });
-
-    socket.on('get_room_snapshot', ({ roomId }) => {
-        const room = activeRoomsMap.get(roomId);
-        if (!room) return socket.emit('room_snapshot', null);
-        socket.emit('room_snapshot', room);
-    });
-
-    socket.on('leave_match', ({ roomId }) => leaveLiveRoom(socket, roomId));
-
-    // ---------------- LOBBY POWER FEATURES ----------------
-    socket.on('set_ready_status', ({ roomId, ready }) => {
-        const room = activeRoomsMap.get(roomId);
-        if (!room) return;
+    for (const room of activeRoomsMap.values()) {
         const member = room.players.find(p => p.id === socket.id);
-        if (!member) return;
-        member.ready = !!ready;
-        io.to(roomId).emit('saved_room_update', room);
-        const allReady = room.players.length > 1 && room.players.every(p => p.ready);
-        io.to(roomId).emit('ready_state_changed', {
-            roomId,
-            readyCount: room.players.filter(p => p.ready).length,
-            total: room.players.length,
-            allReady
-        });
+        if (!member) continue;
+        member.name = account.username;
+        member.isGuest = false;
+        member.avatar = player.avatar || '';
+        member.roles = publicRoles(account.roles);
+        member.level = account.level;
+        if (room.hostSocketId === socket.id) room.hostName = account.username;
+        io.to(room.roomId).emit('saved_room_update', room);
+    }
+
+    socket.emit('saved_friends', { friends: profile.friends || [], requests: profile.requests || [], archivedDMs: profile.archivedDMs || [] });
+    socket.emit('friend_requests_update', Array.from(player.friendRequests));
+    socket.emit('saved_profile', { avatar: player.avatar || '' });
+    socket.emit('saved_settings', { ...profile.settings });
+    socket.emit('auth_success', {
+        token,
+        resumed,
+        user: publicAccountState(account),
+        badges: roleBadges(account.roles)
     });
+    socket.emit('session_mode', { username: account.username, isGuest: false, savesStats: true });
+    saveHistory();
+    broadcastOnlineUsers();
+    broadcastPublicRooms();
+}
 
-    socket.on('set_lobby_team', () => {
-        // 2v2 was removed. Kept only so an old cached client cannot crash the server.
-    });
-
-    socket.on('toggle_room_privacy', ({ roomId, isPublic }) => {
-        const room = activeRoomsMap.get(roomId);
-        if (!room || room.hostSocketId !== socket.id) return;
-        room.isPublic = !!isPublic;
-        io.to(roomId).emit('saved_room_update', room);
-        broadcastPublicRooms();
-    });
-
-    socket.on('kick_lobby_player', ({ roomId, targetSocketId }) => {
-        const room = activeRoomsMap.get(roomId);
-        if (!room || room.hostSocketId !== socket.id || targetSocketId === socket.id) return;
-        const targetSocket = io.sockets.sockets.get(targetSocketId);
-        if (!targetSocket) return;
-        io.to(targetSocketId).emit('kicked_from_lobby', { roomId, by: room.hostName });
-        leaveLiveRoom(targetSocket, roomId, 'kicked');
-    });
-
-    socket.on('lobby_reaction', ({ roomId, reaction }) => {
-        const room = activeRoomsMap.get(roomId);
-        const player = connectedPlayers[socket.id];
-        if (!room || !player || !room.players.some(p => p.id === socket.id)) return;
-        const safe = String(reaction || '').slice(0, 8);
-        if (!safe) return;
-        io.to(roomId).emit('lobby_reaction', {
-            roomId,
-            from: player.username,
-            reaction: safe,
-            timestamp: Date.now()
-        });
-    });
-
-    socket.on('lobby_announcement', ({ roomId, message }) => {
-        const room = activeRoomsMap.get(roomId);
-        if (!room || room.hostSocketId !== socket.id) return;
-        const safe = moderateText(message).slice(0, 180);
-        if (!safe) return;
-        io.to(roomId).emit('lobby_system_message', {
-            roomId,
-            message: `HOST: ${safe}`,
-            timestamp: Date.now()
-        });
-    });
-
-    // ---------------- PASTE / UPDATE SMASH CODE ----------------
-    socket.on('update_lobby_game_code', ({ roomId, code }) => {
-        const player = connectedPlayers[socket.id];
-        const room = activeRoomsMap.get(roomId);
-        if (!player || !room || !room.players.some(p => p.id === socket.id)) {
-            return socket.emit('room_error', { message: 'You are not inside that lobby.' });
-        }
-
-        const cleanUrl = extractVerifiedLookingRoomUrl(code);
-        if (!cleanUrl) {
-            return socket.emit('room_error', {
-                message: 'That does not look like a valid Smash Karts room code. Nothing changed.'
-            });
-        }
-
-        room.smashUrl = cleanUrl;
-        room.gameCodeUpdatedBy = player.username;
-        room.gameCodeUpdatedAt = Date.now();
-
-        if (matchHistory[roomId]) {
-            matchHistory[roomId].smashUrl = cleanUrl;
-            matchHistory[roomId].gameCodeUpdatedBy = player.username;
-            matchHistory[roomId].gameCodeUpdatedAt = room.gameCodeUpdatedAt;
-        }
-
-        saveHistory();
-        io.to(roomId).emit('saved_room_update', room);
-        io.to(roomId).emit('lobby_game_code_updated', {
-            roomId,
-            smashUrl: cleanUrl,
-            updatedBy: player.username
-        });
-    });
-
-    // ---------------- LOBBY CHAT ----------------
-    socket.on('send_match_chat', ({ roomId, message }) => {
-        const room = activeRoomsMap.get(roomId);
-        const player = connectedPlayers[socket.id];
-        if (!room || !player || !socket.rooms.has(roomId)) return;
-        if (typeof message !== 'string' || !message.trim()) return;
-
-        const msg = {
-            roomId,
-            senderName: player.username,
-            message: moderateText(message.trim()),
-            timestamp: Date.now(),
-            isGuest: player.isGuest
-        };
-
-        room.messages.push(msg);
-        if (room.messages.length > 200) room.messages.shift();
-
-        if (matchHistory[roomId]) {
-            matchHistory[roomId].messages = room.messages;
-        }
-        saveHistory();
-        io.to(roomId).emit('receive_match_chat', msg);
-    });
-
-    // ---------------- HISTORY ----------------
-    socket.on('get_saved_match_history', () => {
-        const player = connectedPlayers[socket.id];
-        if (!player || player.isGuest) {
-            socket.emit('saved_match_history', []);
-            return socket.emit('account_required', {
-                message: 'Log in to save and view match history.'
-            });
-        }
-
-        socket.emit(
-            'saved_match_history',
-            Object.values(matchHistory)
-                .filter(room => Array.isArray(room.participants) && room.participants.includes(player.username))
-                .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
-        );
-    });
-
-    socket.on('restore_legacy_friends', ({ friends }) => {
-        const player = connectedPlayers[socket.id];
-        if (!player || player.isGuest || !Array.isArray(friends)) return;
-
-        // Migrate friendships accepted in older browser-only builds into the
-        // server profiles. This prevents the false "you have to be friends"
-        // error when both players already show as friends in the UI.
-        for (const name of friends.slice(0, 250)) {
-            if (typeof name !== 'string') continue;
-            const targetName = sanitizeUsername(name);
-            if (!targetName || targetName === player.username) continue;
-            ensureMutualFriendship(player.username, targetName);
-        }
+function attachGuestPlayer(socket, requestedUsername) {
+    const player = connectedPlayers[socket.id];
+    if (!player) return;
+    let username = sanitizeUsername(requestedUsername || randomGuestName());
+    if (isReservedOwnerName(username) || accountByUsername(username)) {
+        const requested = username;
+        username = randomGuestName();
+        socket.emit('username_reserved', { message: isReservedOwnerName(requested) ? 'PRIME is reserved for the site owner.' : 'That username belongs to a saved account. Guests cannot impersonate saved accounts.' });
+    }
+    player.username = username;
+    player.email = null;
+    player.accountEmail = null;
+    player.isGuest = true;
+    player.isAuthenticated = false;
+    player.isOnline = true;
+    player.avatar = '';
+    player.friends = new Set();
+    player.friendRequests = new Set();
+    player.roles = defaultRoles();
+    player.level = 1;
+    player.rating1v1 = 1000;
+    player.ratingFFA = 1000;
+    socket.emit('saved_friends', { friends: [], requests: [] });
